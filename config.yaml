@@ -1,0 +1,124 @@
+# ╔══════════════════════════════════════════════════════════════════════╗
+# ║   OSM — OBJECT SENTINEL MATRIX  — Master Configuration File         ║
+# ║   All runtime settings live here. Secrets go in .env                ║
+# ╚══════════════════════════════════════════════════════════════════════╝
+
+operator:
+  username: "Prajan"
+
+cameras:
+  - id: 0
+    source: 0                    # 0 = default USB webcam
+    name: "LOCAL CAM"
+    enabled: true
+    location: "Main Entrance Sector"
+  - id: 1
+    source: "NONE"
+    name: "CCTV NODE-2"
+    enabled: true
+    location: "Office Sector B"
+  - id: 2
+    source: "NONE"
+    name: "CCTV NODE-3"
+    enabled: true
+    location: "Restricted Storage Area"
+  - id: 3
+    source: "NONE"
+    name: "PHONE / IP CAM"
+    enabled: true
+    location: "Mobile Sector D"
+
+detection:
+  confidence: 0.45
+  process_every_n:
+    LOW: 4
+    MEDIUM: 3
+    HIGH: 2
+  frame_w: 640
+  frame_h: 360
+  det_w:
+    LOW: 320
+    MEDIUM: 416
+    HIGH: 640
+  det_h:
+    LOW: 192
+    MEDIUM: 256
+    HIGH: 384
+  model:
+    LOW: "yolov8n.pt"
+    MEDIUM: "yolov8n.pt"
+    HIGH: "yolov8s.pt"
+  idle_skip_extra: 2
+  absent_cycles_thresh: 50
+  motion_thresh_init: 300
+  motion_calib_frames: 30
+
+face_recognition:
+  match_threshold: 0.60
+  face_detect_model: "hog"
+  pool_workers:
+    LOW: 1
+    MEDIUM: 2
+    HIGH: 3
+  recheck_cycles:
+    LOW: 120
+    MEDIUM: 90
+    HIGH: 60
+  known_faces_dir: "faces/known"
+  yunet_model_url: "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx"
+  sface_model_url: "https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx"
+  yunet_model_path: "models/face_detection_yunet_2023mar.onnx"
+  sface_model_path: "models/face_recognition_sface_2021dec.onnx"
+
+zones: []
+
+behavior:
+  loiter_secs: 20.0             # seconds before loitering flag
+  pace_direction_changes: 5     # direction reversals before "pacing"
+  pace_window_secs: 15.0        # window to count direction changes
+  run_speed_threshold: 120.0    # pixels/sec before "running" flagged
+
+ownership:
+  proximity_iou_threshold: 0.05 # min overlap between person and object bbox
+  abandonment_secs: 8.0         # secs owner must be away before alert
+  
+threat:
+  cooldown:
+    PERSON_ENTERED: 60
+    PERSON_RETURNED: 60
+    PERSON_LEFT: 45
+    INTRUDER: 30
+    OBJ_ADDED: 0
+    OBJ_REMOVED: 0
+    SYSTEM: 0
+    BASELINE: 0
+  decay_after_secs: 30
+  dedup_secs: 60
+  queue_size: 128
+  max_retries: 3
+  retry_delay: 2.0
+  timeout: 10
+
+display:
+  window_w: 1920
+  window_h: 1080
+  target_fps:
+    LOW: 24
+    MEDIUM: 28
+    HIGH: 30
+  side_w: 260
+  event_w: 280
+  top_h: 65
+  footer_h: 45
+  sparkline_samples: 40
+
+storage:
+  log_dir: "logs"
+  faces_db_json: "logs/faces_db.json"
+  sqlite_db: "logs/osm.db"
+  models_dir: "models"
+  db_save_secs: 45
+  cam_queue_size: 1
+  gc_gen0_frames: 25
+  gc_gen1_secs: 30
+  overload_cpu_pct: 88.0

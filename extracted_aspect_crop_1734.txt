@@ -1,0 +1,4 @@
+def _aspect_crop_to_fill(feed, dets, target_w, target_h):
+2452:     """Crops the feed to match the exact aspect ratio of target_w / target_h and resizes it to fill, adjusting det boxes."""
+2453:     ch, cw = feed.shape[:2]
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.

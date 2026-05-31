@@ -1,0 +1,49 @@
+# ─── PYTHON / COMPILED ───
+__pycache__/
+*.py[cod]
+*$py.class
+*.bak
+
+# ─── NEXT.JS / NODE ───
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+.next/
+out/
+node_modules/
+.npm
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ─── LOCAL CONFIG / SECRETS (CRITICAL FOR TELEGRAM BOT SAFETY!) ───
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# ─── NEURAL MODELS / HEAVY BINARIES ───
+*.pt
+yolov8n.pt
+yolov8s.pt
+models/face_detection_yunet_2023mar.onnx
+models/face_recognition_sface_2021dec.onnx
+
+# ─── LOCAL DATABASES, TELEMETRY, & EVENT LOGS ───
+logs/
+*.db
+*.csv
+*.jsonl
+faces/unknown/
+faces/captured/
+# Exclude actual face photos for privacy, but keep placeholder structure if wanted
+faces/known/*.jpg
+faces/known/*.jpeg
+faces/known/*.png
+
+# ─── SYSTEM / OS TEMPORARY FILES ───
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store

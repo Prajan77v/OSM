@@ -1,0 +1,434 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Orbitron:wght@400;500;600;700;800;900&family=JetBrains+Mono&display=swap');
+@import "tailwindcss";
+
+
+/* ═══════════════════════════════════════════════════════════════════════
+   OMS v9.0 — Luxury Black & Gold AI Assistant Stylesheet
+   Futuristic Jarvis/Tesla Inspired Enterprise Design System
+   ═══════════════════════════════════════════════════════════════════════ */
+
+:root {
+  --gold: #D4AF37;
+  --gold-accent: #FFD700;
+  --gold-dim: rgba(212, 175, 55, 0.45);
+  --gold-glow: rgba(212, 175, 55, 0.12);
+  --gold-glow-strong: rgba(212, 175, 55, 0.35);
+  --cyan: #00E5FF;
+  --green: #00FFA3;
+  --bg: #050505;
+  --secondary: #101010;
+  --panel: #151515;
+  --border-gold: rgba(212, 175, 55, 0.12);
+  --border-white: rgba(255, 255, 255, 0.05);
+  --text: #FFFFFF;
+  --text-sec: #B8B8B8;
+  --text-muted: #5A5A5A;
+  --sidebar-w: 76px;
+}
+
+/* ── Reset & Hardware Acceleration ─────────────────────────────────── */
+*, *::before, *::after {
+  box-sizing: border-box;
+  backface-visibility: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+html, body {
+  width: 100vw;
+  height: 100vh;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background-color: var(--bg);
+  color: var(--text);
+  font-family: var(--font-inter), 'Inter', system-ui, -apple-system, sans-serif;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* ── Cinematic Ambient Background ─────────────────────────────────── */
+.oms-bg {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  background: 
+    radial-gradient(ellipse 70% 60% at 50% -10%, rgba(212,175,55,0.06) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 40% at 10% 20%, rgba(0,229,255,0.03) 0%, transparent 50%),
+    radial-gradient(ellipse 50% 50% at 90% 80%, rgba(212,175,55,0.04) 0%, transparent 60%),
+    linear-gradient(180deg, #050507 0%, #030304 50%, #050403 100%);
+  pointer-events: none;
+}
+
+/* Subtle holographic lines */
+.oms-bg::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: 
+    linear-gradient(rgba(212, 175, 55, 0.007) 1px, transparent 1px) 0 0 / 100% 24px,
+    linear-gradient(90deg, rgba(212, 175, 55, 0.007) 1px, transparent 1px) 0 0 / 24px 100%;
+  pointer-events: none;
+}
+
+/* ── Premium Luxury Glassmorphism ─────────────────────────────────── */
+.glass-premium {
+  background: rgba(21, 21, 21, 0.42);
+  backdrop-filter: blur(24px) saturate(130%);
+  -webkit-backdrop-filter: blur(24px) saturate(130%);
+  border: 1px solid var(--border-white);
+  border-radius: 20px;
+  box-shadow: 
+    0 12px 40px rgba(0, 0, 0, 0.65), 
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.2);
+  transition: border-color 0.3s ease, box-shadow 0.3s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.glass-premium::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, rgba(255,255,255,0.03) 0%, transparent 50%);
+  pointer-events: none;
+}
+
+/* Mouse reactive highlight border style */
+.glass-premium-interactive {
+  composes: glass-premium;
+}
+.glass-premium-interactive:hover {
+  border-color: rgba(212, 175, 55, 0.22);
+  box-shadow: 
+    0 16px 48px rgba(0, 0, 0, 0.75), 
+    0 0 24px rgba(212, 175, 55, 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  transform: translateY(-2px);
+}
+
+.glass-gold-active {
+  background: rgba(25, 23, 18, 0.5);
+  backdrop-filter: blur(24px) saturate(140%);
+  -webkit-backdrop-filter: blur(24px) saturate(140%);
+  border: 1px solid var(--gold-dim);
+  border-radius: 20px;
+  box-shadow: 
+    0 16px 48px rgba(0, 0, 0, 0.7), 
+    0 0 32px var(--gold-glow),
+    inset 0 1px 0 rgba(212, 175, 55, 0.15);
+}
+
+/* ── Typography & Glowing Hierarchy ────────────────────────────────── */
+.font-orbitron { font-family: var(--font-orbitron), 'Orbitron', sans-serif; }
+.font-inter { font-family: var(--font-inter), 'Inter', sans-serif; }
+.font-mono { font-family: 'JetBrains Mono', 'Consolas', monospace; }
+
+.text-gold { color: var(--gold); }
+.text-gold-accent { color: var(--gold-accent); }
+.text-sec { color: var(--text-sec); }
+.text-muted { color: var(--text-muted); }
+
+.glow-gold {
+  text-shadow: 
+    0 0 8px rgba(212, 175, 55, 0.65), 
+    0 0 20px rgba(212, 175, 55, 0.25);
+}
+.glow-gold-strong {
+  text-shadow: 
+    0 0 12px rgba(255, 215, 0, 0.85), 
+    0 0 28px rgba(255, 215, 0, 0.45);
+}
+.glow-green {
+  text-shadow: 
+    0 0 8px rgba(0, 255, 163, 0.65), 
+    0 0 20px rgba(0, 255, 163, 0.25);
+}
+
+/* ── Navigation Rail ─────────────────────────────────────────────── */
+.nav-rail {
+  height: 100%;
+  width: var(--sidebar-w);
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 24px 0;
+  background: rgba(12, 12, 12, 0.6);
+  backdrop-filter: blur(32px) saturate(120%);
+  -webkit-backdrop-filter: blur(32px) saturate(120%);
+  border: 1px solid var(--border-white);
+  border-radius: 24px;
+  box-shadow: 0 16px 48px rgba(0,0,0,0.7), inset 0 1px 0 rgba(255,255,255,0.05);
+  transition: width 0.35s cubic-bezier(0.16, 1, 0.3, 1), background 0.3s ease;
+}
+
+.nav-rail.expanded {
+  width: 220px;
+  background: rgba(15, 15, 15, 0.8);
+  border-color: rgba(212, 175, 55, 0.15);
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: calc(100% - 20px);
+  margin: 2px 10px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  cursor: pointer;
+  color: var(--text-sec);
+  background: transparent;
+  border: 1px solid transparent;
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  white-space: nowrap;
+  position: relative;
+  overflow: hidden;
+}
+
+.nav-item:hover {
+  background: rgba(212, 175, 55, 0.06);
+  color: var(--gold-accent);
+  border-color: rgba(212, 175, 55, 0.1);
+  padding-left: 18px;
+}
+
+.nav-item.active {
+  background: rgba(212, 175, 55, 0.12);
+  color: #FFFFFF;
+  border-color: var(--gold-dim);
+  box-shadow: 
+    0 4px 16px rgba(212, 175, 55, 0.15), 
+    inset 0 1px 0 rgba(212, 175, 55, 0.2);
+}
+
+.nav-item.active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 20%;
+  bottom: 20%;
+  width: 4px;
+  background: var(--gold);
+  border-radius: 0 4px 4px 0;
+  box-shadow: 0 0 12px var(--gold);
+}
+
+.nav-label {
+  font-family: var(--font-orbitron), 'Orbitron', sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  opacity: 0;
+  transition: opacity 0.25s ease;
+}
+
+.nav-rail.expanded .nav-label {
+  opacity: 1;
+}
+
+/* ── Interactive AI Centerpiece Waves ────────────────────────────── */
+.ai-wave-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  height: 48px;
+  padding: 0 10px;
+}
+
+.ai-wave-bar {
+  width: 2.5px;
+  height: 8px;
+  background: linear-gradient(180deg, var(--gold-accent) 0%, var(--gold) 100%);
+  border-radius: 4px;
+  transform-origin: bottom;
+  box-shadow: 0 0 8px rgba(212, 175, 55, 0.5);
+}
+
+/* State-based animations for static CSS waves if needed */
+.ai-wave-bar.animate-voice-1 { animation: wavePulse 1.2s ease-in-out infinite alternate; }
+.ai-wave-bar.animate-voice-2 { animation: wavePulse 0.9s ease-in-out infinite alternate 0.15s; }
+.ai-wave-bar.animate-voice-3 { animation: wavePulse 1.4s ease-in-out infinite alternate 0.3s; }
+.ai-wave-bar.animate-voice-4 { animation: wavePulse 0.7s ease-in-out infinite alternate 0.45s; }
+
+@keyframes wavePulse {
+  0% { transform: scaleY(1); }
+  100% { transform: scaleY(5.5); }
+}
+
+/* ── Buttons (Premium Luxury Metallic Styles) ───────────────────── */
+.btn-gold-luxury {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 20px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, rgba(212, 175, 55, 0.08) 0%, rgba(212, 175, 55, 0.02) 100%);
+  border: 1px solid rgba(212, 175, 55, 0.22);
+  color: var(--gold-accent);
+  font-family: var(--font-orbitron), 'Orbitron', sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  cursor: pointer;
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  box-shadow: 
+    0 4px 12px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 rgba(212, 175, 55, 0.08);
+  position: relative;
+  overflow: hidden;
+}
+
+.btn-gold-luxury::before {
+  content: '';
+  position: absolute;
+  top: 0; left: -100%;
+  width: 100%; height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.08), transparent);
+  transition: left 0.6s ease;
+}
+
+.btn-gold-luxury:hover::before {
+  left: 100%;
+}
+
+.btn-gold-luxury:hover:not(:disabled) {
+  background: linear-gradient(135deg, rgba(212, 175, 55, 0.18) 0%, rgba(212, 175, 55, 0.06) 100%);
+  border-color: var(--gold);
+  box-shadow: 
+    0 6px 20px rgba(212, 175, 55, 0.12),
+    0 0 12px rgba(212, 175, 55, 0.08),
+    inset 0 1px 0 rgba(212, 175, 55, 0.15);
+  transform: translateY(-1.5px);
+}
+
+.btn-gold-luxury:active:not(:disabled) {
+  transform: translateY(0.5px);
+  box-shadow: 
+    0 2px 8px rgba(0, 0, 0, 0.4),
+    inset 0 1px 0 rgba(212, 175, 55, 0.05);
+}
+
+.btn-gold-luxury:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  border-color: rgba(255,255,255,0.05);
+  color: var(--text-sec);
+}
+
+.btn-danger-luxury {
+  composes: btn-gold-luxury;
+  background: linear-gradient(135deg, rgba(255, 90, 90, 0.08) 0%, rgba(255, 90, 90, 0.02) 100%);
+  border-color: rgba(255, 90, 90, 0.25);
+  color: #FF5A5A;
+}
+
+.btn-danger-luxury:hover:not(:disabled) {
+  background: linear-gradient(135deg, rgba(255, 90, 90, 0.18) 0%, rgba(255, 90, 90, 0.06) 100%);
+  border-color: #FF5A5A;
+  box-shadow: 0 6px 20px rgba(255, 90, 90, 0.12), inset 0 1px 0 rgba(255, 90, 90, 0.15);
+}
+
+/* ── Dynamic Audio Micro-visualizer Waveforms ───────────────────── */
+.ripple-voice {
+  position: absolute;
+  border-radius: 50%;
+  background: radial-gradient(circle, transparent 40%, rgba(212,175,55,0.15) 100%);
+  border: 1px solid rgba(212, 175, 55, 0.25);
+  animation: voiceRipple 3s cubic-bezier(0.1, 0.8, 0.3, 1) infinite;
+}
+
+@keyframes voiceRipple {
+  0% { width: 64px; height: 64px; opacity: 1; transform: scale(1); }
+  100% { width: 64px; height: 64px; opacity: 0; transform: scale(3.5); }
+}
+
+/* ── Dynamic Holographic HUD Sights ────────────────────────────── */
+.corner-hud {
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  pointer-events: none;
+  border: 2px solid transparent;
+  transition: all 0.3s ease;
+}
+.corner-hud.tl { top: 16px; left: 16px; border-top-color: var(--gold); border-left-color: var(--gold); }
+.corner-hud.tr { top: 16px; right: 16px; border-top-color: var(--gold); border-right-color: var(--gold); }
+.corner-hud.bl { bottom: 16px; left: 16px; border-bottom-color: var(--gold); border-left-color: var(--gold); }
+.corner-hud.br { bottom: 16px; right: 16px; border-bottom-color: var(--gold); border-right-color: var(--gold); }
+
+/* Webcam scan grid overlay */
+.face-scan-grid {
+  position: absolute;
+  inset: 0;
+  background: 
+    linear-gradient(rgba(212, 175, 55, 0.03) 50%, transparent 50%),
+    linear-gradient(90deg, rgba(212, 175, 55, 0.03) 50%, transparent 50%);
+  background-size: 20px 20px;
+  opacity: 0.4;
+  pointer-events: none;
+  animation: gridOscillate 12s linear infinite;
+}
+
+@keyframes gridOscillate {
+  0% { background-position: 0px 0px; }
+  100% { background-position: 40px 40px; }
+}
+
+/* Moving scan line */
+.hud-scan-line {
+  position: absolute;
+  left: 0; right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent 5%, var(--gold) 50%, transparent 95%);
+  box-shadow: 0 0 16px var(--gold-accent), 0 0 4px var(--gold);
+  animation: scanningGrid 4s ease-in-out infinite;
+  pointer-events: none;
+  opacity: 0.75;
+}
+
+@keyframes scanningGrid {
+  0% { top: 0%; }
+  50% { top: 100%; }
+  100% { top: 0%; }
+}
+
+/* ── Custom Scrollbars ──────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(212, 175, 55, 0.22);
+  border-radius: 10px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(212, 175, 55, 0.45);
+}
+
+/* ── Status indicator dots ───────────────────────────────────────── */
+.status-indicator {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  display: inline-block;
+  box-shadow: 0 0 8px currentColor;
+}
+
+/* Success Face Unlock Ring */
+.success-ring-lock {
+  border: 2px solid var(--green);
+  box-shadow: 0 0 20px rgba(0, 255, 163, 0.35);
+  animation: successFlash 1.5s ease-out forwards;
+}
+
+@keyframes successFlash {
+  0% { transform: scale(0.92); opacity: 0.7; }
+  50% { transform: scale(1.05); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
