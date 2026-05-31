@@ -1,7 +1,7 @@
 """
 OMS Web Server — FastAPI backend for the cinematic web dashboard.
 Provides MJPEG video streams, telemetry JSON, event feeds, and control APIs.
-This module is imported and started by surveillance.py.
+This module is imported and started by main.py.
 """
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ except ImportError:
 if TYPE_CHECKING:
     pass
 
-# ─── Global references injected by surveillance.py ───────────────────────────
+# ─── Global references injected by main.py ───────────────────────────
 _cameras = []          # List[CameraState]
 _get_telemetry = None  # callable -> dict
 _get_events = None     # callable -> list
@@ -40,7 +40,7 @@ _get_summary = None    # callable -> dict
 _control_handlers = {} # dict[str, callable]
 
 def init_web_server(cameras, get_telemetry_fn, get_events_fn, get_summary_fn, control_handlers):
-    """Called by surveillance.py to inject runtime references."""
+    """Called by main.py to inject runtime references."""
     global _cameras, _get_telemetry, _get_events, _get_summary, _control_handlers
     _cameras = cameras
     _get_telemetry = get_telemetry_fn
@@ -259,7 +259,7 @@ def create_app() -> "FastAPI":
     async def get_settings():
         """Get current system configuration settings."""
         try:
-            import surveillance as sv
+            import main as sv
             return JSONResponse({
                 "status": "ok",
                 "username": sv.Config.USERNAME,
@@ -272,7 +272,7 @@ def create_app() -> "FastAPI":
             # Mock fallback if loaded from dev_server
             try:
                 import dev_server as ds
-                import surveillance as sv
+                import main as sv
                 return JSONResponse({
                     "status": "ok",
                     "username": "Prajan",
@@ -288,7 +288,7 @@ def create_app() -> "FastAPI":
     async def get_faces():
         """Get known enrolled faces database."""
         try:
-            import surveillance as sv
+            import main as sv
             db = sv.faces_db
             res = []
             for pid, info in db.items():
@@ -359,7 +359,7 @@ def create_app() -> "FastAPI":
         """Trigger a system action."""
         if action == "register_face" and body and "username" in body:
             try:
-                import surveillance as sv
+                import main as sv
                 username = body["username"]
                 threading.Thread(
                     target=lambda: sv.register_user_face(_cameras, username),
@@ -371,7 +371,7 @@ def create_app() -> "FastAPI":
 
         if action == "save_settings" and body:
             try:
-                import surveillance as sv
+                import main as sv
                 # Update runtime config variables
                 username = body.get("username", sv.Config.USERNAME)
                 confidence = float(body.get("confidence", sv.Config.CONFIDENCE))
@@ -409,7 +409,7 @@ def create_app() -> "FastAPI":
         transcript = body["transcript"]
         cmd = transcript.lower()
         
-        import surveillance as sv
+        import main as sv
         from datetime import datetime
 
         # Context Variables
@@ -569,7 +569,7 @@ code { background: rgba(212,175,55,0.1); padding: 0.3rem 0.8rem; border-radius: 
   <h1>⬡ OMS v9.0</h1>
   <p>Object Monitoring System — Web Server Online</p>
   <code>cd frontend && npm run build</code>
-  <p style="margin-top:0.5rem">Then restart surveillance.py to serve the full dashboard</p>
+  <p style="margin-top:0.5rem">Then restart main.py to serve the full dashboard</p>
   <p style="margin-top:2rem; color: #00FFA3;">✓ API server running on <a href="/docs" style="color:#00E5FF">/docs</a></p>
 </div>
 </body>

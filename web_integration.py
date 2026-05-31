@@ -1,6 +1,6 @@
 """
 OMS Web Integration Module
-Provides data extraction functions that read surveillance.py's runtime state
+Provides data extraction functions that read main.py's runtime state
 and expose it via the web_server FastAPI endpoints.
 """
 from __future__ import annotations
@@ -16,7 +16,7 @@ try:
 except ImportError:
     PSUTIL_AVAILABLE = False
 
-# ─── State that gets injected by surveillance.py main() ──────────────────────
+# ─── State that gets injected by main.py main() ──────────────────────
 _cameras = []
 _events_db = []
 _events_lock = threading.Lock()
@@ -27,14 +27,14 @@ _net_bytes_time = time.time()
 
 
 def inject(cameras, threat_engine):
-    """Called by surveillance.py main() to inject camera list and threat engine."""
+    """Called by main.py main() to inject camera list and threat engine."""
     global _cameras, _threat_engine
     _cameras = cameras
     _threat_engine = threat_engine
 
 
 def record_event(ts: str, event: str, camera: str = "", person: str = "", detail: str = ""):
-    """Called by surveillance.py log_event() to capture events for the web dashboard."""
+    """Called by main.py log_event() to capture events for the web dashboard."""
     with _events_lock:
         _events_db.append({
             "ts": ts, "event": event, "camera": camera,
@@ -65,7 +65,7 @@ def get_telemetry() -> dict:
     """Returns a dict of system + AI telemetry for /api/telemetry."""
     # Import these at call-time to get the runtime values
     try:
-        import surveillance as sv
+        import main as sv
         CUDA_AVAILABLE = sv.CUDA_AVAILABLE
         CUDA_DEVICE    = sv.CUDA_DEVICE
         YOLO_AVAILABLE = sv.YOLO_AVAILABLE
@@ -108,7 +108,7 @@ def get_telemetry() -> dict:
     # Check Telegram queue
     tg_ok = False
     try:
-        import surveillance as sv
+        import main as sv
         tg_ok = hasattr(sv, "notif_queue") and sv.notif_queue is not None
     except Exception:
         pass
@@ -116,7 +116,7 @@ def get_telemetry() -> dict:
     # Check DB connection
     db_ok = False
     try:
-        import surveillance as sv
+        import main as sv
         db_ok = sv._db_conn is not None
     except Exception:
         pass
@@ -160,7 +160,7 @@ def get_events() -> list:
 def get_summary() -> dict:
     """Returns aggregated stats for /api/summary."""
     try:
-        import surveillance as sv
+        import main as sv
         operator = sv.Config.USERNAME
     except Exception:
         operator = "Prajan"
@@ -204,7 +204,7 @@ def get_control_handlers(cameras, threat_engine) -> dict:
 
     def do_alarm():
         try:
-            import surveillance as sv
+            import main as sv
             sv.log_event("MANUAL_ALARM", detail="web triggered")
             threat_engine.raise_threat("RED", "MANUAL ALARM")
             sv._alarm()
@@ -215,7 +215,7 @@ def get_control_handlers(cameras, threat_engine) -> dict:
 
     def do_shutdown():
         try:
-            import surveillance as sv
+            import main as sv
             sv.speak("System shutdown initiated.")
             sv.log_event("SYSTEM_SHUTDOWN", detail="web command")
         except Exception as e:
@@ -224,7 +224,7 @@ def get_control_handlers(cameras, threat_engine) -> dict:
 
     def do_export_csv():
         try:
-            import surveillance as sv
+            import main as sv
             sv.export_csv()
             sv.speak("Event log exported.")
         except Exception as e:
@@ -233,7 +233,7 @@ def get_control_handlers(cameras, threat_engine) -> dict:
 
     def do_register_face():
         try:
-            import surveillance as sv
+            import main as sv
             threading.Thread(
                 target=lambda: sv.register_user_face(cameras, sv.Config.USERNAME),
                 daemon=True
@@ -244,7 +244,7 @@ def get_control_handlers(cameras, threat_engine) -> dict:
 
     def do_test_telegram():
         try:
-            import surveillance as sv
+            import main as sv
             sv.notif_queue.send_message(
                 "🔔 OMS Web Dashboard — Test message. System operational.",
                 event_type="SYSTEM"
@@ -255,7 +255,7 @@ def get_control_handlers(cameras, threat_engine) -> dict:
 
     def do_toggle_hud():
         try:
-            import surveillance as sv
+            import main as sv
             sv.hud_overlay_active = not sv.hud_overlay_active
             state = sv.hud_overlay_active
         except Exception as e:
