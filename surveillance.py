@@ -2824,7 +2824,7 @@ def _draw_hud_glass_overlay(img: np.ndarray, cs, tx1: int, ty1: int, tx2: int, t
 
 # ── CAMERA GRID — Cinematic AI Vision Modules ─────────────────────────────────
 def draw_camera_grid(img: np.ndarray, cameras):
-    global selected_cam_idx, hud_overlay_active, cam_area_pct
+    global selected_cam_idx, hud_overlay_active, cam_area_pct, is_fs_state
     W = img.shape[1]; H = img.shape[0]
     pad = UI_PAD
     _now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -2835,16 +2835,20 @@ def draw_camera_grid(img: np.ndarray, cameras):
         f"LIVE CHANNELS: {sum(1 for c in cameras if c.online)}/{len(cameras)}  >>>  {_now}  >>>  "
     )
 
-    # Camera grid area: between left/right panels, below header
-    sx  = pad * 2 + UI_LEFT_W
-    ex  = W - pad * 2 - UI_RIGHT_W
-    top = pad * 2 + UI_HDR_H
-    # Bottom of cameras: leave room for bottom analytics
-    bottom_analytics_h = 280
-    info_area_y = H - pad - UI_FOOT_H - bottom_analytics_h
+    if is_fs_state:
+        sx, top, ex, info_area_y = 0, 0, W, H
+        gw, gh = W, H
+    else:
+        # Camera grid area: between left/right panels, below header
+        sx  = pad * 2 + UI_LEFT_W
+        ex  = W - pad * 2 - UI_RIGHT_W
+        top = pad * 2 + UI_HDR_H
+        # Bottom of cameras: leave room for bottom analytics
+        bottom_analytics_h = 280
+        info_area_y = H - pad - UI_FOOT_H - bottom_analytics_h
 
-    gw = ex - sx
-    gh = info_area_y - top
+        gw = ex - sx
+        gh = info_area_y - top
 
     f_idx = getattr(Config, "focused_cam_idx", -1)
 
@@ -3308,14 +3312,19 @@ def main():
             dashboard = np.zeros((Config.WINDOW_H, Config.WINDOW_W, 3), dtype=np.uint8)
 
         draw_gradient_background(dashboard)
-        draw_header(dashboard, cameras)
-        draw_nav_tabs(dashboard)
-        draw_side_panel(dashboard, cameras)
-        draw_event_panel(dashboard)
+        
+        if not is_fs_state:
+            draw_header(dashboard, cameras)
+            draw_nav_tabs(dashboard)
+            draw_side_panel(dashboard, cameras)
+            draw_event_panel(dashboard)
+            
         info_area_y = draw_camera_grid(dashboard, cameras)
-        if info_area_y is not None:
-            draw_center_bottom(dashboard, cameras, info_area_y)
-        draw_footer_capsule(dashboard, cameras)
+        
+        if not is_fs_state:
+            if info_area_y is not None:
+                draw_center_bottom(dashboard, cameras, info_area_y)
+            draw_footer_capsule(dashboard, cameras)
 
         # Update system graphs every 2s
         if int(time.time()*2) % 4 == 0:
@@ -3396,8 +3405,11 @@ def main():
             is_fs_state = not is_fs_state
             if is_fs_state:
                 cv2.setWindowProperty(win_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+                if Config.focused_cam_idx == -1:
+                    Config.focused_cam_idx = selected_cam_idx
             else:
                 cv2.setWindowProperty(win_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_NORMAL)
+                Config.focused_cam_idx = -1
         elif key == ord('q'):
             app_log.info("Shutdown command.")
             speak("Initiating O S M shutdown.")
