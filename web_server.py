@@ -19,6 +19,18 @@ from typing import TYPE_CHECKING
 import cv2
 import numpy as np
 
+# ── Frozen Executable Path Resolution ─────────────────────────────────────────
+import sys
+from pathlib import Path
+
+IS_FROZEN = getattr(sys, 'frozen', False)
+if IS_FROZEN:
+    WORKING_DIR = Path(sys.executable).parent.resolve()
+    BUNDLE_DIR = Path(sys._MEIPASS).resolve()
+else:
+    WORKING_DIR = Path(__file__).parent.resolve()
+    BUNDLE_DIR = Path(__file__).parent.resolve()
+
 # FastAPI imports
 try:
     from fastapi import FastAPI, Response
@@ -51,7 +63,7 @@ def init_web_server(cameras, get_telemetry_fn, get_events_fn, get_summary_fn, co
 
 def _save_config_yaml_and_env(username, confidence, model, tg_token, tg_chat_id):
     # 1. Update .env file
-    env_path = ".env"
+    env_path = str(WORKING_DIR / ".env")
     if os.path.exists(env_path):
         try:
             with open(env_path, "r", encoding="utf-8") as f:
@@ -79,7 +91,7 @@ def _save_config_yaml_and_env(username, confidence, model, tg_token, tg_chat_id)
             pass
 
     # 2. Update config.yaml file
-    yaml_path = "config.yaml"
+    yaml_path = str(WORKING_DIR / "config.yaml")
     if os.path.exists(yaml_path):
         try:
             with open(yaml_path, "r", encoding="utf-8") as f:
@@ -338,7 +350,23 @@ def create_app() -> "FastAPI":
     async def cameras_info():
         """Camera channel info."""
         result = []
+        try:
+            import main as sv
+            db = sv.faces_db
+        except Exception:
+            db = {}
+            
         for cs in _cameras:
+            # Query the database to get details of all active subjects on this camera
+            active_subjects = []
+            for pid in getattr(cs, "present_pids", set()):
+                if pid in db:
+                    active_subjects.append({
+                        "pid": pid,
+                        "name": db[pid].get("name", "Unknown"),
+                        "known": db[pid].get("known", False)
+                    })
+                    
             result.append({
                 "id":          cs.cam_id,
                 "name":        cs.name,
@@ -347,6 +375,7 @@ def create_app() -> "FastAPI":
                 "disconnected":cs.disconnected,
                 "fps":         round(getattr(cs, "fps_inst", 0.0), 1),
                 "persons":     len(getattr(cs, "present_pids", set())),
+                "active_subjects": active_subjects,
                 "detections":  len(getattr(cs, "latest_dets", [])),
                 "threat_level":getattr(cs, "threat_level", "GREEN"),
                 "uptime":      getattr(cs, "uptime_str", "00:00:00"),
@@ -366,6 +395,125 @@ def create_app() -> "FastAPI":
                     daemon=True
                 ).start()
                 return JSONResponse({"status": "ok", "result": f"Face registration started for {username}"})
+            except Exception as e:
+                return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+        if action == "rename_subject" and body and "pid" in body and "new_name" in body:
+            try:
+                import main as sv
+                pid = body["pid"]
+                new_name = body["new_name"].strip()
+                if not new_name:
+                    return JSONResponse({"status": "error", "message": "Name cannot be empty"}, status_code=400)
+                
+                with sv._fdb_lock:
+                    if pid in sv.faces_db:
+                        old_name = sv.faces_db[pid].get("name", "Unknown")
+                        sv.faces_db[pid]["name"] = new_name
+                        sv.faces_db[pid]["known"] = True  # Promote to verified/known!
+                        
+                        # Find face image to copy to KNOWN spot
+                        import shutil
+                        from pathlib import Path
+                        
+                        known_dir = Path(sv.Config.KNOWN_FACES_DIR)
+                        known_dir.mkdir(parents=True, exist_ok=True)
+                        dest_img = known_dir / f"{new_name}.jpg"
+                        
+                        photo_copied = False
+                        
+                        # 1. Try to copy the photo path stored in the database
+                        photo_val = sv.faces_db[pid].get("photo")
+                        if photo_val:
+                            p_path = Path(photo_val)
+                            if not p_path.is_absolute():
+                                p_path = WORKING_DIR / p_path
+                            if p_path.exists():
+                                try:
+                                    shutil.copy(str(p_path), str(dest_img))
+                                    photo_copied = True
+                                except Exception:
+                                    pass
+                                
+                        # 2. Try to find the file in faces/captured/ by searching for {pid}_ prefix
+                        if not photo_copied:
+                            captured_dir = WORKING_DIR / "faces/captured"
+                            if captured_dir.exists():
+                                matches = sorted(list(captured_dir.glob(f"{pid}_*.jpg")), key=os.path.getmtime, reverse=True)
+                                if matches:
+                                    try:
+                                        shutil.copy(str(matches[0]), str(dest_img))
+                                        photo_copied = True
+                                    except Exception:
+                                        pass
+                                        
+                        # 3. If no photo is found but the person is active, crop in real-time from active camera
+                        if not photo_copied:
+                            for cs in _cameras:
+                                if pid in getattr(cs, "present_pids", set()):
+                                    frame = None
+                                    with cs.frame_lock:
+                                        if cs.latest_frame is not None:
+                                            frame = cs.latest_frame.copy()
+                                    if frame is not None:
+                                        try:
+                                            # Crop active person box
+                                            for d in getattr(cs, "latest_dets", []):
+                                                if d.get("pid") == pid:
+                                                    x1, y1, x2, y2 = d["box"]
+                                                    # Coordinates in latest_dets are pre-scaled to 640x360, let's scale back to original frame size
+                                                    H, W = frame.shape[:2]
+                                                    sx = W / 640.0; sy = H / 360.0
+                                                    x1_f = int(x1 * sx); y1_f = int(y1 * sy)
+                                                    x2_f = int(x2 * sx); y2_f = int(y2 * sy)
+                                                    
+                                                    pad = int((y2_f - y1_f) * 0.15)
+                                                    crop = frame[max(0, y1_f-pad):min(H, y2_f+pad), max(0, x1_f-pad):min(W, x2_f+pad)]
+                                                    if crop.size > 0:
+                                                        cv2.imwrite(str(dest_img), crop)
+                                                        photo_copied = True
+                                                        break
+                                        except Exception:
+                                            pass
+                                    if photo_copied:
+                                        break
+                        
+                        # Update the DB photo reference to the known folder image
+                        if photo_copied:
+                            try:
+                                sv.faces_db[pid]["photo"] = str(dest_img.relative_to(WORKING_DIR))
+                            except ValueError:
+                                sv.faces_db[pid]["photo"] = str(dest_img)
+                            
+                        sv._save_db_json()
+                        sv.preload_known()
+                        sv._enc_dirty = True
+                        
+                        # Trigger system audio/threat level reset if it was an intruder
+                        if "Intruder" in old_name:
+                            # Verify if any intruders remain on any camera
+                            any_intruders = False
+                            for cs in _cameras:
+                                for active_pid in getattr(cs, "present_pids", set()):
+                                    p_name = sv.faces_db.get(active_pid, {}).get("name", "")
+                                    if "Intruder" in p_name:
+                                        any_intruders = True
+                                        break
+                                if any_intruders:
+                                    break
+                            
+                            if not any_intruders:
+                                # Clear threat level
+                                sv.threat_engine.level = "GREEN"
+                                sv.threat_engine.trigger_reason = None
+                                for cs in _cameras:
+                                    if cs.threat_level == "RED":
+                                        cs.threat_level = "GREEN"
+                        
+                        sv.speak(f"Subject profile updated. Subject {new_name} verified.")
+                        return JSONResponse({"status": "ok", "result": f"Successfully renamed {old_name} to {new_name} and saved to known spot"})
+                    else:
+                        return JSONResponse({"status": "error", "message": f"PID {pid} not found in database"}, status_code=404)
             except Exception as e:
                 return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
@@ -535,7 +683,7 @@ def create_app() -> "FastAPI":
         return JSONResponse({"status": "ok", "message": f"Reconnecting cam {cam_id}"})
 
     # ─── Static Frontend ──────────────────────────────────────────────────────
-    frontend_dir = os.path.join(os.path.dirname(__file__), "frontend", "out")
+    frontend_dir = str(BUNDLE_DIR / "frontend" / "out")
     if os.path.isdir(frontend_dir):
         # Serve index.html for all non-API routes (SPA fallback)
         @app.get("/")

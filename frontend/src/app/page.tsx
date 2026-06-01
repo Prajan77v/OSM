@@ -10,7 +10,7 @@ import {
   Database, Bot, Download, Volume2, RefreshCw, Maximize2, Minimize2,
   Mic, Play, Pause, Square, CheckCircle, Info,
   UserPlus, Award, Check, Save, ToggleLeft, ToggleRight,
-  Sliders, SlidersHorizontal, SlidersVertical
+  Sliders, SlidersHorizontal, SlidersVertical, Edit2, X
 } from "lucide-react";
 
 // ─── API base URL (proxied in dev, same-origin in prod) ──────────────────────
@@ -92,8 +92,63 @@ function ParticleCanvas({ active, density = 120 }: { active: boolean; density?: 
     const resize = () => { canvas.width = window.innerWidth; canvas.height = window.innerHeight; };
     resize();
     window.addEventListener("resize", resize);
-    const trackMouse = (e: MouseEvent) => { mouseRef.current = { x: e.clientX, y: e.clientY }; };
+    
+    // Sparkles trailing logic
+    type Sparkle = { x: number; y: number; vx: number; vy: number; r: number; life: number };
+    let sparkles: Sparkle[] = [];
+    let lastMouseX = 0, lastMouseY = 0;
+
+    const trackMouse = (e: MouseEvent) => {
+      mouseRef.current = { x: e.clientX, y: e.clientY };
+      const dMouse = Math.hypot(e.clientX - lastMouseX, e.clientY - lastMouseY);
+      if (dMouse > 6) {
+        // Spawn glowing golden trailing micro-sparkles
+        for (let k = 0; k < 2; k++) {
+          sparkles.push({
+            x: e.clientX + (Math.random() - 0.5) * 8,
+            y: e.clientY + (Math.random() - 0.5) * 8,
+            vx: (Math.random() - 0.5) * 0.8,
+            vy: (Math.random() - 0.5) * 0.8 - 0.2, // float slightly upward
+            r: Math.random() * 1.5 + 0.5,
+            life: 1.0
+          });
+        }
+        lastMouseX = e.clientX;
+        lastMouseY = e.clientY;
+      }
+    };
     window.addEventListener("mousemove", trackMouse);
+
+    // Shockwave click event listener!
+    const handleWindowClick = (e: MouseEvent) => {
+      const cx = e.clientX;
+      const cy = e.clientY;
+      // Trigger a powerful blast shockwave, throwing all particles outwards!
+      particles.forEach(p => {
+        const dx = p.x - cx;
+        const dy = p.y - cy;
+        const d = Math.hypot(dx, dy);
+        if (d < 300 && d > 0) {
+          const force = (300 - d) * 0.09; // Strong repulsion close to click
+          p.vx += (dx / d) * force;
+          p.vy += (dy / d) * force;
+        }
+      });
+      // Spawn extra sparkles in a circle blast!
+      for (let k = 0; k < 12; k++) {
+        const angle = (k / 12) * Math.PI * 2;
+        const spd = Math.random() * 2 + 1;
+        sparkles.push({
+          x: cx,
+          y: cy,
+          vx: Math.cos(angle) * spd,
+          vy: Math.sin(angle) * spd,
+          r: Math.random() * 2 + 0.8,
+          life: 1.0
+        });
+      }
+    };
+    window.addEventListener("click", handleWindowClick);
 
     type P = { x: number; y: number; vx: number; vy: number; r: number; alpha: number };
     const particles: P[] = Array.from({ length: density }, () => ({
@@ -101,8 +156,8 @@ function ParticleCanvas({ active, density = 120 }: { active: boolean; density?: 
       y: Math.random() * window.innerHeight,
       vx: (Math.random() - 0.5) * 0.22,
       vy: (Math.random() - 0.5) * 0.22,
-      r: Math.random() * 1.5 + 0.3,
-      alpha: Math.random() * 0.3 + 0.05,
+      r: Math.random() * 2.8 + 1.2,          // Upgraded particle radius: 1.2px to 4.0px
+      alpha: Math.random() * 0.5 + 0.25,      // Upgraded particle opacity: 0.25 to 0.75
     }));
 
     let animId: number;
@@ -110,15 +165,39 @@ function ParticleCanvas({ active, density = 120 }: { active: boolean; density?: 
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       const mx = mouseRef.current.x, my = mouseRef.current.y;
 
+      // Update & Draw dynamic trails (sparkles)
+      sparkles = sparkles.filter(s => {
+        s.x += s.vx;
+        s.y += s.vy;
+        s.life -= 0.025; // dissolve over 40 frames (~0.6s)
+        if (s.life <= 0) return false;
+
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(212, 175, 55, ${s.life * 0.8})`;
+        ctx.fill();
+        return true;
+      });
+
+      // Update & Draw main particles
       particles.forEach(p => {
         const dx = p.x - mx, dy = p.y - my;
-        const dist = Math.sqrt(dx*dx + dy*dy);
-        if (dist < 150) {
-          p.vx += (dx / dist) * 0.02;
-          p.vy += (dy / dist) * 0.02;
+        const dist = Math.hypot(dx, dy);
+        
+        // Dynamic Vortex Swirl: attracted to cursor, rotating around it in a cool magnetic field!
+        if (dist < 180 && dist > 0) {
+          // 1. Attraction force
+          p.vx -= (dx / dist) * 0.035;
+          p.vy -= (dy / dist) * 0.035;
+          
+          // 2. Swirling force (perpendicular vector)
+          p.vx += (-dy / dist) * 0.065;
+          p.vy += (dx / dist) * 0.065;
         }
-        p.vx *= 0.98; p.vy *= 0.98;
+
+        p.vx *= 0.96; p.vy *= 0.96; // apply friction
         p.x += p.vx; p.y += p.vy;
+
         if (p.x < 0) p.x = canvas.width;
         if (p.x > canvas.width) p.x = 0;
         if (p.y < 0) p.y = canvas.height;
@@ -130,17 +209,18 @@ function ParticleCanvas({ active, density = 120 }: { active: boolean; density?: 
         ctx.fill();
       });
 
+      // Draw beautiful mesh lines between close particles
       for (let i = 0; i < particles.length; i++) {
         for (let j = i + 1; j < particles.length; j++) {
           const dx = particles[i].x - particles[j].x;
           const dy = particles[i].y - particles[j].y;
-          const d = Math.sqrt(dx*dx + dy*dy);
+          const d = Math.hypot(dx, dy);
           if (d < 100) {
             ctx.beginPath();
             ctx.moveTo(particles[i].x, particles[i].y);
             ctx.lineTo(particles[j].x, particles[j].y);
-            ctx.strokeStyle = `rgba(212, 175, 55, ${0.05 * (1 - d/100)})`;
-            ctx.lineWidth = 0.5;
+            ctx.strokeStyle = `rgba(212, 175, 55, ${0.15 * (1 - d/100)})`; // Upgraded link opacity: 3x stronger!
+            ctx.lineWidth = 0.75;                                          // Upgraded link thickness!
             ctx.stroke();
           }
         }
@@ -148,7 +228,12 @@ function ParticleCanvas({ active, density = 120 }: { active: boolean; density?: 
       animId = requestAnimationFrame(draw);
     };
     draw();
-    return () => { cancelAnimationFrame(animId); window.removeEventListener("resize", resize); window.removeEventListener("mousemove", trackMouse); };
+    return () => { 
+      cancelAnimationFrame(animId); 
+      window.removeEventListener("resize", resize); 
+      window.removeEventListener("mousemove", trackMouse); 
+      window.removeEventListener("click", handleWindowClick);
+    };
   }, [active, density]);
 
   if (!active) return null;
@@ -327,6 +412,10 @@ export default function Dashboard() {
 
   // Success Face Recognition indicator
   const [isFaceUnlocked, setIsFaceUnlocked] = useState(false);
+  
+  // Real-time inline profile renaming states
+  const [editingPid, setEditingPid] = useState<string | null>(null);
+  const [editNameValue, setEditNameValue] = useState("");
 
   // Fullscreen Preview state & ref
   const viewportRef = useRef<HTMLDivElement>(null);
@@ -428,6 +517,31 @@ export default function Dashboard() {
       utt.rate = 1.05;
       utt.pitch = 0.95;
       window.speechSynthesis.speak(utt);
+    }
+  };
+
+  // ── Real-time Inline Profile Renaming & Subject Promotion ────────────────
+  const handleRenameSave = async (pid: string, newName: string) => {
+    const trimmed = newName.trim();
+    if (!trimmed) return;
+    try {
+      setBtnLoading(prev => ({ ...prev, rename_subject: true }));
+      const r = await fetch(`${API}/api/control/rename_subject`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pid, new_name: trimmed }),
+      });
+      const res = await r.json();
+      if (res.status === "ok") {
+        setEditingPid(null);
+        await fetchAll(); // Re-fetch active camera information immediately
+      } else {
+        alert("Verification Error: " + (res.message || "Could not complete operation"));
+      }
+    } catch (err: any) {
+      alert("Connection failure: " + err.message);
+    } finally {
+      setBtnLoading(prev => ({ ...prev, rename_subject: false }));
     }
   };
 
@@ -1446,24 +1560,91 @@ export default function Dashboard() {
 
               <div className="h-[120px] rounded-xl glass-premium bg-black/60 border border-white/5 relative overflow-hidden flex items-center justify-center">
                 {isFaceUnlocked ? (
-                  <div className="w-full h-full flex items-center justify-center gap-4 px-4">
-                    <div className="w-18 h-18 rounded-full border-2 border-gold-accent/40 overflow-hidden relative flex-shrink-0 success-ring-lock">
-                      <img
-                        src={`${API}/api/stream/${activeCam}`}
-                        alt="Crop"
-                        className="w-full h-full object-cover scale-[1.7] origin-center translate-y-1"
-                      />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-1.5">
-                        <CheckCircle size={12} className="text-green-oms animate-bounce" />
-                        <span className="font-orbitron text-xs font-black text-gold-accent">P. RECOGNIZED</span>
+                  (() => {
+                    const activeSubject = (cameras as any)[activeCam]?.active_subjects?.[0];
+                    const sName = activeSubject ? activeSubject.name : (summary?.operator || opName.toUpperCase());
+                    const sKnown = activeSubject ? activeSubject.known : true;
+                    const isIntruder = !sKnown || sName.toLowerCase().includes("intruder");
+                    
+                    return (
+                      <div className="w-full h-full flex items-center justify-center gap-4 px-4">
+                        <div className={`w-18 h-18 rounded-full border-2 ${isIntruder ? 'border-red-500/50 animate-pulse' : 'border-gold-accent/40 success-ring-lock'} overflow-hidden relative flex-shrink-0`}>
+                          <img
+                            src={`${API}/api/stream/${activeCam}`}
+                            alt="Crop"
+                            className="w-full h-full object-cover scale-[1.7] origin-center translate-y-1"
+                          />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            {isIntruder ? (
+                              <>
+                                <AlertTriangle size={12} className="text-red-500 animate-bounce" />
+                                <span className="font-orbitron text-[9px] font-black text-red-500 tracking-wider">UNAUTHORIZED INTRUDER</span>
+                              </>
+                            ) : (
+                              <>
+                                <CheckCircle size={12} className="text-green-oms animate-bounce" />
+                                <span className="font-orbitron text-[9px] font-black text-gold-accent tracking-wider">P. RECOGNIZED</span>
+                              </>
+                            )}
+                          </div>
+                          
+                          {editingPid === (activeSubject?.pid || "default") ? (
+                            <div className="flex items-center gap-1 mt-1">
+                              <input
+                                type="text"
+                                className="bg-black/90 border border-gold text-[10px] text-white rounded px-1.5 py-0.5 w-full focus:ring-1 focus:ring-gold-accent focus:outline-none font-mono"
+                                value={editNameValue}
+                                onChange={e => setEditNameValue(e.target.value)}
+                                onKeyDown={e => {
+                                  if (e.key === 'Enter') {
+                                    handleRenameSave(activeSubject.pid, editNameValue);
+                                  }
+                                }}
+                                autoFocus
+                              />
+                              <button
+                                onClick={() => handleRenameSave(activeSubject.pid, editNameValue)}
+                                className="p-0.5 text-green-400 hover:text-green-300"
+                                title="Confirm Identity"
+                              >
+                                <Check size={11} />
+                              </button>
+                              <button
+                                onClick={() => setEditingPid(null)}
+                                className="p-0.5 text-red-400 hover:text-red-300"
+                                title="Cancel"
+                              >
+                                <X size={11} />
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="flex items-center justify-between mt-0.5">
+                              <h3 className={`font-orbitron text-xs font-black truncate leading-tight ${isIntruder ? 'text-red-400' : 'text-[#FFFFFF]'}`}>
+                                {sName}
+                              </h3>
+                              {activeSubject?.pid && (
+                                <button
+                                  onClick={() => {
+                                    setEditingPid(activeSubject.pid);
+                                    setEditNameValue(activeSubject.name);
+                                  }}
+                                  className="text-gold hover:text-gold-accent p-0.5 flex-shrink-0"
+                                  title="Add/Rename subject in real-time"
+                                >
+                                  <Edit2 size={10} />
+                                </button>
+                              )}
+                            </div>
+                          )}
+                          
+                          <p className="font-mono text-[8px] text-sec mt-0.5">CONFIDENCE: <span className={isIntruder ? "text-red-400" : "text-green-oms"}>{isIntruder ? "94.2%" : "98.4%"}</span></p>
+                          <p className="font-mono text-[8px] text-muted">LOCK STATE: <span className={isIntruder ? "text-red-500 font-black animate-pulse" : "text-green-oms font-bold"}>{isIntruder ? "BREACHED" : "SECURED"}</span></p>
+                        </div>
                       </div>
-                      <h3 className="font-orbitron text-sm font-black text-[#FFFFFF] mt-0.5 truncate">{summary?.operator || opName.toUpperCase()}</h3>
-                      <p className="font-mono text-[9px] text-sec mt-0.5">CONFIDENCE: <span className="text-green-oms">98.4%</span></p>
-                      <p className="font-mono text-[9px] text-muted">LOCK STATE: <span className="text-green-oms font-bold">SECURED</span></p>
-                    </div>
-                  </div>
+                    );
+                  })()
                 ) : (
                   <div className="flex flex-col items-center gap-2 text-center">
                     <div className="w-10 h-10 rounded-full border border-white/10 flex items-center justify-center">

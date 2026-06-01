@@ -36,8 +36,17 @@ from typing import Dict, List, Optional, Tuple
 import cv2
 import numpy as np
 
+# ── Frozen Executable Path Resolution ─────────────────────────────────────────
+IS_FROZEN = getattr(sys, 'frozen', False)
+if IS_FROZEN:
+    WORKING_DIR = Path(sys.executable).parent.resolve()
+    BUNDLE_DIR = Path(sys._MEIPASS).resolve()
+else:
+    WORKING_DIR = Path(__file__).parent.resolve()
+    BUNDLE_DIR = Path(__file__).parent.resolve()
+
 # ── Load .env secrets before anything else ────────────────────────────────────
-def _load_env(path: str = ".env"):
+def _load_env(path: str = str(WORKING_DIR / ".env")):
     try:
         with open(path, encoding="utf-8") as f:
             for line in f:
@@ -58,7 +67,7 @@ try:
 except ImportError:
     YAML_AVAILABLE = False
 
-def _load_yaml(path: str = "config.yaml") -> dict:
+def _load_yaml(path: str = str(WORKING_DIR / "config.yaml")) -> dict:
     if not YAML_AVAILABLE:
         return {}
     try:
@@ -184,7 +193,7 @@ class Config:
     CAMERA_CONFIGS: List[dict] = _load_cameras.__func__()
     focused_cam_idx: int = -1
 
-    MODEL_NAME  = _cfg("detection","model",HW_PROFILE, default={"LOW":"yolov8n.pt","MEDIUM":"yolov8n.pt","HIGH":"yolov8s.pt"}[HW_PROFILE])
+    MODEL_NAME  = str(BUNDLE_DIR / _cfg("detection","model",HW_PROFILE, default={"LOW":"yolov8n.pt","MEDIUM":"yolov8n.pt","HIGH":"yolov8s.pt"}[HW_PROFILE]))
     DEVICE      = "cuda" if CUDA_AVAILABLE else "cpu"
     CONFIDENCE  = _cfg("detection","confidence", default=0.45)
 
@@ -204,9 +213,9 @@ class Config:
     FACE_DETECT_MODEL   = "cnn" if CUDA_AVAILABLE else "hog"
     FACE_POOL_WORKERS   = _cfg("face_recognition","pool_workers",HW_PROFILE, default={"LOW":1,"MEDIUM":2,"HIGH":3}[HW_PROFILE])
     FACE_RECHECK_CYCLES = _cfg("face_recognition","recheck_cycles",HW_PROFILE, default={"LOW":120,"MEDIUM":90,"HIGH":60}[HW_PROFILE])
-    KNOWN_FACES_DIR     = _cfg("face_recognition","known_faces_dir", default="faces/known")
-    YUNET_MODEL_PATH    = _cfg("face_recognition","yunet_model_path", default="models/face_detection_yunet_2023mar.onnx")
-    SFACE_MODEL_PATH    = _cfg("face_recognition","sface_model_path", default="models/face_recognition_sface_2021dec.onnx")
+    KNOWN_FACES_DIR     = str(WORKING_DIR / _cfg("face_recognition","known_faces_dir", default="faces/known"))
+    YUNET_MODEL_PATH    = str(BUNDLE_DIR / _cfg("face_recognition","yunet_model_path", default="models/face_detection_yunet_2023mar.onnx"))
+    SFACE_MODEL_PATH    = str(BUNDLE_DIR / _cfg("face_recognition","sface_model_path", default="models/face_recognition_sface_2021dec.onnx"))
     YUNET_MODEL_URL     = _cfg("face_recognition","yunet_model_url", default="https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx")
     SFACE_MODEL_URL     = _cfg("face_recognition","sface_model_url", default="https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx")
 
@@ -218,11 +227,11 @@ class Config:
     OWNER_PROXIMITY_IOU  = _cfg("ownership","proximity_iou_threshold", default=0.05)
     ABANDONMENT_SECS     = _cfg("ownership","abandonment_secs", default=8.0)
 
-    LOG_DIR       = Path(_cfg("storage","log_dir",    default="logs"))
-    SQLITE_DB     = Path(_cfg("storage","sqlite_db",  default="logs/OMS.db"))
-    FACES_DB_FILE = Path(_cfg("storage","faces_db_json", default="logs/faces_db.json"))
-    MODELS_DIR    = Path(_cfg("storage","models_dir", default="models"))
-    ALARM_WAV     = "alarm.wav"
+    LOG_DIR       = WORKING_DIR / _cfg("storage","log_dir",    default="logs")
+    SQLITE_DB     = WORKING_DIR / _cfg("storage","sqlite_db",  default="logs/OMS.db")
+    FACES_DB_FILE = WORKING_DIR / _cfg("storage","faces_db_json", default="logs/faces_db.json")
+    MODELS_DIR    = BUNDLE_DIR / _cfg("storage","models_dir", default="models")
+    ALARM_WAV     = str(BUNDLE_DIR / "alarm.wav")
 
     WINDOW_W   = _cfg("display","window_w", default=1920)
     WINDOW_H   = _cfg("display","window_h", default=1080)
@@ -558,7 +567,8 @@ def _init_yunet():
         yu_ok = _download_model(Config.YUNET_MODEL_URL, Config.YUNET_MODEL_PATH)
         sf_ok = _download_model(Config.SFACE_MODEL_URL, Config.SFACE_MODEL_PATH)
         if not (yu_ok and sf_ok): return
-        _yunet_detector   = cv2.FaceDetectorYN.create(Config.YUNET_MODEL_PATH, "", (320, 320))
+        # Set score_threshold=0.6 to dramatically improve real-world face detection success rate
+        _yunet_detector   = cv2.FaceDetectorYN.create(Config.YUNET_MODEL_PATH, "", (320, 320), 0.6)
         _sface_recognizer = cv2.FaceRecognizerSF.create(Config.SFACE_MODEL_PATH, "")
         YUNET_AVAILABLE   = True
         print("[OMS] ✔ YuNet + SFace Neural Face Engine ONLINE — No dlib required!")
@@ -576,9 +586,31 @@ def _yunet_encode(img_bgr: np.ndarray) -> Optional[np.ndarray]:
         try:
             h, w = img_bgr.shape[:2]
             if w < 30 or h < 30: return None
+            
+            # Dynamic Resolution Upgrade: If the crop is small, upscale it to 128x128
+            # to significantly enhance landmark precision and match confidence scores!
+            if w < 112 or h < 112:
+                img_bgr = cv2.resize(img_bgr, (128, 128), interpolation=cv2.INTER_CUBIC)
+                h, w = 128, 128
+                
             _yunet_detector.setInputSize((w, h))
             _, faces = _yunet_detector.detect(img_bgr)
-            if faces is None or len(faces) == 0: return None
+            
+            # Smart Padding Fallback: If no face is detected on a tight crop,
+            # pad the image with black borders on all sides to give YuNet convolutional layers context!
+            if faces is None or len(faces) == 0:
+                pad_h, pad_w = h // 2, w // 2
+                padded = cv2.copyMakeBorder(img_bgr, pad_h, pad_h, pad_w, pad_w, cv2.BORDER_CONSTANT, value=[0, 0, 0])
+                ph, pw = padded.shape[:2]
+                _yunet_detector.setInputSize((pw, ph))
+                _, faces = _yunet_detector.detect(padded)
+                if faces is not None and len(faces) > 0:
+                    face = faces[0]
+                    aligned = _sface_recognizer.alignCrop(padded, face)
+                    feat    = _sface_recognizer.feature(aligned)
+                    return feat[0] if feat is not None else None
+                return None
+            
             face = faces[0]
             aligned = _sface_recognizer.alignCrop(img_bgr, face)
             feat    = _sface_recognizer.feature(aligned)
@@ -1138,6 +1170,7 @@ def async_face(rgb_or_bgr: np.ndarray, is_bgr: bool = False):
 face_pool = ThreadPoolExecutor(max_workers=Config.FACE_POOL_WORKERS, thread_name_prefix="Face")
 
 def register_user_face(cameras, username: str = Config.USERNAME):
+    global _enc_dirty
     if not FACE_RECOG_AVAILABLE and not YUNET_AVAILABLE:
         speak("Face recognition module offline."); return False
     
@@ -1163,18 +1196,32 @@ def register_user_face(cameras, username: str = Config.USERNAME):
                             out  = Path(Config.KNOWN_FACES_DIR) / f"{username}.jpg"
                             cv2.imwrite(str(out), crop)
                             preload_known()
-                            global _enc_dirty; _enc_dirty = True
+                            _enc_dirty = True
                             log_event("USER_REGISTERED", camera=cs.name, person=username)
                             speak(f"Identity confirmed. Welcome, {username}.")
                             cs.warning_msg = f"[REGISTERED] {username}"; cs.warning_time = time.time()
                             return True
                     elif YUNET_AVAILABLE:
-                        boxes = _yunet_detect_faces(frame)
-                        if boxes:
-                            x1,y1,x2,y2 = boxes[0]
-                            h, w, _ = frame.shape; pad = 35
+                        with _yunet_lock:
+                            h, w = frame.shape[:2]
+                            _yunet_detector.setInputSize((w, h))
+                            _, faces = _yunet_detector.detect(frame)
+                        
+                        if faces is not None and len(faces) > 0:
+                            face = faces[0]
+                            x, y, fw, fh = int(face[0]), int(face[1]), int(face[2]), int(face[3])
+                            x1, y1, x2, y2 = max(0, x), max(0, y), min(w-1, x+fw), min(h-1, y+fh)
+                            
+                            # Generously padded crop (30% of face height as padding) for high resolution
+                            pad = int(fh * 0.3)
                             crop = frame[max(0,y1-pad):min(h,y2+pad), max(0,x1-pad):min(w,x2+pad)]
-                            enc = _yunet_encode(crop)
+                            
+                            # Biometric alignment and encoding direct from full frame!
+                            with _yunet_lock:
+                                aligned = _sface_recognizer.alignCrop(frame, face)
+                                feat    = _sface_recognizer.feature(aligned)
+                                enc = feat[0] if feat is not None else None
+                                
                             if enc is not None:
                                 by_name = {d["name"].lower(): pid for pid,d in faces_db.items() if d.get("known")}
                                 now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -1189,6 +1236,8 @@ def register_user_face(cameras, username: str = Config.USERNAME):
                                 out = Path(Config.KNOWN_FACES_DIR) / f"{username}.jpg"
                                 cv2.imwrite(str(out), crop)
                                 _save_db_json()
+                                preload_known()
+                                _enc_dirty = True
                                 log_event("USER_REGISTERED", camera=cs.name, person=username)
                                 speak(f"Identity confirmed. Welcome, {username}.")
                                 cs.warning_msg = f"[REGISTERED] {username}"; cs.warning_time = time.time()
@@ -1529,6 +1578,9 @@ def on_person_arrived(cs: CameraState, pid: str, name: str, frame: np.ndarray, b
         ts_str     = datetime.now().strftime("%Y%m%d_%H%M%S")
         photo_path = f"faces/captured/{pid}_{ts_str}.jpg"
         cv2.imwrite(photo_path, crop)
+        with _fdb_lock:
+            if db is not None:
+                db["photo"] = photo_path
 
     _save_db_json()
     is_intruder = "Intruder" in name
