@@ -4,8 +4,8 @@ A next-generation, ultra-premium AI smart surveillance system and command center
 
 ---
 
-## 🌟 What We Have Built
-Throughout the development of this project, we have completely transformed a standard camera feed into an elite AI command center:
+## 🌟 What I Have Built
+Throughout the development of this project, I have completely transformed a standard camera feed into an elite AI command center:
 * **Premium Cinematic UI**: Re-engineered the OpenCV visual feed to feature glassmorphism, neon glows, animated crosshairs, and a true 1920x1080 UI-free fullscreen camera preview mode.
 * **Deep Learning Face Recognition (No dlib required!)**: Implemented a state-of-the-art fallback engine using OpenCV's YuNet and SFace models, eliminating the notorious Windows `dlib` C++ compilation nightmare.
 * **Intelligent Threat Engine**: Built a dynamic threat evaluation system (Green, Yellow, Orange, Red) that tracks object abandonment, running, pacing, and loitering.
@@ -51,7 +51,7 @@ cd OSM
 ```
 
 **Step 2: Install Python Dependencies**
-*Note: You do NOT need Visual Studio C++ build tools because we integrated YuNet as a dlib bypass!*
+*Note: You do NOT need Visual Studio C++ build tools because i integrated YuNet as a dlib bypass!*
 ```powershell
 pip install -r requirements.txt
 ```
