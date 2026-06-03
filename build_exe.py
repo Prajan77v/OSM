@@ -28,6 +28,7 @@ def run_build():
         sys.executable, "-m", "PyInstaller",
         "--noconfirm",
         "--clean",
+        "--onefile",
         "--name", "OMS_Sentinel",
         "--add-data", f"frontend/out{os.pathsep}frontend/out",
         "--add-data", f"models{os.pathsep}models",

@@ -62,41 +62,61 @@ def init_web_server(cameras, get_telemetry_fn, get_events_fn, get_summary_fn, co
 
 
 def _save_config_yaml_and_env(username, confidence, model, tg_token, tg_chat_id):
-    # 1. Update .env file
+    # 1. Update/Create .env file
     env_path = str(WORKING_DIR / ".env")
-    if os.path.exists(env_path):
-        try:
+    try:
+        lines = []
+        if os.path.exists(env_path):
             with open(env_path, "r", encoding="utf-8") as f:
                 lines = f.readlines()
-            
-            mapping = {
-                "OSM_OPERATOR": username,
-                "TELEGRAM_BOT_TOKEN": tg_token,
-                "TELEGRAM_CHAT_ID": tg_chat_id
-            }
-            
-            for key, val in mapping.items():
-                updated = False
-                for i, line in enumerate(lines):
-                    if line.strip().startswith(f"{key}="):
-                        lines[i] = f"{key}={val}\n"
-                        updated = True
-                        break
-                if not updated:
-                    lines.append(f"{key}={val}\n")
-            
-            with open(env_path, "w", encoding="utf-8") as f:
-                f.writelines(lines)
-        except Exception:
-            pass
+        
+        mapping = {
+            "OSM_OPERATOR": username,
+            "TELEGRAM_BOT_TOKEN": tg_token,
+            "TELEGRAM_CHAT_ID": tg_chat_id
+        }
+        
+        for key, val in mapping.items():
+            updated = False
+            for i, line in enumerate(lines):
+                if line.strip().startswith(f"{key}="):
+                    lines[i] = f"{key}={val}\n"
+                    updated = True
+                    break
+            if not updated:
+                lines.append(f"{key}={val}\n")
+        
+        with open(env_path, "w", encoding="utf-8") as f:
+            f.writelines(lines)
+    except Exception:
+        pass
 
-    # 2. Update config.yaml file
+    # 2. Update/Create config.yaml file
     yaml_path = str(WORKING_DIR / "config.yaml")
-    if os.path.exists(yaml_path):
-        try:
+    try:
+        lines = []
+        if os.path.exists(yaml_path):
             with open(yaml_path, "r", encoding="utf-8") as f:
                 lines = f.readlines()
-            
+        else:
+            # Create a default yaml structure if the file is completely missing
+            lines = [
+                "operator:\n",
+                f'  username: "{username}"\n',
+                "detection:\n",
+                f"  confidence: {confidence}\n",
+                "  model:\n",
+                f'    LOW: "{model}"\n',
+                f'    MEDIUM: "{model}"\n',
+                f'    HIGH: "{model}"\n',
+                "face_recognition:\n",
+                f"  match_threshold: 0.60\n",
+                "threat:\n",
+                f'  tg_token: "{tg_token}"\n',
+                f'  tg_chat_id: "{tg_chat_id}"\n'
+            ]
+        
+        if os.path.exists(yaml_path):
             current_section = None
             sub_section = None
             for i, line in enumerate(lines):
@@ -125,10 +145,10 @@ def _save_config_yaml_and_env(username, confidence, model, tg_token, tg_chat_id)
                         indent = line.split("HIGH:")[0]
                         lines[i] = f'{indent}HIGH: "{model}"\n'
             
-            with open(yaml_path, "w", encoding="utf-8") as f:
-                f.writelines(lines)
-        except Exception:
-            pass
+        with open(yaml_path, "w", encoding="utf-8") as f:
+            f.writelines(lines)
+    except Exception:
+        pass
 
 
 def create_app() -> "FastAPI":
@@ -319,8 +339,8 @@ def create_app() -> "FastAPI":
             return JSONResponse(res)
         except Exception:
             try:
-                db_path = "logs/faces_db.json"
-                if os.path.exists(db_path):
+                db_path = WORKING_DIR / "logs/faces_db.json"
+                if db_path.exists():
                     with open(db_path, "r", encoding="utf-8") as f:
                         db = json.load(f)
                     res = []

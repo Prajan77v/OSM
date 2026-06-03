@@ -460,9 +460,9 @@ _db_conn: Optional[sqlite3.Connection] = None
 def _init_db():
     global _db_conn
     Config.LOG_DIR.mkdir(parents=True, exist_ok=True)
-    Path("faces/known").mkdir(parents=True, exist_ok=True)
-    Path("faces/captured").mkdir(parents=True, exist_ok=True)
-    Path("faces/unknown").mkdir(parents=True, exist_ok=True)
+    (WORKING_DIR / "faces/known").mkdir(parents=True, exist_ok=True)
+    (WORKING_DIR / "faces/captured").mkdir(parents=True, exist_ok=True)
+    (WORKING_DIR / "faces/unknown").mkdir(parents=True, exist_ok=True)
     _db_conn = sqlite3.connect(str(Config.SQLITE_DB), check_same_thread=False)
     _db_conn.execute("PRAGMA journal_mode=WAL")
     _db_conn.execute("PRAGMA synchronous=NORMAL")
@@ -1008,8 +1008,8 @@ def _tg_behavior(cam, pid, name, behavior_type, ts):
 # ══════════════════════════════════════════════════════════════════════════════
 # FACES DATABASE (JSON + SQLite sync)
 # ══════════════════════════════════════════════════════════════════════════════
-for _d in ["logs","faces/known","faces/unknown","faces/captured","models","plugins"]:
-    Path(_d).mkdir(parents=True, exist_ok=True)
+for _d in ["logs", "faces/known", "faces/unknown", "faces/captured", "models", "plugins"]:
+    (WORKING_DIR / _d).mkdir(parents=True, exist_ok=True)
 
 _next_pid = 1
 faces_db: Dict[str, dict] = {}
@@ -1576,8 +1576,13 @@ def on_person_arrived(cs: CameraState, pid: str, name: str, frame: np.ndarray, b
     x1,y1,x2,y2 = box; crop = frame[y1:y2, x1:x2]; photo_path = None
     if crop.size > 0:
         ts_str     = datetime.now().strftime("%Y%m%d_%H%M%S")
-        photo_path = f"faces/captured/{pid}_{ts_str}.jpg"
-        cv2.imwrite(photo_path, crop)
+        # Include camera name in captured image path to identify which camera it belongs to
+        clean_cam_name = cs.name.replace(' ', '_').replace('/', '_')
+        rel_path   = f"faces/captured/{pid}_{clean_cam_name}_{ts_str}.jpg"
+        abs_path   = str(WORKING_DIR / rel_path)
+        cv2.imwrite(abs_path, crop)
+        photo_path = rel_path
+        app_log.info(f"[CAPTURE] Face crop for {name} captured from camera {cs.name} -> {photo_path}")
         with _fdb_lock:
             if db is not None:
                 db["photo"] = photo_path
