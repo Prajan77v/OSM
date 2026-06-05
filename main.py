@@ -631,7 +631,9 @@ def _yunet_match(enc: np.ndarray) -> Tuple[Optional[str], Optional[str], bool, f
                     best_score = score; best_pid = pid
             except Exception:
                 pass
-        if best_pid and best_score > Config.FACE_MATCH_THRESH:
+        # SFace Cosine matching standard threshold is 0.36; dlib distance is 0.60.
+        thresh = 0.36 if Config.FACE_MATCH_THRESH >= 0.55 else Config.FACE_MATCH_THRESH
+        if best_pid and best_score >= thresh:
             with _fdb_lock:
                 name = faces_db.get(best_pid, {}).get("name", "Unknown")
             return best_pid, name, False, best_score

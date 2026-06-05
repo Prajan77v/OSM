@@ -9,6 +9,17 @@ import threading
 from datetime import datetime
 from typing import List
 
+def _get_sv():
+    import sys
+    main_mod = sys.modules.get('__main__')
+    if main_mod and hasattr(main_mod, 'faces_db'):
+        return main_mod
+    try:
+        import main as sv
+        return sv
+    except Exception:
+        return None
+
 # ─── psutil for system metrics ────────────────────────────────────────────────
 try:
     import psutil
@@ -70,12 +81,12 @@ def get_telemetry() -> dict:
     """Returns a dict of system + AI telemetry for /api/telemetry."""
     # Import these at call-time to get the runtime values
     try:
-        import main as sv
-        CUDA_AVAILABLE = sv.CUDA_AVAILABLE
-        CUDA_DEVICE    = sv.CUDA_DEVICE
-        YOLO_AVAILABLE = sv.YOLO_AVAILABLE
-        FACE_RECOG_AVAILABLE = sv.FACE_RECOG_AVAILABLE
-        HW_PROFILE = sv.HW_PROFILE
+        sv = _get_sv()
+        CUDA_AVAILABLE = sv.CUDA_AVAILABLE if sv else False
+        CUDA_DEVICE    = sv.CUDA_DEVICE if sv else "CPU"
+        YOLO_AVAILABLE = sv.YOLO_AVAILABLE if sv else False
+        FACE_RECOG_AVAILABLE = sv.FACE_RECOG_AVAILABLE if sv else False
+        HW_PROFILE = sv.HW_PROFILE if sv else "LOW"
     except Exception:
         CUDA_AVAILABLE = False
         CUDA_DEVICE = "CPU"
@@ -113,16 +124,16 @@ def get_telemetry() -> dict:
     # Check Telegram queue
     tg_ok = False
     try:
-        import main as sv
-        tg_ok = hasattr(sv, "notif_queue") and sv.notif_queue is not None
+        sv = _get_sv()
+        tg_ok = sv is not None and hasattr(sv, "notif_queue") and sv.notif_queue is not None
     except Exception:
         pass
 
     # Check DB connection
     db_ok = False
     try:
-        import main as sv
-        db_ok = sv._db_conn is not None
+        sv = _get_sv()
+        db_ok = sv is not None and sv._db_conn is not None
     except Exception:
         pass
 
@@ -165,8 +176,8 @@ def get_events() -> list:
 def get_summary() -> dict:
     """Returns aggregated stats for /api/summary."""
     try:
-        import main as sv
-        operator = sv.Config.USERNAME
+        sv = _get_sv()
+        operator = sv.Config.USERNAME if sv else "Prajan"
     except Exception:
         operator = "Prajan"
 
@@ -209,60 +220,69 @@ def get_control_handlers(cameras, threat_engine) -> dict:
 
     def do_alarm():
         try:
-            import main as sv
-            sv.log_event("MANUAL_ALARM", detail="web triggered")
+            sv = _get_sv()
+            if sv:
+                sv.log_event("MANUAL_ALARM", detail="web triggered")
             threat_engine.raise_threat("RED", "MANUAL ALARM")
-            sv._alarm()
-            sv.speak("Warning. Manual alarm activated.")
+            if sv:
+                sv._alarm()
+                sv.speak("Warning. Manual alarm activated.")
         except Exception as e:
             return f"Error: {e}"
         return "Alarm activated"
 
     def do_shutdown():
         try:
-            import main as sv
-            sv.speak("System shutdown initiated.")
-            sv.log_event("SYSTEM_SHUTDOWN", detail="web command")
+            sv = _get_sv()
+            if sv:
+                sv.speak("System shutdown initiated.")
+                sv.log_event("SYSTEM_SHUTDOWN", detail="web command")
         except Exception as e:
             return f"Error: {e}"
         return "Shutdown initiated"
 
     def do_export_csv():
         try:
-            import main as sv
-            sv.export_csv()
-            sv.speak("Event log exported.")
+            sv = _get_sv()
+            if sv:
+                sv.export_csv()
+                sv.speak("Event log exported.")
         except Exception as e:
             return f"Error: {e}"
         return "CSV exported"
 
     def do_register_face():
         try:
-            import main as sv
-            threading.Thread(
-                target=lambda: sv.register_user_face(cameras, sv.Config.USERNAME),
-                daemon=True
-            ).start()
+            sv = _get_sv()
+            if sv:
+                threading.Thread(
+                    target=lambda: sv.register_user_face(cameras, sv.Config.USERNAME),
+                    daemon=True
+                ).start()
         except Exception as e:
             return f"Error: {e}"
         return "Face registration started"
 
     def do_test_telegram():
         try:
-            import main as sv
-            sv.notif_queue.send_message(
-                "🔔 OMS Web Dashboard — Test message. System operational.",
-                event_type="SYSTEM"
-            )
+            sv = _get_sv()
+            if sv:
+                sv.notif_queue.send_message(
+                    "🔔 OMS Web Dashboard — Test message. System operational.",
+                    event_type="SYSTEM"
+                )
         except Exception as e:
             return f"Error: {e}"
         return "Telegram test sent"
 
     def do_toggle_hud():
         try:
-            import main as sv
-            sv.hud_overlay_active = not sv.hud_overlay_active
-            state = sv.hud_overlay_active
+            sv = _get_sv()
+            if sv:
+                sv.hud_overlay_active = not sv.hud_overlay_active
+                state = sv.hud_overlay_active
+            else:
+                state = False
         except Exception as e:
             return f"Error: {e}"
         return f"HUD {'enabled' if state else 'disabled'}"
@@ -272,8 +292,9 @@ def get_control_handlers(cameras, threat_engine) -> dict:
 
     def do_reset_logs():
         try:
-            import main as sv
-            sv.reset_log_files()
+            sv = _get_sv()
+            if sv:
+                sv.reset_log_files()
         except Exception as e:
             return f"Error: {e}"
         return "Logs cleared successfully"

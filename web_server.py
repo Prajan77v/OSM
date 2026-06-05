@@ -41,8 +41,16 @@ try:
 except ImportError:
     FASTAPI_AVAILABLE = False
 
-if TYPE_CHECKING:
-    pass
+def _get_sv():
+    import sys
+    main_mod = sys.modules.get('__main__')
+    if main_mod and hasattr(main_mod, 'faces_db'):
+        return main_mod
+    try:
+        import main as sv
+        return sv
+    except Exception:
+        return None
 
 # ─── Global references injected by main.py ───────────────────────────
 _cameras = []          # List[CameraState]
@@ -316,7 +324,9 @@ def create_app() -> "FastAPI":
     async def get_settings():
         """Get current system configuration settings."""
         try:
-            import main as sv
+            sv = _get_sv()
+            if not sv:
+                raise Exception("Main module not running")
             return JSONResponse({
                 "status": "ok",
                 "username": sv.Config.USERNAME,
@@ -329,7 +339,7 @@ def create_app() -> "FastAPI":
             # Mock fallback if loaded from dev_server
             try:
                 import dev_server as ds
-                import main as sv
+                sv = _get_sv()
                 return JSONResponse({
                     "status": "ok",
                     "username": "Prajan",
@@ -345,7 +355,9 @@ def create_app() -> "FastAPI":
     async def get_faces():
         """Get known enrolled faces database."""
         try:
-            import main as sv
+            sv = _get_sv()
+            if not sv:
+                raise Exception("Main module not running")
             db = sv.faces_db
             res = []
             for pid, info in db.items():
@@ -396,8 +408,8 @@ def create_app() -> "FastAPI":
         """Camera channel info."""
         result = []
         try:
-            import main as sv
-            db = sv.faces_db
+            sv = _get_sv()
+            db = sv.faces_db if sv else {}
         except Exception:
             db = {}
             
@@ -438,7 +450,9 @@ def create_app() -> "FastAPI":
         """Trigger a system action."""
         if action == "register_face" and body and "username" in body:
             try:
-                import main as sv
+                sv = _get_sv()
+                if not sv:
+                    raise Exception("Main module not running")
                 username = body["username"]
                 success = sv.register_user_face(_cameras, username)
                 if success:
@@ -450,7 +464,9 @@ def create_app() -> "FastAPI":
 
         if action == "rename_subject" and body and "pid" in body and "new_name" in body:
             try:
-                import main as sv
+                sv = _get_sv()
+                if not sv:
+                    raise Exception("Main module not running")
                 pid = body["pid"]
                 new_name = body["new_name"].strip()
                 if not new_name:
@@ -569,7 +585,9 @@ def create_app() -> "FastAPI":
 
         if action == "save_settings" and body:
             try:
-                import main as sv
+                sv = _get_sv()
+                if not sv:
+                    raise Exception("Main module not running")
                 # Update runtime config variables
                 username = body.get("username", sv.Config.USERNAME)
                 confidence = float(body.get("confidence", sv.Config.CONFIDENCE))
@@ -607,7 +625,7 @@ def create_app() -> "FastAPI":
         transcript = body["transcript"]
         cmd = transcript.lower()
         
-        import main as sv
+        sv = _get_sv()
         from datetime import datetime
 
         # Context Variables
@@ -667,7 +685,7 @@ def create_app() -> "FastAPI":
             action_executed = "open_register_wizard"
 
         elif "who am i" in cmd or "identify" in cmd or "recognized" in cmd or "operator" in cmd:
-            op_name = sv.Config.USERNAME
+            op_name = sv.Config.USERNAME if sv else "Prajan"
             response_text = f"Biometric identification active. You are registered as Operator {op_name}, with full administrative permissions."
 
         elif "status" in cmd or "system" in cmd or "telemetry" in cmd:
@@ -695,17 +713,20 @@ def create_app() -> "FastAPI":
 
         elif "registered" in cmd or "face" in cmd or "users" in cmd or "memory" in cmd:
             try:
-                db_faces = list(sv.faces_db.items())
+                db_faces = list(sv.faces_db.items()) if sv else []
                 known_names = [info.get("name", "Unknown") for pid, info in db_faces if info.get("known", False)]
                 if known_names:
                     response_text = f"Secure database holds {len(known_names)} authorized profiles: {', '.join(known_names)}. High status recognition active."
                 else:
-                    response_text = f"Operator database loaded. Registered operator is {sv.Config.USERNAME}."
+                    op_name = sv.Config.USERNAME if sv else "Prajan"
+                    response_text = f"Operator database loaded. Registered operator is {op_name}."
             except:
-                response_text = f"Secure database profile active. Registered administrative user is {sv.Config.USERNAME}."
+                op_name = sv.Config.USERNAME if sv else "Prajan"
+                response_text = f"Secure database profile active. Registered administrative user is {op_name}."
 
         elif "hello" in cmd or "sentinel" in cmd or "hey" in cmd or "assistant" in cmd or "jarvis" in cmd:
-            response_text = f"Autonomous AI Assistant online. Good day, Operator {sv.Config.USERNAME}. Central control matrix fully armed. Standing by."
+            op_name = sv.Config.USERNAME if sv else "Prajan"
+            response_text = f"Autonomous AI Assistant online. Good day, Operator {op_name}. Central control matrix fully armed. Standing by."
 
         elif "joke" in cmd:
             response_text = "Why did the AI go to gym class? To improve its training performance."
