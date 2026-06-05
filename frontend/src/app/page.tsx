@@ -738,30 +738,39 @@ export default function Dashboard() {
         });
         const d = await r.json();
 
-        const newUser: EnrolledUser = {
-          name: wizardName,
-          visitCount: 1,
-          lastSeen: "Just now",
-          accuracy: 97.4,
-          role: "Registered User",
-          status: "VERIFIED"
-        };
-        setKnownUsers(u => [newUser, ...u]);
-        setWizardStep(3);
-        speakAI("Registration complete. Enrolled " + wizardName + " into memory database.");
-        setTimeout(() => {
-          setWizardOpen(false);
-          setWizardStep(1);
-          setWizardName("");
-        }, 2000);
-      } catch (e) {
-        setControlMsg("Enrollment failed: " + e);
+        if (r.ok && d.status === "ok") {
+          const newUser: EnrolledUser = {
+            name: wizardName,
+            visitCount: 1,
+            lastSeen: "Just now",
+            accuracy: 97.4,
+            role: "Registered User",
+            status: "VERIFIED"
+          };
+          setKnownUsers(u => [newUser, ...u]);
+          setWizardStep(3);
+          speakAI("Registration complete. Enrolled " + wizardName + " into memory database.");
+          setTimeout(() => {
+            setWizardOpen(false);
+            setWizardStep(1);
+            setWizardName("");
+          }, 2000);
+        } else {
+          setControlMsg(d.message || "Registration failed: No face detected");
+          speakAI("Registration failed");
+          setTimeout(() => {
+            setWizardStep(1);
+            setWizardOpen(false);
+          }, 2000);
+        }
+      } catch (err) {
+        setControlMsg("Enrollment failed: " + err);
         setWizardStep(1);
         setWizardOpen(false);
       } finally {
         setBtnLoading(b => ({ ...b, "enroll": false }));
       }
-    }, 3000);
+    }, 1000);
   };
 
   // ── Save configurations ───────────────────────────────────────────────────

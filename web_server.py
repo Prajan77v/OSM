@@ -440,11 +440,11 @@ def create_app() -> "FastAPI":
             try:
                 import main as sv
                 username = body["username"]
-                threading.Thread(
-                    target=lambda: sv.register_user_face(_cameras, username),
-                    daemon=True
-                ).start()
-                return JSONResponse({"status": "ok", "result": f"Face registration started for {username}"})
+                success = sv.register_user_face(_cameras, username)
+                if success:
+                    return JSONResponse({"status": "ok", "result": f"Successfully enrolled {username}"})
+                else:
+                    return JSONResponse({"status": "error", "message": "No face detected in feed. Please look directly at the camera."}, status_code=400)
             except Exception as e:
                 return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 

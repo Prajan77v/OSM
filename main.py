@@ -1207,6 +1207,7 @@ def register_user_face(cameras, username: str = Config.USERNAME):
                             h, w, _ = frame.shape; pad = 35
                             crop = frame[max(0,top-pad):min(h,bottom+pad), max(0,left-pad):min(w,right+pad)]
                             out  = Path(Config.KNOWN_FACES_DIR) / f"{username}.jpg"
+                            out.parent.mkdir(parents=True, exist_ok=True)
                             cv2.imwrite(str(out), crop)
                             preload_known()
                             _enc_dirty = True
@@ -1225,25 +1226,26 @@ def register_user_face(cameras, username: str = Config.USERNAME):
                             x, y, fw, fh = int(face[0]), int(face[1]), int(face[2]), int(face[3])
                             x1, y1, x2, y2 = max(0, x), max(0, y), min(w-1, x+fw), min(h-1, y+fh)
                             
-                            # Generously padded crop (30% of face height as padding) for high resolution
                             pad = int(fh * 0.3)
                             crop = frame[max(0,y1-pad):min(h,y2+pad), max(0,x1-pad):min(w,x2+pad)]
                             
-                            # Biometric alignment and encoding direct from full frame!
                             with _yunet_lock:
                                 aligned = _sface_recognizer.alignCrop(frame, face)
                                 feat    = _sface_recognizer.feature(aligned)
                                 enc = feat[0] if feat is not None else None
                                 
                             if enc is not None:
-                                by_name = {d["name"].lower(): pid for pid,d in faces_db.items() if d.get("known")}
+                                with _fdb_lock:
+                                    by_name = {d["name"].lower(): pid for pid,d in faces_db.items() if d.get("known")}
                                 now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                                 out = Path(Config.KNOWN_FACES_DIR) / f"{username}.jpg"
+                                out.parent.mkdir(parents=True, exist_ok=True)
                                 cv2.imwrite(str(out), crop)
                                 rel_out = str(out.relative_to(WORKING_DIR)) if WORKING_DIR in out.parents else str(out)
                                 if username.lower() in by_name:
                                     pid = by_name[username.lower()]
-                                    faces_db[pid]["photo"] = rel_out
+                                    with _fdb_lock:
+                                        faces_db[pid]["photo"] = rel_out
                                 else:
                                     pid = _new_pid()
                                     with _fdb_lock:
