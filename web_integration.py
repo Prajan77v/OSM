@@ -43,6 +43,11 @@ def record_event(ts: str, event: str, camera: str = "", person: str = "", detail
         if len(_events_db) > 500:
             _events_db.pop(0)
 
+def clear_events():
+    """Clear memory events cache."""
+    with _events_lock:
+        _events_db.clear()
+
 
 def _get_net_kb() -> float:
     global _net_bytes_prev, _net_bytes_time
@@ -265,6 +270,14 @@ def get_control_handlers(cameras, threat_engine) -> dict:
     def do_refresh():
         return "Data refreshed"
 
+    def do_reset_logs():
+        try:
+            import main as sv
+            sv.reset_log_files()
+        except Exception as e:
+            return f"Error: {e}"
+        return "Logs cleared successfully"
+
     return {
         "alarm":         do_alarm,
         "shutdown":      do_shutdown,
@@ -273,4 +286,5 @@ def get_control_handlers(cameras, threat_engine) -> dict:
         "test_telegram": do_test_telegram,
         "toggle_hud":    do_toggle_hud,
         "refresh":       do_refresh,
+        "reset_logs":    do_reset_logs,
     }

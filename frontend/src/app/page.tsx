@@ -10,7 +10,7 @@ import {
   Database, Bot, Download, Volume2, RefreshCw, Maximize2, Minimize2,
   Mic, Play, Pause, Square, CheckCircle, Info,
   UserPlus, Award, Check, Save, ToggleLeft, ToggleRight,
-  Sliders, SlidersHorizontal, SlidersVertical, Edit2, X
+  Sliders, SlidersHorizontal, SlidersVertical, Edit2, X, Trash
 } from "lucide-react";
 
 // ─── API base URL (proxied in dev, same-origin in prod) ──────────────────────
@@ -1863,6 +1863,20 @@ export default function Dashboard() {
                   <Volume2 size={11} />
                 )}
                 ALARM
+              </button>
+
+              <button
+                onClick={() => doControl("reset_logs")}
+                disabled={btnLoading["reset_logs"]}
+                className="btn-danger-luxury col-span-2 py-2 px-1 text-[9px] justify-center"
+                title="Resets and clears all system log files and visit entries"
+              >
+                {btnLoading["reset_logs"] ? (
+                  <RefreshCw size={11} className="animate-spin" />
+                ) : (
+                  <Trash size={11} />
+                )}
+                RESET LOGS
               </button>
             </div>
           </div>

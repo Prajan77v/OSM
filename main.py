@@ -567,8 +567,8 @@ def _init_yunet():
         yu_ok = _download_model(Config.YUNET_MODEL_URL, Config.YUNET_MODEL_PATH)
         sf_ok = _download_model(Config.SFACE_MODEL_URL, Config.SFACE_MODEL_PATH)
         if not (yu_ok and sf_ok): return
-        # Set score_threshold=0.6 to dramatically improve real-world face detection success rate
-        _yunet_detector   = cv2.FaceDetectorYN.create(Config.YUNET_MODEL_PATH, "", (320, 320), 0.6)
+        # Set score_threshold=0.45 to dramatically improve real-world face detection success rate
+        _yunet_detector   = cv2.FaceDetectorYN.create(Config.YUNET_MODEL_PATH, "", (320, 320), 0.45)
         _sface_recognizer = cv2.FaceRecognizerSF.create(Config.SFACE_MODEL_PATH, "")
         YUNET_AVAILABLE   = True
         print("[OMS] ✔ YuNet + SFace Neural Face Engine ONLINE — No dlib required!")
@@ -852,6 +852,60 @@ def export_csv(path: str = "logs/events_export.csv"):
                 try: w.writerow(json.loads(line))
                 except: pass
     app_log.info(f"CSV exported -> {path}")
+
+def reset_log_files():
+    """Clear app.log, events.jsonl, events.log, and clear SQLite events/visits."""
+    # Truncate pretty events log
+    with _log_file_lock:
+        try:
+            log_path = Config.LOG_DIR / "events.log"
+            if log_path.exists():
+                with open(log_path, "w", encoding="utf-8") as f:
+                    f.truncate(0)
+        except Exception as e:
+            app_log.error(f"Reset pretty events log failed: {e}")
+
+    # Truncate app.log and events.jsonl using the logging handlers
+    try:
+        for handler in app_log.handlers:
+            if hasattr(handler, "stream") and handler.stream:
+                try:
+                    handler.stream.seek(0)
+                    handler.stream.truncate(0)
+                except Exception:
+                    pass
+    except Exception as e:
+        app_log.error(f"Reset app_log failed: {e}")
+
+    try:
+        for handler in evt_log.handlers:
+            if hasattr(handler, "stream") and handler.stream:
+                try:
+                    handler.stream.seek(0)
+                    handler.stream.truncate(0)
+                except Exception:
+                    pass
+    except Exception as e:
+        app_log.error(f"Reset evt_log failed: {e}")
+
+    # Clear visits in SQLite database
+    with _db_lock:
+        if _db_conn:
+            try:
+                _db_conn.execute("DELETE FROM visits")
+                _db_conn.commit()
+            except Exception as e:
+                app_log.error(f"Reset DB visits failed: {e}")
+                
+    # Reset web integration event cache
+    try:
+        import web_integration as _wi
+        _wi.clear_events()
+    except Exception:
+        pass
+
+    app_log.info("System logs and visits database cleared.")
+    speak("System logs reset.")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TELEGRAM NOTIFICATIONS
@@ -2727,9 +2781,7 @@ def draw_side_panel(img: np.ndarray, cameras):
     logo_y = y2 - 50
     if logo_y > y + 10:
         _gold_line(img, px1, logo_y, px2, 0.20)
-        _text_c(img, "OMS v9.0.0", cx, logo_y + 18, 0.30, C_GOLD, bold=True)
-        _text_c(img, "© 2026 PRAJAN SYSTEMS", cx, logo_y + 34, 0.22, C_DIM)
-        _text_c(img, "ALL RIGHTS RESERVED", cx, logo_y + 48, 0.20, C_DIM)
+        _text_c(img, "OMS v9.0.0", cx, logo_y + 24, 0.30, C_GOLD, bold=True)
 
 # ── RIGHT PANEL — Analytics & System Monitor ──────────────────────────────────
 def draw_event_panel(img: np.ndarray):
@@ -3540,6 +3592,8 @@ def main():
             break
         elif key == ord('c'):
             export_csv(); speak("Event log exported.")
+        elif key == ord('l'):
+            reset_log_files()
         elif key == ord('r'):
             register_user_face(cameras, username=Config.USERNAME)
         elif key == ord(' '):
