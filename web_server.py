@@ -119,14 +119,16 @@ def _save_config_yaml_and_env(username, confidence, model, tg_token, tg_chat_id)
         if os.path.exists(yaml_path):
             current_section = None
             sub_section = None
+            tg_token_updated = False
+            tg_chat_id_updated = False
             for i, line in enumerate(lines):
                 striped = line.strip()
                 if striped.endswith(":") and not striped.startswith("-"):
                     if len(line) - len(line.lstrip()) == 0:
-                        current_section = striped[:-1]
+                        current_section = striped[:-1].strip()
                         sub_section = None
                     else:
-                        sub_section = striped[:-1]
+                        sub_section = striped[:-1].strip()
                 
                 if current_section == "operator" and striped.startswith("username:"):
                     indent = line.split("username:")[0]
@@ -144,6 +146,29 @@ def _save_config_yaml_and_env(username, confidence, model, tg_token, tg_chat_id)
                     elif striped.startswith("HIGH:"):
                         indent = line.split("HIGH:")[0]
                         lines[i] = f'{indent}HIGH: "{model}"\n'
+                elif current_section == "threat":
+                    if striped.startswith("tg_token:"):
+                        indent = line.split("tg_token:")[0]
+                        lines[i] = f'{indent}tg_token: "{tg_token}"\n'
+                        tg_token_updated = True
+                    elif striped.startswith("tg_chat_id:"):
+                        indent = line.split("tg_chat_id:")[0]
+                        lines[i] = f'{indent}tg_chat_id: "{tg_chat_id}"\n'
+                        tg_chat_id_updated = True
+            
+            if not (tg_token_updated and tg_chat_id_updated):
+                threat_idx = -1
+                for idx, line in enumerate(lines):
+                    if line.strip() == "threat:":
+                        threat_idx = idx
+                        break
+                if threat_idx != -1:
+                    insert_lines = []
+                    if not tg_token_updated:
+                        insert_lines.append(f'  tg_token: "{tg_token}"\n')
+                    if not tg_chat_id_updated:
+                        insert_lines.append(f'  tg_chat_id: "{tg_chat_id}"\n')
+                    lines = lines[:threat_idx+1] + insert_lines + lines[threat_idx+1:]
             
         with open(yaml_path, "w", encoding="utf-8") as f:
             f.writelines(lines)
@@ -381,10 +406,15 @@ def create_app() -> "FastAPI":
             active_subjects = []
             for pid in getattr(cs, "present_pids", set()):
                 if pid in db:
+                    conf = getattr(cs, "pid_confidences", {}).get(pid)
+                    if conf is None:
+                        conf = 0.984 if db[pid].get("known", False) else 0.942
                     active_subjects.append({
                         "pid": pid,
                         "name": db[pid].get("name", "Unknown"),
-                        "known": db[pid].get("known", False)
+                        "known": db[pid].get("known", False),
+                        "photo": db[pid].get("photo"),
+                        "confidence": float(conf)
                     })
                     
             result.append({
@@ -701,6 +731,11 @@ def create_app() -> "FastAPI":
         threading.Thread(target=lambda: cs.reconnect_to(int(source) if str(source).isdigit() else source),
                          daemon=True).start()
         return JSONResponse({"status": "ok", "message": f"Reconnecting cam {cam_id}"})
+
+    # Serve face photos/crops
+    faces_dir = str(WORKING_DIR / "faces")
+    if os.path.exists(faces_dir):
+        app.mount("/faces", StaticFiles(directory=faces_dir), name="faces")
 
     # ─── Static Frontend ──────────────────────────────────────────────────────
     frontend_dir = str(BUNDLE_DIR / "frontend" / "out")

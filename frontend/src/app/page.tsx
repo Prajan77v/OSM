@@ -1562,22 +1562,29 @@ export default function Dashboard() {
                 {isFaceUnlocked ? (
                   (() => {
                     const activeSubject = (cameras as any)[activeCam]?.active_subjects?.[0];
-                    const sName = activeSubject ? activeSubject.name : (summary?.operator || opName.toUpperCase());
-                    const sKnown = activeSubject ? activeSubject.known : true;
-                    const isIntruder = !sKnown || sName.toLowerCase().includes("intruder");
+                    const hasActiveSubject = !!activeSubject;
+                    const sName = activeSubject ? activeSubject.name : "IDENTIFYING...";
+                    const sKnown = activeSubject ? activeSubject.known : false;
+                    const isIntruder = hasActiveSubject && !sKnown;
+                    const isScanning = !hasActiveSubject;
                     
                     return (
                       <div className="w-full h-full flex items-center justify-center gap-4 px-4">
-                        <div className={`w-18 h-18 rounded-full border-2 ${isIntruder ? 'border-red-500/50 animate-pulse' : 'border-gold-accent/40 success-ring-lock'} overflow-hidden relative flex-shrink-0`}>
+                        <div className={`w-18 h-18 rounded-full border-2 ${isScanning ? 'border-gold-dim/40 animate-pulse' : isIntruder ? 'border-red-500/50 animate-pulse' : 'border-gold-accent/40 success-ring-lock'} overflow-hidden relative flex-shrink-0`}>
                           <img
-                            src={`${API}/api/stream/${activeCam}`}
+                            src={activeSubject?.photo ? `${API}/${activeSubject.photo}` : `${API}/api/stream/${activeCam}`}
                             alt="Crop"
-                            className="w-full h-full object-cover scale-[1.7] origin-center translate-y-1"
+                            className={`w-full h-full object-cover ${activeSubject?.photo ? 'scale-[1.1]' : 'scale-[1.7] origin-center translate-y-1'}`}
                           />
                         </div>
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-1.5">
-                            {isIntruder ? (
+                            {isScanning ? (
+                              <>
+                                <RefreshCw size={12} className="text-gold-dim animate-spin" />
+                                <span className="font-orbitron text-[9px] font-black text-gold-dim tracking-wider">ANALYZING PROFILE</span>
+                              </>
+                            ) : isIntruder ? (
                               <>
                                 <AlertTriangle size={12} className="text-red-500 animate-bounce" />
                                 <span className="font-orbitron text-[9px] font-black text-red-500 tracking-wider">UNAUTHORIZED INTRUDER</span>
@@ -1621,7 +1628,7 @@ export default function Dashboard() {
                             </div>
                           ) : (
                             <div className="flex items-center justify-between mt-0.5">
-                              <h3 className={`font-orbitron text-xs font-black truncate leading-tight ${isIntruder ? 'text-red-400' : 'text-[#FFFFFF]'}`}>
+                              <h3 className={`font-orbitron text-xs font-black truncate leading-tight ${isScanning ? 'text-gold-dim/70' : isIntruder ? 'text-red-400' : 'text-[#FFFFFF]'}`}>
                                 {sName}
                               </h3>
                               {activeSubject?.pid && (
@@ -1639,8 +1646,24 @@ export default function Dashboard() {
                             </div>
                           )}
                           
-                          <p className="font-mono text-[8px] text-sec mt-0.5">CONFIDENCE: <span className={isIntruder ? "text-red-400" : "text-green-oms"}>{isIntruder ? "94.2%" : "98.4%"}</span></p>
-                          <p className="font-mono text-[8px] text-muted">LOCK STATE: <span className={isIntruder ? "text-red-500 font-black animate-pulse" : "text-green-oms font-bold"}>{isIntruder ? "BREACHED" : "SECURED"}</span></p>
+                          <p className="font-mono text-[8px] text-sec mt-0.5">
+                            CONFIDENCE:{' '}
+                            <span className={isScanning ? 'text-gold-dim' : isIntruder ? 'text-red-400' : 'text-green-oms'}>
+                              {isScanning
+                                ? 'PENDING'
+                                : activeSubject?.confidence
+                                ? `${(activeSubject.confidence * (activeSubject.confidence <= 1 ? 100 : 1)).toFixed(1)}%`
+                                : isIntruder
+                                ? '94.2%'
+                                : '98.4%'}
+                            </span>
+                          </p>
+                          <p className="font-mono text-[8px] text-muted">
+                            LOCK STATE:{' '}
+                            <span className={isScanning ? 'text-gold-dim font-bold' : isIntruder ? 'text-red-500 font-black animate-pulse' : 'text-green-oms font-bold'}>
+                              {isScanning ? 'PROCESSING' : isIntruder ? 'BREACHED' : 'SECURED'}
+                            </span>
+                          </p>
                         </div>
                       </div>
                     );

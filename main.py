@@ -160,8 +160,8 @@ print("━━━━━━━━━━━━━━━━━━━━━━━━�
 # ══════════════════════════════════════════════════════════════════════════════
 class Config:
     USERNAME       = os.environ.get("OMS_OPERATOR",         _cfg("operator","username", default="Prajan"))
-    BOT_TOKEN      = os.environ.get("TELEGRAM_BOT_TOKEN",   "8938780809:AAHzpgv_fbfbmXJ9x_ui44LY83CWnTWfKPo")
-    CHAT_ID        = os.environ.get("TELEGRAM_CHAT_ID",     "8076971661")
+    BOT_TOKEN      = os.environ.get("TELEGRAM_BOT_TOKEN",   _cfg("threat", "tg_token", default="8938780809:AAHzpgv_fbfbmXJ9x_ui44LY83CWnTWfKPo"))
+    CHAT_ID        = os.environ.get("TELEGRAM_CHAT_ID",     _cfg("threat", "tg_chat_id", default="8076971661"))
     TG_TIMEOUT     = 10
     TG_MAX_RETRIES = _cfg("threat","max_retries", default=3)
     TG_RETRY_DELAY = _cfg("threat","retry_delay",  default=2.0)
@@ -619,8 +619,8 @@ def _yunet_encode(img_bgr: np.ndarray) -> Optional[np.ndarray]:
             app_log.error(f"[YUNET] Encode exception: {e}")
             return None
 
-def _yunet_match(enc: np.ndarray) -> Tuple[Optional[str], Optional[str], bool]:
-    """Compare enc against all cached known encodings. Returns (pid, name, is_new)."""
+def _yunet_match(enc: np.ndarray) -> Tuple[Optional[str], Optional[str], bool, float]:
+    """Compare enc against all cached known encodings. Returns (pid, name, is_new, score)."""
     with _yunet_lock:
         best_score, best_pid = -1.0, None
         for pid, cached_enc in _yunet_enc_cache.items():
@@ -634,8 +634,8 @@ def _yunet_match(enc: np.ndarray) -> Tuple[Optional[str], Optional[str], bool]:
         if best_pid and best_score > Config.FACE_MATCH_THRESH:
             with _fdb_lock:
                 name = faces_db.get(best_pid, {}).get("name", "Unknown")
-            return best_pid, name, False
-    return None, None, True
+            return best_pid, name, False, best_score
+    return None, None, True, 0.0
 
 def _yunet_detect_faces(frame: np.ndarray) -> List[Tuple[int,int,int,int]]:
     """Return list of (x1,y1,x2,y2) face boxes found in frame."""
@@ -767,6 +767,8 @@ def append_to_pretty_log(ev, cam, person_name, obj, detail):
     div = "+-----------------------+------------------+------------+----------------------+--------------------------------+"
     hdr = "| TIMESTAMP             | EVENT            | OBJECT ID  | NAME                 | DETAIL                         |"
     ec, ic, nc, dc = _format_log_cols(ev, person_name, obj, detail)
+    if cam:
+        dc = f"[{_clean_cam_name(cam)}] {dc}"
     row = f"| {ts:<21} | {ec:<16} | {ic:<10} | {nc:<20} | {dc:<30} |"
     
     with _log_file_lock:
@@ -1070,23 +1072,28 @@ def preload_known():
                 import face_recognition as _fr
                 encs = _fr.face_encodings(rgb)
                 if not encs: continue
+                rel_photo = str(fp.relative_to(WORKING_DIR)) if WORKING_DIR in fp.parents else str(fp)
                 if name.lower() in by_name:
-                    faces_db[by_name[name.lower()]]["encoding"] = encs[0]
+                    pid = by_name[name.lower()]
+                    faces_db[pid]["encoding"] = encs[0]
+                    faces_db[pid]["photo"] = rel_photo
                 else:
                     pid = _new_pid()
                     faces_db[pid] = {"name":name,"encoding":encs[0],"first_seen":now,
                                      "last_seen":now,"visit_count":0,"known":True,
-                                     "photo":str(fp),"in_scene":False}
+                                     "photo":rel_photo,"in_scene":False}
                 loaded.append(name)
             elif YUNET_AVAILABLE:
                 enc = _yunet_encode(img)
                 if enc is None: continue
+                rel_photo = str(fp.relative_to(WORKING_DIR)) if WORKING_DIR in fp.parents else str(fp)
                 if name.lower() in by_name:
                     pid = by_name[name.lower()]
+                    faces_db[pid]["photo"] = rel_photo
                 else:
                     pid = _new_pid()
                     faces_db[pid] = {"name":name,"first_seen":now,"last_seen":now,
-                                     "visit_count":0,"known":True,"photo":str(fp),"in_scene":False}
+                                     "visit_count":0,"known":True,"photo":rel_photo,"in_scene":False}
                 with _yunet_lock:
                     _yunet_enc_cache[pid] = enc
                 loaded.append(name)
@@ -1109,15 +1116,20 @@ def _rebuild_enc_cache():
 def match_face_dlib(enc):
     global _enc_dirty
     if _enc_dirty: _rebuild_enc_cache()
-    if _enc_arr is None: return _register_face_dlib(enc)
+    if _enc_arr is None:
+        pid, name, is_new = _register_face_dlib(enc)
+        return pid, name, is_new, 1.0
     import face_recognition as _fr
     dists = _fr.face_distance(_enc_arr, enc)
     bi    = int(np.argmin(dists))
-    if dists[bi] <= Config.FACE_MATCH_THRESH:
+    dist  = float(dists[bi])
+    if dist <= Config.FACE_MATCH_THRESH:
         pid = _enc_pids[bi]
         with _fdb_lock: name = faces_db[pid]["name"]
-        return pid, name, False
-    return _register_face_dlib(enc)
+        conf = max(0.0, min(1.0, 1.0 - dist))
+        return pid, name, False, conf
+    pid, name, is_new = _register_face_dlib(enc)
+    return pid, name, is_new, 1.0
 
 def _register_face_dlib(enc):
     global _enc_dirty
@@ -1141,7 +1153,7 @@ def _register_face_yunet(enc):
     return pid, name, True
 
 def async_face(rgb_or_bgr: np.ndarray, is_bgr: bool = False):
-    """Returns (pid, name) or (None, None) for one face from a crop."""
+    """Returns (pid, name, conf) or (None, None, 0.0) for one face from a crop."""
     if FACE_RECOG_AVAILABLE:
         try:
             import face_recognition as _fr
@@ -1149,23 +1161,24 @@ def async_face(rgb_or_bgr: np.ndarray, is_bgr: bool = False):
             locs = _fr.face_locations(rgb, model=Config.FACE_DETECT_MODEL)
             if not locs:
                 locs = _fr.face_locations(rgb, number_of_times_to_upsample=1, model="hog")
-            if not locs: return None, None
+            if not locs: return None, None, 0.0
             encs = _fr.face_encodings(rgb, locs)
-            if not encs: return None, None
-            pid, name, _ = match_face_dlib(encs[0])
-            return pid, name
-        except Exception as e: app_log.debug(f"face dlib: {e}"); return None, None
+            if not encs: return None, None, 0.0
+            pid, name, _, conf = match_face_dlib(encs[0])
+            return pid, name, conf
+        except Exception as e: app_log.debug(f"face dlib: {e}"); return None, None, 0.0
     elif YUNET_AVAILABLE:
         try:
             bgr = rgb_or_bgr if is_bgr else cv2.cvtColor(rgb_or_bgr, cv2.COLOR_RGB2BGR)
             enc = _yunet_encode(bgr)
-            if enc is None: return None, None
-            pid, name, is_new = _yunet_match(enc)
+            if enc is None: return None, None, 0.0
+            pid, name, is_new, score = _yunet_match(enc)
             if is_new:
                 pid, name, _ = _register_face_yunet(enc)
-            return pid, name
-        except Exception as e: app_log.debug(f"face yunet: {e}"); return None, None
-    return None, None
+                score = 1.0
+            return pid, name, score
+        except Exception as e: app_log.debug(f"face yunet: {e}"); return None, None, 0.0
+    return None, None, 0.0
 
 face_pool = ThreadPoolExecutor(max_workers=Config.FACE_POOL_WORKERS, thread_name_prefix="Face")
 
@@ -1225,16 +1238,18 @@ def register_user_face(cameras, username: str = Config.USERNAME):
                             if enc is not None:
                                 by_name = {d["name"].lower(): pid for pid,d in faces_db.items() if d.get("known")}
                                 now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                out = Path(Config.KNOWN_FACES_DIR) / f"{username}.jpg"
+                                cv2.imwrite(str(out), crop)
+                                rel_out = str(out.relative_to(WORKING_DIR)) if WORKING_DIR in out.parents else str(out)
                                 if username.lower() in by_name:
                                     pid = by_name[username.lower()]
+                                    faces_db[pid]["photo"] = rel_out
                                 else:
                                     pid = _new_pid()
                                     with _fdb_lock:
                                         faces_db[pid] = {"name":username,"first_seen":now,"last_seen":now,
-                                                         "visit_count":0,"known":True,"photo":None,"in_scene":False}
+                                                         "visit_count":0,"known":True,"photo":rel_out,"in_scene":False}
                                 with _yunet_lock: _yunet_enc_cache[pid] = enc
-                                out = Path(Config.KNOWN_FACES_DIR) / f"{username}.jpg"
-                                cv2.imwrite(str(out), crop)
                                 _save_db_json()
                                 preload_known()
                                 _enc_dirty = True
@@ -1482,6 +1497,7 @@ class CameraState:
         self.before_img = str(Config.LOG_DIR / f"before_cam{cam_id}.jpg")
         self.after_img  = str(Config.LOG_DIR / f"after_cam{cam_id}.jpg")
         self.track_to_pid:    Dict[int, str]        = {}
+        self.pid_confidences: Dict[str, float]      = {}
         self.pid_info:        Dict[str, PersonInfo] = {}
         self.present_pids:    set                   = set()
         self.pending_futures: Dict[int, object]     = {}
@@ -1573,10 +1589,47 @@ def on_person_arrived(cs: CameraState, pid: str, name: str, frame: np.ndarray, b
     log_event(event, camera=cs.name, person=name, obj="person", detail=f"visits={visits} conf={conf:.2f}")
     cs.persons_detected += 1; cs.det_flash_t = time.time(); cs.det_flash_pid = pid
 
-    x1,y1,x2,y2 = box; crop = frame[y1:y2, x1:x2]; photo_path = None
-    if crop.size > 0:
+    x1,y1,x2,y2 = box
+    crop = None
+    if YUNET_AVAILABLE:
+        person_crop = frame[y1:y2, x1:x2]
+        if person_crop.size > 0:
+            with _yunet_lock:
+                h_c, w_c = person_crop.shape[:2]
+                _yunet_detector.setInputSize((w_c, h_c))
+                _, faces = _yunet_detector.detect(person_crop)
+            if faces is not None and len(faces) > 0:
+                face = faces[0]
+                fx, fy, fw, fh = int(face[0]), int(face[1]), int(face[2]), int(face[3])
+                fx_f = x1 + fx
+                fy_f = y1 + fy
+                pad = int(fh * 0.35)
+                sz = max(fw, fh) + 2 * pad
+                cx = fx_f + fw // 2
+                cy = fy_f + fh // 2
+                nx1 = max(0, cx - sz // 2)
+                ny1 = max(0, cy - sz // 2)
+                nx2 = min(frame.shape[1] - 1, nx1 + sz)
+                ny2 = min(frame.shape[0] - 1, ny1 + sz)
+                crop = frame[ny1:ny2, nx1:nx2]
+    if crop is None or crop.size == 0:
+        h_box = y2 - y1
+        w_box = x2 - x1
+        head_h = int(h_box * 0.28)
+        cx = x1 + w_box // 2
+        cy = y1 + head_h // 2
+        sz = max(head_h, int(w_box * 0.8))
+        nx1 = max(0, cx - sz // 2)
+        ny1 = max(y1, cy - sz // 2)
+        nx2 = min(frame.shape[1] - 1, nx1 + sz)
+        ny2 = min(frame.shape[0] - 1, ny1 + sz)
+        crop = frame[ny1:ny2, nx1:nx2]
+    if crop is None or crop.size == 0:
+        crop = frame[y1:y2, x1:x2]
+        
+    photo_path = None
+    if crop is not None and crop.size > 0:
         ts_str     = datetime.now().strftime("%Y%m%d_%H%M%S")
-        # Include camera name in captured image path to identify which camera it belongs to
         clean_cam_name = cs.name.replace(' ', '_').replace('/', '_')
         rel_path   = f"faces/captured/{pid}_{clean_cam_name}_{ts_str}.jpg"
         abs_path   = str(WORKING_DIR / rel_path)
@@ -1742,6 +1795,11 @@ def camera_thread(cs: CameraState):
                     bx1,by1,bx2,by2 = box.xyxy[0]
                     x1 = int(max(0, bx1*sx)); y1 = int(max(0, by1*sy))
                     x2 = int(min(Config.FRAME_W-1, bx2*sx)); y2 = int(min(Config.FRAME_H-1, by2*sy))
+                    w_box = x2 - x1
+                    h_box = y2 - y1
+                    if label == "person":
+                        if w_box < 25 or h_box < 45: continue
+                        if h_box / max(1, w_box) > 4.0: continue
                     tid = None
                     if box.id is not None:
                         try: tid = int(box.id[0])
@@ -1765,8 +1823,14 @@ def camera_thread(cs: CameraState):
                         tid_seen.add(tid)
                         fut = cs.pending_futures.get(tid)
                         if fut and fut.done():
-                            np_pid, np_name = fut.result(); del cs.pending_futures[tid]
+                            res = fut.result()
+                            if res and len(res) == 3:
+                                np_pid, np_name, conf = res
+                            else:
+                                np_pid, np_name, conf = res[0], res[1], 0.984
+                            del cs.pending_futures[tid]
                             if np_pid:
+                                cs.pid_confidences[np_pid] = conf
                                 old = cs.track_to_pid.get(tid)
                                 if old and old != np_pid:
                                     cs.present_pids.discard(old)
