@@ -212,6 +212,12 @@ def create_app() -> "FastAPI":
                     frame = cs.latest_frame.copy()
                     dets = list(cs.latest_dets)
 
+            # Respect HUD Toggle configuration
+            sv = _get_sv()
+            show_hud = True
+            if sv:
+                show_hud = getattr(sv, "hud_overlay_active", True)
+
             if frame is None:
                 # Placeholder frame for offline cameras
                 h, w = 360, 640
@@ -219,8 +225,9 @@ def create_app() -> "FastAPI":
                 cv2.putText(frame, f"CAM {cam_id+1} OFFLINE", (w//2-100, h//2),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.8, (55, 175, 212), 2)
             else:
-                # Draw YOLO bounding boxes + labels directly on the frame
-                _draw_detections_on_frame(frame, dets)
+                if show_hud:
+                    # Draw YOLO bounding boxes + labels directly on the frame
+                    _draw_detections_on_frame(frame, dets)
 
             # Encode as JPEG
             ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
@@ -249,10 +256,29 @@ def create_app() -> "FastAPI":
             label = det.get("label", "")
             conf = det.get("conf", 0)
             disp = det.get("disp", label)
+            pid = det.get("pid")
 
             # Color by type
             if label == "person":
-                col = (120, 255, 0)   # green BGR
+                is_known = False
+                sv = _get_sv()
+                if sv:
+                    lock = getattr(sv, "_fdb_lock", None)
+                    try:
+                        if lock:
+                            with lock:
+                                if pid and pid in sv.faces_db:
+                                    is_known = sv.faces_db[pid].get("known", False)
+                        else:
+                            if pid and pid in sv.faces_db:
+                                is_known = sv.faces_db[pid].get("known", False)
+                    except Exception:
+                        pass
+
+                if is_known:
+                    col = (120, 255, 0)   # green BGR
+                else:
+                    col = (60, 60, 255)   # alert red BGR
                 lw = max(1, int(1 + pulse))
             else:
                 col = (55, 175, 212)  # gold BGR
@@ -358,7 +384,15 @@ def create_app() -> "FastAPI":
             sv = _get_sv()
             if not sv:
                 raise Exception("Main module not running")
-            db = sv.faces_db
+            
+            # Thread-safe copy of faces database
+            lock = getattr(sv, "_fdb_lock", None)
+            if lock:
+                with lock:
+                    db = dict(sv.faces_db)
+            else:
+                db = dict(sv.faces_db)
+                
             res = []
             for pid, info in db.items():
                 if info.get("known", False):
@@ -409,7 +443,16 @@ def create_app() -> "FastAPI":
         result = []
         try:
             sv = _get_sv()
-            db = sv.faces_db if sv else {}
+            if sv:
+                # Thread-safe copy of faces database
+                lock = getattr(sv, "_fdb_lock", None)
+                if lock:
+                    with lock:
+                        db = dict(sv.faces_db)
+                else:
+                    db = dict(sv.faces_db)
+            else:
+                db = {}
         except Exception:
             db = {}
             
@@ -421,11 +464,19 @@ def create_app() -> "FastAPI":
                     conf = getattr(cs, "pid_confidences", {}).get(pid)
                     if conf is None:
                         conf = 0.984 if db[pid].get("known", False) else 0.942
+                    
+                    # Verify if photo exists on disk
+                    photo_val = db[pid].get("photo")
+                    if photo_val:
+                        p_path = WORKING_DIR / photo_val
+                        if not p_path.exists():
+                            photo_val = None
+                            
                     active_subjects.append({
                         "pid": pid,
                         "name": db[pid].get("name", "Unknown"),
                         "known": db[pid].get("known", False),
-                        "photo": db[pid].get("photo"),
+                        "photo": photo_val,
                         "confidence": float(conf)
                     })
                     
@@ -443,6 +494,79 @@ def create_app() -> "FastAPI":
                 "uptime":      getattr(cs, "uptime_str", "00:00:00"),
             })
         return JSONResponse(result)
+
+    @app.get("/api/crop/{pid}")
+    async def get_pid_crop(pid: str):
+        """Serve a cropped face image for a given person ID (live if in scene, or from file, or fallback)."""
+        sv = _get_sv()
+        db = {}
+        if sv:
+            try:
+                lock = getattr(sv, "_fdb_lock", None)
+                if lock:
+                    with lock:
+                        db = dict(sv.faces_db)
+                else:
+                    db = dict(sv.faces_db)
+            except Exception:
+                db = {}
+                
+        # 1. Try to crop in real-time from active camera if present in scene
+        for cs in _cameras:
+            if pid in getattr(cs, "present_pids", set()):
+                frame = None
+                dets = []
+                with cs.frame_lock:
+                    if cs.latest_frame is not None:
+                        frame = cs.latest_frame.copy()
+                        dets = list(cs.latest_dets)
+                
+                if frame is not None:
+                    for d in dets:
+                        if d.get("pid") == pid:
+                            try:
+                                x1, y1, x2, y2 = d["box"]
+                                H, W = frame.shape[:2]
+                                sx = W / 640.0; sy = H / 360.0
+                                x1_f = int(x1 * sx); y1_f = int(y1 * sy)
+                                x2_f = int(x2 * sx); y2_f = int(y2 * sy)
+                                
+                                # Add padding around face
+                                pad = int((y2_f - y1_f) * 0.15)
+                                crop = frame[max(0, y1_f-pad):min(H, y2_f+pad), max(0, x1_f-pad):min(W, x2_f+pad)]
+                                if crop.size > 0:
+                                    ok, buf = cv2.imencode(".jpg", crop)
+                                    if ok:
+                                        return Response(content=bytes(buf), media_type="image/jpeg")
+                            except Exception:
+                                pass
+
+        # 2. Try to serve from database photo path if exists
+        if pid in db:
+            photo_path = db[pid].get("photo")
+            if photo_path:
+                p_path = WORKING_DIR / photo_path
+                if p_path.exists():
+                    try:
+                        with open(p_path, "rb") as f:
+                            return Response(content=f.read(), media_type="image/jpeg")
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        p_path_abs = Path(photo_path)
+                        if p_path_abs.exists():
+                            with open(p_path_abs, "rb") as f:
+                                return Response(content=f.read(), media_type="image/jpeg")
+                    except Exception:
+                        pass
+
+        # 3. Fallback: Return a beautiful SVG or default avatar placeholder
+        avatar_svg = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#D4AF37" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="background:#111; width:100%; height:100%;">
+            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+            <circle cx="12" cy="7" r="4" />
+        </svg>"""
+        return Response(content=avatar_svg, media_type="image/svg+xml")
 
     # ─── Control Endpoints ────────────────────────────────────────────────────
     @app.post("/api/control/{action}")

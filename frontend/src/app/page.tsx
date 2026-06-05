@@ -1571,20 +1571,26 @@ export default function Dashboard() {
                 {isFaceUnlocked ? (
                   (() => {
                     const activeSubject = (cameras as any)[activeCam]?.active_subjects?.[0];
-                    const hasActiveSubject = !!activeSubject;
-                    const sName = activeSubject ? activeSubject.name : "IDENTIFYING...";
-                    const sKnown = activeSubject ? activeSubject.known : false;
+                    const hasActiveSubject = !!activeSubject && !!activeSubject.pid;
+                    const sName = hasActiveSubject ? activeSubject.name : "IDENTIFYING...";
+                    const sKnown = hasActiveSubject ? activeSubject.known : false;
                     const isIntruder = hasActiveSubject && !sKnown;
                     const isScanning = !hasActiveSubject;
                     
                     return (
                       <div className="w-full h-full flex items-center justify-center gap-4 px-4">
                         <div className={`w-18 h-18 rounded-full border-2 ${isScanning ? 'border-gold-dim/40 animate-pulse' : isIntruder ? 'border-red-500/50 animate-pulse' : 'border-gold-accent/40 success-ring-lock'} overflow-hidden relative flex-shrink-0`}>
-                          <img
-                            src={activeSubject?.photo ? `${API}/${activeSubject.photo}` : `${API}/api/stream/${activeCam}`}
-                            alt="Crop"
-                            className={`w-full h-full object-cover ${activeSubject?.photo ? 'scale-[1.1]' : 'scale-[1.7] origin-center translate-y-1'}`}
-                          />
+                          {hasActiveSubject ? (
+                            <img
+                              src={`${API}/api/crop/${activeSubject.pid}?t=${time.getTime()}`}
+                              alt="Active Subject Crop"
+                              className="w-full h-full object-cover"
+                            />
+                          ) : (
+                            <div className="w-full h-full flex items-center justify-center bg-black/40">
+                              <RefreshCw size={16} className="text-gold-dim animate-spin" />
+                            </div>
+                          )}
                         </div>
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-1.5">
@@ -1606,7 +1612,7 @@ export default function Dashboard() {
                             )}
                           </div>
                           
-                          {editingPid === (activeSubject?.pid || "default") ? (
+                          {hasActiveSubject && editingPid === activeSubject.pid ? (
                             <div className="flex items-center gap-1 mt-1">
                               <input
                                 type="text"
@@ -1640,7 +1646,7 @@ export default function Dashboard() {
                               <h3 className={`font-orbitron text-xs font-black truncate leading-tight ${isScanning ? 'text-gold-dim/70' : isIntruder ? 'text-red-400' : 'text-[#FFFFFF]'}`}>
                                 {sName}
                               </h3>
-                              {activeSubject?.pid && (
+                              {hasActiveSubject && (
                                 <button
                                   onClick={() => {
                                     setEditingPid(activeSubject.pid);
