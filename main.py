@@ -1880,6 +1880,12 @@ def camera_thread(cs: CameraState):
                     if label == "person" and tid is not None:
                         tid_seen.add(tid)
                         fut = cs.pending_futures.get(tid)
+                        if not hasattr(cs, "tid_face_votes"):
+                            cs.tid_face_votes = {}
+                        if not hasattr(cs, "tid_identity_locked"):
+                            cs.tid_identity_locked = {}
+
+                        fut = cs.pending_futures.get(tid)
                         if fut and fut.done():
                             res = fut.result()
                             if res and len(res) == 3:
@@ -1887,18 +1893,36 @@ def camera_thread(cs: CameraState):
                             else:
                                 np_pid, np_name, conf = res[0], res[1], 0.984
                             del cs.pending_futures[tid]
+
                             if np_pid:
-                                cs.pid_confidences[np_pid] = conf
-                                old = cs.track_to_pid.get(tid)
-                                if old and old != np_pid:
-                                    cs.present_pids.discard(old)
+                                is_locked = cs.tid_identity_locked.get(tid, False)
+                                if not is_locked:
+                                    np_is_known = False
                                     with _fdb_lock:
-                                        if old in faces_db:
-                                            faces_db[old]["in_scene"] = False
-                                            if not faces_db[old].get("known") and faces_db[old].get("visit_count", 0) <= 1:
-                                                del faces_db[old]
-                                cs.track_to_pid[tid] = np_pid
-                                _ensure_pid(cs, np_pid, np_name)
+                                        if np_pid in faces_db:
+                                            np_is_known = faces_db[np_pid].get("known", False)
+                                    
+                                    if np_is_known:
+                                        votes = cs.tid_face_votes.setdefault(tid, {})
+                                        votes[np_pid] = votes.get(np_pid, 0.0) + conf
+                                        
+                                        if votes[np_pid] >= 0.85:
+                                            cs.tid_identity_locked[tid] = True
+                                            cs.pid_confidences[np_pid] = conf
+                                            old = cs.track_to_pid.get(tid)
+                                            if old and old != np_pid:
+                                                cs.present_pids.discard(old)
+                                                with _fdb_lock:
+                                                    if old in faces_db:
+                                                        faces_db[old]["in_scene"] = False
+                                                        if not faces_db[old].get("known") and faces_db[old].get("visit_count", 0) <= 1:
+                                                            del faces_db[old]
+                                            cs.track_to_pid[tid] = np_pid
+                                            _ensure_pid(cs, np_pid, np_name)
+                                    else:
+                                        curr_pid = cs.track_to_pid.get(tid)
+                                        if curr_pid:
+                                            cs.pid_confidences[curr_pid] = conf
 
                         if tid not in cs.track_to_pid:
                             new_p = _new_pid()
@@ -1974,8 +1998,16 @@ def camera_thread(cs: CameraState):
                                     name_g = faces_db.get(pid_g,{}).get("name","Unknown")
                                     on_person_left(cs, pid_g, name_g, frame)
                                 del cs.track_to_pid[tid_gone]
+                                if hasattr(cs, "tid_face_votes") and tid_gone in cs.tid_face_votes:
+                                    del cs.tid_face_votes[tid_gone]
+                                if hasattr(cs, "tid_identity_locked") and tid_gone in cs.tid_identity_locked:
+                                    del cs.tid_identity_locked[tid_gone]
                         else:
                             del cs.track_to_pid[tid_gone]
+                            if hasattr(cs, "tid_face_votes") and tid_gone in cs.tid_face_votes:
+                                del cs.tid_face_votes[tid_gone]
+                            if hasattr(cs, "tid_identity_locked") and tid_gone in cs.tid_identity_locked:
+                                del cs.tid_identity_locked[tid_gone]
 
                 # Object change detection
                 cur_ctr = Counter(o for o in cur_objs if o != "person")
