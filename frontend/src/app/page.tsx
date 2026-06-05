@@ -1766,7 +1766,7 @@ export default function Dashboard() {
         </div>
 
         {/* ── FOOTER STATS & ACTIONS BAR ── */}
-        <footer className="flex gap-3 flex-shrink-0 relative" style={{ height: 106 }}>
+        <footer className="flex gap-3 flex-shrink-0 relative" style={{ height: 136 }}>
           
           {/* Active Statistics Sparklines panel */}
           <div className="glass-premium flex-[1.6] px-5 py-3 flex items-center justify-between gap-4">
@@ -1795,7 +1795,7 @@ export default function Dashboard() {
               <span className="status-indicator text-green-oms bg-green-oms animate-pulse" />
             </div>
             
-            <div className="h-[54px] overflow-y-auto font-mono text-[9.5px] text-sec flex flex-col gap-0.5 pr-1 mt-1 leading-none">
+            <div className="h-[84px] overflow-y-auto font-mono text-[9.5px] text-sec flex flex-col gap-0.5 pr-1 mt-1 leading-none">
               <p className="text-muted uppercase">// AI core telemetry initialized successfully.</p>
               <p className="text-[#FFFFFF] uppercase">✓ YOLO model loaded on device target GPU index 0.</p>
               <p className="text-[#FFFFFF] uppercase">✓ Face recognition database secure. Known records: {knownUsers.length}.</p>

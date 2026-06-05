@@ -432,3 +432,9 @@ html, body {
   50% { transform: scale(1.05); opacity: 1; }
   100% { transform: scale(1); opacity: 1; }
 }
+
+/* ── Footer Quick Actions Button Padding Override ────────────────── */
+footer .btn-gold-luxury,
+footer .btn-danger-luxury {
+  padding: 8px 6px;
+}
