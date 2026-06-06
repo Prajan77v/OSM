@@ -210,6 +210,7 @@ class Config:
     ABSENT_CYCLES_THRESH = _cfg("detection","absent_cycles_thresh", default=50)
 
     FACE_MATCH_THRESH   = _cfg("face_recognition","match_threshold", default=0.60)
+    DETECT_NEW_IDS      = _cfg("face_recognition","detect_new_ids", default=True)
     FACE_DETECT_MODEL   = "cnn" if CUDA_AVAILABLE else "hog"
     FACE_POOL_WORKERS   = _cfg("face_recognition","pool_workers",HW_PROFILE, default={"LOW":1,"MEDIUM":2,"HIGH":3}[HW_PROFILE])
     FACE_RECHECK_CYCLES = _cfg("face_recognition","recheck_cycles",HW_PROFILE, default={"LOW":120,"MEDIUM":90,"HIGH":60}[HW_PROFILE])
@@ -855,6 +856,34 @@ def export_csv(path: str = "logs/events_export.csv"):
                 except: pass
     app_log.info(f"CSV exported -> {path}")
 
+def save_config_cameras(cameras):
+    config_path = WORKING_DIR / "config.yaml"
+    if not config_path.exists():
+        return
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        cams_list = []
+        for cs in cameras:
+            cams_list.append({
+                "id": cs.cam_id,
+                "source": cs.source,
+                "name": cs.name,
+                "enabled": not cs.disconnected,
+                "location": getattr(cs, "location", "Monitored Sector")
+            })
+        data["cameras"] = cams_list
+        with open(config_path, "w", encoding="utf-8") as f:
+            yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
+        dist_config_path = WORKING_DIR / "dist" / "config.yaml"
+        if dist_config_path.exists():
+            with open(dist_config_path, "w", encoding="utf-8") as f:
+                yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
+        Config.CAMERA_CONFIGS = [{"source": c["source"], "name": c["name"], "enabled": c["enabled"], "location": c["location"]} for c in cams_list]
+        app_log.info("Saved camera configurations to config.yaml")
+    except Exception as e:
+        app_log.error(f"Error saving camera config: {e}")
+
 def reset_log_files(cameras=None):
     """Clear app.log, events.jsonl, events.log, clear SQLite events/visits, and reset Today's summary metrics."""
     # Truncate pretty events log
@@ -1079,7 +1108,7 @@ def _tg_zone(cam, pid, name, zone_name, ts):
 
 def _tg_behavior(cam, pid, name, behavior_type, ts):
     clean_cam = _clean_cam_name(cam)
-    emoji = {"LOITERING":"⏳","PACING":"🔄","RUNNING":"🏃","ABANDONED_OBJ":"📦"}.get(behavior_type,"⚠")
+    emoji = {"LOITERING":"⏳","PACING":"🔄","STILL":"🧍","ACTIVE":"🏃","ABANDONED_OBJ":"📦"}.get(behavior_type,"⚠")
     return (
         f"{emoji} OMS BEHAVIOR ALERT\n━━━━━━━━━━━━━━━━━━━\n\n"
         f"🧠 EVENT TYPE\n{behavior_type}\n\n📷 CAMERA\n{clean_cam}\n\n"
@@ -1097,21 +1126,73 @@ for _d in ["logs", "faces/known", "faces/unknown", "faces/captured", "models", "
 _next_pid = 1
 faces_db: Dict[str, dict] = {}
 
+def deduplicate_profiles():
+    """Scan faces_db and merge/delete duplicate face profiles based on SFace embedding similarity."""
+    if not YUNET_AVAILABLE or _sface_recognizer is None:
+        return
+    with _fdb_lock, _yunet_lock:
+        pids = list(_yunet_enc_cache.keys())
+        to_delete = set()
+        for i in range(len(pids)):
+            pid1 = pids[i]
+            if pid1 in to_delete or pid1 not in faces_db:
+                continue
+            enc1 = _yunet_enc_cache[pid1]
+            for j in range(i + 1, len(pids)):
+                pid2 = pids[j]
+                if pid2 in to_delete or pid2 not in faces_db:
+                    continue
+                enc2 = _yunet_enc_cache[pid2]
+                try:
+                    score = float(_sface_recognizer.match(
+                        enc1.reshape(1,-1), enc2.reshape(1,-1), cv2.FaceRecognizerSF_FR_COSINE))
+                    if score >= 0.40:
+                        id1 = int(pid1[1:]) if pid1[1:].isdigit() else 0
+                        id2 = int(pid2[1:]) if pid2[1:].isdigit() else 0
+                        known1 = faces_db[pid1].get("known", False)
+                        known2 = faces_db[pid2].get("known", False)
+                        if known1 and not known2:
+                            older, newer = pid1, pid2
+                        elif known2 and not known1:
+                            older, newer = pid2, pid1
+                        else:
+                            older, newer = (pid1, pid2) if id1 < id2 else (pid2, pid1)
+                        to_delete.add(newer)
+                        app_log.info(f"[DEDUP] Detected duplicate faces: {pid1} ({faces_db[pid1].get('name')}) and {pid2} ({faces_db[pid2].get('name')}) with similarity {score:.2f}. Auto-deleting recent profile {newer}.")
+                except Exception as e:
+                    pass
+        if to_delete:
+            for pid in to_delete:
+                photo = faces_db[pid].get("photo")
+                if photo:
+                    p_path = WORKING_DIR / photo
+                    if p_path.exists() and "faces/captured" in str(p_path):
+                        try: p_path.unlink()
+                        except: pass
+                if pid in faces_db:
+                    del faces_db[pid]
+                if pid in _yunet_enc_cache:
+                    del _yunet_enc_cache[pid]
+
 def _load_db_json():
     global faces_db
     if not Config.FACES_DB_FILE.exists(): faces_db = {}; return
     try:
         with open(Config.FACES_DB_FILE, encoding="utf-8") as f:
             db = json.load(f)
-        if FACE_RECOG_AVAILABLE:
-            for d in db.values():
-                if "encoding" in d: d["encoding"] = np.array(d["encoding"])
-        for d in db.values():
+        for pid, d in db.items():
             d["in_scene"] = False
+            if "encoding" in d and d["encoding"] is not None:
+                enc_arr = np.array(d["encoding"], dtype=np.float32)
+                d["encoding"] = enc_arr
+                if YUNET_AVAILABLE:
+                    with _yunet_lock:
+                        _yunet_enc_cache[pid] = enc_arr
         faces_db = db
     except Exception as e: app_log.error(f"DB load: {e}"); faces_db = {}
 
 def _save_db_json():
+    deduplicate_profiles()
     out = {}
     with _fdb_lock:
         for pid, d in faces_db.items():
@@ -1170,10 +1251,11 @@ def preload_known():
                 rel_photo = str(fp.relative_to(WORKING_DIR)) if WORKING_DIR in fp.parents else str(fp)
                 if name.lower() in by_name:
                     pid = by_name[name.lower()]
+                    faces_db[pid]["encoding"] = enc
                     faces_db[pid]["photo"] = rel_photo
                 else:
                     pid = _new_pid()
-                    faces_db[pid] = {"name":name,"first_seen":now,"last_seen":now,
+                    faces_db[pid] = {"name":name,"encoding":enc,"first_seen":now,"last_seen":now,
                                      "visit_count":0,"known":True,"photo":rel_photo,"in_scene":False}
                 with _yunet_lock:
                     _yunet_enc_cache[pid] = enc
@@ -1226,7 +1308,7 @@ def _register_face_yunet(enc):
     with _fdb_lock:
         pid  = _new_pid(); name = f"Intruder-{pid}"
         now  = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        faces_db[pid] = {"name":name,"first_seen":now,"last_seen":now,
+        faces_db[pid] = {"name":name,"encoding":enc,"first_seen":now,"last_seen":now,
                          "visit_count":0,"known":False,"photo":None,"in_scene":False}
     with _yunet_lock:
         _yunet_enc_cache[pid] = enc
@@ -1408,7 +1490,10 @@ class BehaviorRecord:
     last_dir:         Optional[float] = None
     loitering_alerted: Dict[str, float] = field(default_factory=dict)
     pacing_alerted:   float = 0.0
-    running_alerted:  float = 0.0
+    status:           str = "ACTIVE"
+    still_ref_pos:    Optional[Tuple[float, float]] = None
+    still_start_time: float = 0.0
+    last_tg_status:   Optional[str] = "ACTIVE"
 
 class BehaviorEngine:
     def __init__(self):
@@ -1431,10 +1516,6 @@ class BehaviorEngine:
             dt = now - rec.pos_times[-1] if rec.pos_times else 1.0
             if dt > 0:
                 speed = math.hypot(cx-lx, cy-ly) / dt
-                # Running detection
-                if speed > Config.RUN_SPEED_THRESHOLD and now - rec.running_alerted > 30:
-                    anomalies.append("RUNNING")
-                    rec.running_alerted = now
                 # Direction change (pacing)
                 if speed > 5:
                     angle = math.atan2(cy-ly, cx-lx)
@@ -1445,6 +1526,29 @@ class BehaviorEngine:
                     rec.last_dir = angle
 
         rec.positions.append((cx,cy)); rec.pos_times.append(now)
+
+        # Still / Active detection
+        if rec.still_ref_pos is None:
+            rec.still_ref_pos = (cx, cy)
+            rec.still_start_time = now
+        else:
+            dist = math.hypot(cx - rec.still_ref_pos[0], cy - rec.still_ref_pos[1])
+            if dist > 35:
+                if rec.status == "STILL":
+                    rec.status = "ACTIVE"
+                    if rec.last_tg_status != "ACTIVE":
+                        anomalies.append("ACTIVE")
+                        rec.last_tg_status = "ACTIVE"
+                rec.still_ref_pos = (cx, cy)
+                rec.still_start_time = now
+            else:
+                elapsed = now - rec.still_start_time
+                if elapsed > 300:  # 5 minutes
+                    if rec.status == "ACTIVE":
+                        rec.status = "STILL"
+                        if rec.last_tg_status != "STILL":
+                            anomalies.append("STILL")
+                            rec.last_tg_status = "STILL"
 
         # Pacing detection
         recent_changes = [t for t in rec.direction_changes if now-t < Config.PACE_WINDOW_SECS]
@@ -1754,12 +1858,14 @@ def on_person_left(cs: CameraState, pid: str, name: str, frame: np.ndarray):
     cv2.imwrite(cs.after_img, frame)
     log_event("PERSON_LEFT", camera=cs.name, person=name, detail=f"last_seen={now}")
     cs.persons_left += 1
-    notif_queue.send_message(_tg_person_left(cs.name, pid, name, now),
-                             event_type="PERSON_LEFT", camera=cs.name, person=pid)
-    if "Intruder" not in name: speak(f"{name} has left the monitored zone.")
+    is_transient = pid.startswith("Unknown-") or name == "Unknown"
+    if not is_transient:
+        notif_queue.send_message(_tg_person_left(cs.name, pid, name, now),
+                                 event_type="PERSON_LEFT", camera=cs.name, person=pid)
+        if "Intruder" not in name: speak(f"{name} has left the monitored zone.")
     cs.behavior.remove(pid)
     cs.warning_msg = f"DEPARTED: {name}"; cs.warning_time = time.time()
-    if "Intruder" not in name: cs.threat_level = "GREEN"
+    if "Intruder" not in name and not is_transient: cs.threat_level = "GREEN"
     cs.tile_dirty = True
 
 def on_obj_event(cs: CameraState, event: str, label: str, before: int, after: int, frame: np.ndarray):
@@ -1793,12 +1899,25 @@ def on_behavior_anomaly(cs: CameraState, pid: str, name: str, anomaly: str):
     log_event("BEHAVIOR", camera=cs.name, person=pid, obj=anomaly,
               detail=f"behavior={anomaly} subject={name}")
     btype = anomaly.split(":")[0]
-    threat_engine.raise_threat("ORANGE", f"BEHAVIOR: {btype}")
-    db_log_threat(now, "ORANGE", f"BEHAVIOR {btype} by {name}", cs.name)
-    if "Intruder" not in name:
-        notif_queue.send_message(_tg_behavior(cs.name, pid, name, btype, now),
-                                 event_type="PERSON_ENTERED", camera=cs.name, person=pid)
-    cs.warning_msg = f"ANOMALY: {btype}"; cs.warning_time = time.time()
+    if btype in ("STILL", "ACTIVE"):
+        status_desc = "STILL (stationary for > 5 mins)" if btype == "STILL" else "ACTIVE (moving)"
+        msg = (
+            "🏃 OMS STATUS UPDATE\n━━━━━━━━━━━━━━━━━━━\n\n"
+            f"📷 CAMERA\n{cs.name}\n\n"
+            f"👤 SUBJECT\n{name} ({pid})\n\n"
+            f"📊 STATUS\n{status_desc}\n\n"
+            f"⏱ TIMESTAMP\n{now}"
+        )
+        notif_queue.send_message(msg, event_type="STATUS_CHANGE", camera=cs.name, person=pid, priority=5)
+        cs.warning_msg = f"STATUS: {btype}"
+    else:
+        threat_engine.raise_threat("ORANGE", f"BEHAVIOR: {btype}")
+        db_log_threat(now, "ORANGE", f"BEHAVIOR {btype} by {name}", cs.name)
+        if "Intruder" not in name:
+            notif_queue.send_message(_tg_behavior(cs.name, pid, name, btype, now),
+                                     event_type="PERSON_ENTERED", camera=cs.name, person=pid)
+        cs.warning_msg = f"ANOMALY: {btype}"
+    cs.warning_time = time.time()
 
 def camera_thread(cs: CameraState):
     yolo   = make_camera_yolo()
@@ -1950,30 +2069,36 @@ def camera_thread(cs: CameraState):
                                             cs.pid_confidences[curr_pid] = conf
 
                         if tid not in cs.track_to_pid:
-                            new_p = _new_pid()
-                            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                            with _fdb_lock:
-                                faces_db[new_p] = {
-                                    "name": f"Intruder-{new_p}",
-                                    "first_seen": now,
-                                    "last_seen": now,
-                                    "visit_count": 0,
-                                    "known": False,
-                                    "photo": None,
-                                    "in_scene": False
-                                }
-                            cs.track_to_pid[tid] = new_p
-                            _ensure_pid(cs, new_p, f"Intruder-{new_p}")
-                            _save_db_json()
+                            if not Config.DETECT_NEW_IDS:
+                                new_p = f"Unknown-{tid}"
+                                cs.track_to_pid[tid] = new_p
+                            else:
+                                new_p = _new_pid()
+                                now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                with _fdb_lock:
+                                    faces_db[new_p] = {
+                                        "name": f"Intruder-{new_p}",
+                                        "first_seen": now,
+                                        "last_seen": now,
+                                        "visit_count": 0,
+                                        "known": False,
+                                        "photo": None,
+                                        "in_scene": False
+                                    }
+                                cs.track_to_pid[tid] = new_p
+                                _ensure_pid(cs, new_p, f"Intruder-{new_p}")
+                                _save_db_json()
 
                         pid = cs.track_to_pid[tid]
-                        if pid not in faces_db:
-                            del cs.track_to_pid[tid]
-                            continue
-
-                        pid  = cs.track_to_pid[tid]
-                        name = faces_db.get(pid, {}).get("name", f"Intruder-{pid}")
-                        disp = name.split("-")[0][:12]
+                        if pid.startswith("Unknown-"):
+                            name = "Unknown"
+                            disp = "Unknown"
+                        else:
+                            if pid not in faces_db:
+                                del cs.track_to_pid[tid]
+                                continue
+                            name = faces_db.get(pid, {}).get("name", f"Intruder-{pid}")
+                            disp = name.split("-")[0][:12]
 
                         # Schedule face recognition
                         fr_cd = cs.tid_face_cd.get(tid, 0)
@@ -1989,7 +2114,8 @@ def camera_thread(cs: CameraState):
                         # Person arrival
                         if pid not in cs.present_pids:
                             cs.present_pids.add(pid)
-                            on_person_arrived(cs, pid, name, frame, d["box"], cv_val)
+                            if not pid.startswith("Unknown-"):
+                                on_person_arrived(cs, pid, name, frame, d["box"], cv_val)
 
                         pi = _ensure_pid(cs, pid, name)
                         person_dets_this_frame.append({"pid": pid, "box": d["box"]})
@@ -3154,13 +3280,34 @@ def draw_camera_grid(img: np.ndarray, cameras):
         # ── SINGLE FOCUS MODE ───────────────────────────────────────────────
         cs = cameras[f_idx]
         _render_cam_tile(img, cs, sx, top, ex, info_area_y, is_large=True, is_sel=True)
+        cs.tile_rect = (sx, top, ex, info_area_y)
+        for i, c in enumerate(cameras):
+            if i != f_idx:
+                c.tile_rect = (-1, -1, -1, -1)
         return info_area_y
 
-    # ── 2×2 GRID MODE ───────────────────────────────────────────────────────
-    cols, rows = 2, 2
+    # ── DYNAMIC GRID MODE ───────────────────────────────────────────────────
+    num_cams = len(cameras)
+    if num_cams <= 1:
+        cols, rows = 1, 1
+    elif num_cams <= 2:
+        cols, rows = 2, 1
+    elif num_cams <= 4:
+        cols, rows = 2, 2
+    elif num_cams <= 6:
+        cols, rows = 3, 2
+    elif num_cams <= 8:
+        cols, rows = 4, 2
+    elif num_cams <= 9:
+        cols, rows = 3, 3
+    else:
+        import math
+        cols = int(math.ceil(math.sqrt(num_cams)))
+        rows = int(math.ceil(num_cams / cols))
+    
     gap = 14
-    tile_w = (gw - gap) // cols
-    tile_h = (gh - gap) // rows
+    tile_w = (gw - gap * (cols - 1)) // cols
+    tile_h = (gh - gap * (rows - 1)) // rows
 
     for idx, cs in enumerate(cameras):
         c_row = idx // cols; c_col = idx % cols
@@ -3170,6 +3317,7 @@ def draw_camera_grid(img: np.ndarray, cameras):
         ty2 = ty1 + tile_h
         is_sel = (idx == selected_cam_idx)
         _render_cam_tile(img, cs, tx1, ty1, tx2, ty2, is_large=False, is_sel=is_sel)
+        cs.tile_rect = (tx1, ty1, tx2, ty2)
 
     return info_area_y
 
@@ -3329,26 +3477,34 @@ def draw_url_input_overlay(img: np.ndarray, cam_idx: int, url_so_far: str):
     cv2.rectangle(overlay,(0,0),(W,H),(0,0,0),-1)
     cv2.addWeighted(overlay,0.72,img,0.28,0,img)
     
-    bw,bh = min(600,W*3//4), 200
+    bw,bh = min(600,W*3//4), 220
     bx1=(W-bw)//2; by1=(H-bh)//2; bx2=bx1+bw; by2=by1+bh
     _panel(img,bx1,by1,bx2,by2,a=0.94)
     _neon_rect(img,bx1,by1,bx2,by2,C_GOLD,2)
     _corner_brackets(img,bx1,by1,bx2,by2,C_GOLD,L=18,T=2)
     
-    _text_c(img,f"CONNECT CAMERA CHANNEL {cam_idx+1}",bx1+bw//2,by1+28,0.52,C_GOLD,bold=True)
+    if cam_idx == -2:
+        title = "ADD NEW CAMERA CHANNEL"
+    else:
+        title = f"CONFIGURE CAMERA {cam_idx+1}"
+    _text_c(img,title,bx1+bw//2,by1+28,0.52,C_GOLD,bold=True)
     cv2.line(img,(bx1+10,by1+36),(bx2-10,by1+36),C_BORDER,1)
     
-    _text(img,"ENTER CAMERA URL / RTSP IP / 0 FOR LOCAL WEBCAM:",bx1+16,by1+58,0.30,C_TEXT,bold=True)
+    if cam_idx == -2:
+        prompt = "ENTER NEW CAMERA SOURCE (0 OR RTSP/HTTP URL):"
+    else:
+        prompt = "ENTER SOURCE URL or 'name:New Name' TO RENAME:"
+    _text(img,prompt,bx1+16,by1+58,0.30,C_TEXT,bold=True)
     _text(img,"Android: http://192.168.x.x:8080/video",bx1+16,by1+76,0.26,C_DIM)
     _text(img,"CCTV:    rtsp://user:pass@IP:554/stream", bx1+16,by1+92,0.26,C_DIM)
     
-    ibx1=bx1+16; iby1=by1+106; ibx2=bx2-16; iby2=iby1+28
+    ibx1=bx1+16; iby1=by1+116; ibx2=bx2-16; iby2=iby1+28
     _fill_rect(img,ibx1,iby1,ibx2,iby2,(5,5,5))
     _neon_rect(img,ibx1,iby1,ibx2,iby2,C_GOLD,1)
     
     blink=int(time.time()*2)%2; cursor="|" if blink else ""
     _text(img,f"  {url_so_far}{cursor}",ibx1+6,iby1+20,0.40,C_GOLD,bold=True)
-    _text_c(img,"[Enter] CONNECT   [Esc] CANCEL",bx1+bw//2,by2-12,0.28,C_DIM)
+    _text_c(img,"[Enter] CONFIRM   [Esc] CANCEL",bx1+bw//2,by2-12,0.28,C_DIM)
 
 
 
@@ -3430,28 +3586,20 @@ def run_startup_sequence(win_name: str):
 # ══════════════════════════════════════════════════════════════════════════════
 # MOUSE CALLBACK
 # ══════════════════════════════════════════════════════════════════════════════
+_active_cameras = []
+
 def on_mouse(event, x, y, flags, param):
     global selected_cam_idx
     if event != cv2.EVENT_LBUTTONDOWN:
         return
     if Config.focused_cam_idx >= 0:
         return  # in focus mode, ignore tile clicks
-    cols = 2; pad = 4
-    sx = UI_LEFT_W
-    sy = UI_HDR_H + UI_NAV_H
-    gw = Config.WINDOW_W - UI_LEFT_W - UI_RIGHT_W
-    cam_area_h = int((Config.WINDOW_H - UI_HDR_H - UI_NAV_H - UI_FOOT_H) * cam_area_pct)
-    tile_w = max(1, (gw - pad*(cols+1)) // cols)
-    tile_h = max(1, (cam_area_h - 20 - pad*3) // 2)
-    feed_top = sy + 20
-    for idx in range(4):
-        c_row = idx // cols; c_col = idx % cols
-        tx1 = sx + pad + c_col*(tile_w+pad)
-        ty1 = feed_top + pad + c_row*(tile_h+pad)
-        tx2 = tx1 + tile_w; ty2 = ty1 + tile_h
-        if tx1 <= x <= tx2 and ty1 <= y <= ty2:
-            selected_cam_idx = idx
-            break
+    for idx, cs in enumerate(_active_cameras):
+        if hasattr(cs, "tile_rect"):
+            tx1, ty1, tx2, ty2 = cs.tile_rect
+            if tx1 <= x <= tx2 and ty1 <= y <= ty2:
+                selected_cam_idx = idx
+                break
 
 # ══════════════════════════════════════════════════════════════════════════════
 # MAIN
@@ -3467,8 +3615,10 @@ def main():
     log_event("SYSTEM_START", detail=f"HW:{HW_PROFILE} CUDA:{CUDA_AVAILABLE} YOLO:{YOLO_AVAILABLE}")
     speak("O M S Object Monitoring System online. Neural grid initializing.")
 
+    global _active_cameras
     cameras: List[CameraState] = [CameraState(cam_id=i, cfg=cfg)
                                    for i, cfg in enumerate(Config.CAMERA_CONFIGS)]
+    _active_cameras = cameras
 
     for cs in cameras:
         threading.Thread(target=camera_thread, args=(cs,),
@@ -3582,11 +3732,31 @@ def main():
             if key in (13,10):   # ENTER
                 url = input_buf.strip()
                 if url:
-                    source = int(url) if url.isdigit() else url
-                    cs = cameras[input_cam]
-                    threading.Thread(target=lambda c=cs,s=source: c.reconnect_to(s), daemon=True).start()
-                    log_event("CAM_CONFIG", camera=cs.name, detail=f"source={url}")
-                    speak(f"Connecting camera {input_cam+1}.")
+                    if input_cam == -2:
+                        new_source = int(url) if url.isdigit() else url
+                        new_id = len(cameras)
+                        new_name = f"CCTV NODE-{new_id+1}"
+                        new_cfg = {"source": new_source, "name": new_name, "enabled": True, "location": f"Sector {chr(65+new_id)}"}
+                        new_cs = CameraState(cam_id=new_id, cfg=new_cfg)
+                        cameras.append(new_cs)
+                        threading.Thread(target=camera_thread, args=(new_cs,), daemon=True, name=f"Cam-{new_id}").start()
+                        save_config_cameras(cameras)
+                        speak(f"Camera {new_id+1} added.")
+                        log_event("CAM_ADD", camera=new_name, detail=f"source={url}")
+                    else:
+                        cs = cameras[input_cam]
+                        if url.lower().startswith("name:"):
+                            new_name = url[5:].strip()
+                            if new_name:
+                                cs.name = new_name
+                                save_config_cameras(cameras)
+                                speak(f"Camera {input_cam+1} renamed to {new_name}.")
+                                log_event("CAM_RENAME", camera=new_name, detail=f"cam_id={input_cam}")
+                        else:
+                            source = int(url) if url.isdigit() else url
+                            threading.Thread(target=lambda c=cs,s=source: c.reconnect_to(s), daemon=True).start()
+                            log_event("CAM_CONFIG", camera=cs.name, detail=f"source={url}")
+                            speak(f"Connecting camera {input_cam+1}.")
                 input_mode = False; input_buf = ""; input_cam = -1
             elif key == 27:      # ESC
                 input_mode = False; input_buf = ""; input_cam = -1
@@ -3631,7 +3801,7 @@ def main():
             UI_HDR_H = min(150, UI_HDR_H + 4)
             speak(f"Header height {UI_HDR_H} pixels.")
         elif key in (9, ord('s'), ord('S'), 81, 83):  # TAB, 'S' key, or Arrow keys for robust OS compatibility
-            selected_cam_idx = (selected_cam_idx + 1) % 4
+            selected_cam_idx = (selected_cam_idx + 1) % len(cameras)
             speak(f"Camera {selected_cam_idx+1} selected.")
             if Config.focused_cam_idx >= 0:
                 Config.focused_cam_idx = selected_cam_idx
@@ -3659,11 +3829,23 @@ def main():
             log_event("MANUAL_ALARM", detail="user triggered")
             threat_engine.raise_threat("RED","MANUAL ALARM")
             _alarm(); speak("Warning. Manual alarm activated.")
+        elif key in (ord('a'), ord('A')):
+            input_mode = True; input_cam = -2; input_buf = ""
+            speak("Add new camera channel.")
+        elif key in (ord('e'), ord('E')):
+            input_mode = True; input_cam = selected_cam_idx; input_buf = ""
+            speak(f"Configure camera {selected_cam_idx+1}.")
+        elif key in (ord('i'), ord('I')):
+            Config.DETECT_NEW_IDS = not Config.DETECT_NEW_IDS
+            if Config.DETECT_NEW_IDS:
+                speak("Intruder detection activated.")
+            else:
+                speak("Intruder detection suspended. Saved IDs only.")
         elif key == ord('p'):
             phone_idx = next((i for i,c in enumerate(cameras)
                               if "PHONE" in c.name.upper() or "IP" in c.name.upper()), len(cameras)-1)
             input_mode = True; input_cam = phone_idx; input_buf = ""
-        elif key in (ord('1'),ord('2'),ord('3'),ord('4')):
+        elif ord('1') <= key <= ord('9'):
             cam_idx = key - ord('1')
             if cam_idx < len(cameras):
                 input_mode = True; input_cam = cam_idx; input_buf = ""

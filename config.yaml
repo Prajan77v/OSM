@@ -54,6 +54,7 @@ detection:
   motion_calib_frames: 30
 
 face_recognition:
+  detect_new_ids: true
   match_threshold: 0.40         # Lowered to 0.40 to allow highly robust matches under off-angles and shadows
   face_detect_model: "hog"
   pool_workers:
@@ -92,6 +93,8 @@ threat:
     OBJ_REMOVED: 0
     SYSTEM: 0
     BASELINE: 0
+    STATUS_CHANGE: 0
+
   decay_after_secs: 30
   dedup_secs: 60
   queue_size: 128

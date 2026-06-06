@@ -69,7 +69,7 @@ def init_web_server(cameras, get_telemetry_fn, get_events_fn, get_summary_fn, co
     _control_handlers = control_handlers
 
 
-def _save_config_yaml_and_env(username, confidence, model, tg_token, tg_chat_id):
+def _save_config_yaml_and_env(username, confidence, model, tg_token, tg_chat_id, detect_new_ids=True):
     # 1. Update/Create .env file
     env_path = str(WORKING_DIR / ".env")
     try:
@@ -107,7 +107,6 @@ def _save_config_yaml_and_env(username, confidence, model, tg_token, tg_chat_id)
             with open(yaml_path, "r", encoding="utf-8") as f:
                 lines = f.readlines()
         else:
-            # Create a default yaml structure if the file is completely missing
             lines = [
                 "operator:\n",
                 f'  username: "{username}"\n',
@@ -118,6 +117,7 @@ def _save_config_yaml_and_env(username, confidence, model, tg_token, tg_chat_id)
                 f'    MEDIUM: "{model}"\n',
                 f'    HIGH: "{model}"\n',
                 "face_recognition:\n",
+                f"  detect_new_ids: {str(detect_new_ids).lower()}\n",
                 f"  match_threshold: 0.60\n",
                 "threat:\n",
                 f'  tg_token: "{tg_token}"\n',
@@ -129,6 +129,7 @@ def _save_config_yaml_and_env(username, confidence, model, tg_token, tg_chat_id)
             sub_section = None
             tg_token_updated = False
             tg_chat_id_updated = False
+            detect_new_ids_updated = False
             for i, line in enumerate(lines):
                 striped = line.strip()
                 if striped.endswith(":") and not striped.startswith("-"):
@@ -154,6 +155,10 @@ def _save_config_yaml_and_env(username, confidence, model, tg_token, tg_chat_id)
                     elif striped.startswith("HIGH:"):
                         indent = line.split("HIGH:")[0]
                         lines[i] = f'{indent}HIGH: "{model}"\n'
+                elif current_section == "face_recognition" and striped.startswith("detect_new_ids:"):
+                    indent = line.split("detect_new_ids:")[0]
+                    lines[i] = f'{indent}detect_new_ids: {str(detect_new_ids).lower()}\n'
+                    detect_new_ids_updated = True
                 elif current_section == "threat":
                     if striped.startswith("tg_token:"):
                         indent = line.split("tg_token:")[0]
@@ -164,6 +169,15 @@ def _save_config_yaml_and_env(username, confidence, model, tg_token, tg_chat_id)
                         lines[i] = f'{indent}tg_chat_id: "{tg_chat_id}"\n'
                         tg_chat_id_updated = True
             
+            if not detect_new_ids_updated:
+                frec_idx = -1
+                for idx, line in enumerate(lines):
+                    if line.strip() == "face_recognition:":
+                        frec_idx = idx
+                        break
+                if frec_idx != -1:
+                    lines.insert(frec_idx + 1, f"  detect_new_ids: {str(detect_new_ids).lower()}\n")
+
             if not (tg_token_updated and tg_chat_id_updated):
                 threat_idx = -1
                 for idx, line in enumerate(lines):
@@ -359,7 +373,8 @@ def create_app() -> "FastAPI":
                 "confidence": sv.Config.CONFIDENCE,
                 "model": sv.Config.MODEL_NAME,
                 "tg_token": sv.Config.BOT_TOKEN,
-                "tg_chat_id": sv.Config.CHAT_ID
+                "tg_chat_id": sv.Config.CHAT_ID,
+                "detect_new_ids": getattr(sv.Config, "DETECT_NEW_IDS", True)
             })
         except Exception:
             # Mock fallback if loaded from dev_server
@@ -372,7 +387,8 @@ def create_app() -> "FastAPI":
                     "confidence": 0.45,
                     "model": "yolov8n.pt",
                     "tg_token": "8938780809:AAHzpgv_fbfbmXJ9x_ui44LY83CWnTWfKPo",
-                    "tg_chat_id": "8076971661"
+                    "tg_chat_id": "8076971661",
+                    "detect_new_ids": True
                 })
             except Exception as e:
                 return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
@@ -712,21 +728,21 @@ def create_app() -> "FastAPI":
                 sv = _get_sv()
                 if not sv:
                     raise Exception("Main module not running")
-                # Update runtime config variables
                 username = body.get("username", sv.Config.USERNAME)
                 confidence = float(body.get("confidence", sv.Config.CONFIDENCE))
                 model = body.get("model", sv.Config.MODEL_NAME)
                 tg_token = body.get("tg_token", sv.Config.BOT_TOKEN)
                 tg_chat_id = body.get("tg_chat_id", sv.Config.CHAT_ID)
+                detect_new_ids = bool(body.get("detect_new_ids", getattr(sv.Config, "DETECT_NEW_IDS", True)))
 
                 sv.Config.USERNAME = username
                 sv.Config.CONFIDENCE = confidence
                 sv.Config.MODEL_NAME = model
                 sv.Config.BOT_TOKEN = tg_token
                 sv.Config.CHAT_ID = tg_chat_id
+                sv.Config.DETECT_NEW_IDS = detect_new_ids
 
-                # Save to .env and config.yaml
-                _save_config_yaml_and_env(username, confidence, model, tg_token, tg_chat_id)
+                _save_config_yaml_and_env(username, confidence, model, tg_token, tg_chat_id, detect_new_ids)
                 return JSONResponse({"status": "ok", "result": "Configuration secured successfully"})
             except Exception as e:
                 return JSONResponse({"status": "error", "message": str(e)}, status_code=500)

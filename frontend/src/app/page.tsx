@@ -397,6 +397,7 @@ export default function Dashboard() {
   const [confThresh, setConfThresh] = useState(0.45);
   const [tgBotToken, setTgBotToken] = useState("8938780809:AAHzpgv_fbfbmXJ9x_ui44LY83CWnTWfKPo");
   const [tgChatId, setTgChatId] = useState("8076971661");
+  const [detectNewIds, setDetectNewIds] = useState(true);
   const [particlesActive, setParticlesActive] = useState(true);
   const [particleDensity, setParticleDensity] = useState(120);
 
@@ -461,6 +462,7 @@ export default function Dashboard() {
           setActiveModel(d.model || "yolov8n.pt");
           setTgBotToken(d.tg_token || "");
           setTgChatId(d.tg_chat_id || "");
+          setDetectNewIds(d.detect_new_ids !== false);
         }
       } catch {}
     };
@@ -788,7 +790,8 @@ export default function Dashboard() {
           confidence: confThresh,
           model: activeModel,
           tg_token: tgBotToken,
-          tg_chat_id: tgChatId
+          tg_chat_id: tgChatId,
+          detect_new_ids: detectNewIds
         })
       });
       const d = await r.json();
@@ -1233,6 +1236,18 @@ export default function Dashboard() {
                           value={confThresh}
                           onChange={(e) => setConfThresh(parseFloat(e.target.value))}
                           className="w-full accent-gold cursor-pointer"
+                        />
+                      </div>
+                      <div className="flex items-center justify-between mt-2 pt-2 border-t border-white/5">
+                        <span className="font-orbitron text-[9px] text-sec font-bold tracking-wider">DETECT NEW VISITOR / INTRUDER IDS</span>
+                        <input
+                          type="checkbox"
+                          checked={detectNewIds}
+                          onChange={(e) => {
+                            setDetectNewIds(e.target.checked);
+                            speakAI(e.target.checked ? "Intruder detection mode activated" : "Intruder detection suspended. Known operators only.");
+                          }}
+                          className="w-4 h-4 cursor-pointer accent-gold"
                         />
                       </div>
                     </div>
