@@ -3654,6 +3654,7 @@ def main():
     last_db_save = time.time()
     last_gc_time = time.time()
     last_threat_tick = time.time()
+    last_sys_graph_time = time.time()
     global selected_cam_idx, is_fs_state
     selected_cam_idx = 0
     is_fs_state = False
@@ -3710,9 +3711,10 @@ def main():
                 draw_center_bottom(dashboard, cameras, info_area_y)
             draw_footer_capsule(dashboard, cameras)
 
-        # Update system graphs every 2s
-        if int(time.time()*2) % 4 == 0:
-            _update_sys_graphs()
+        # Update system graphs every 2s in background thread to prevent GUI lag
+        if now - last_sys_graph_time > 2.0:
+            last_sys_graph_time = now
+            threading.Thread(target=_update_sys_graphs, daemon=True).start()
 
         if input_mode:
             draw_url_input_overlay(dashboard, input_cam, input_buf)
