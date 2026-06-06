@@ -855,8 +855,8 @@ def export_csv(path: str = "logs/events_export.csv"):
                 except: pass
     app_log.info(f"CSV exported -> {path}")
 
-def reset_log_files():
-    """Clear app.log, events.jsonl, events.log, and clear SQLite events/visits."""
+def reset_log_files(cameras=None):
+    """Clear app.log, events.jsonl, events.log, clear SQLite events/visits, and reset Today's summary metrics."""
     # Truncate pretty events log
     with _log_file_lock:
         try:
@@ -905,6 +905,31 @@ def reset_log_files():
         _wi.clear_events()
     except Exception:
         pass
+
+    # Reset running counters
+    global _total_detections, _known_persons, _unknown_persons, _objs_added, _objs_removed, _alerts_generated
+    _total_detections = 0
+    _known_persons = 0
+    _unknown_persons = 0
+    _objs_added = 0
+    _objs_removed = 0
+    _alerts_generated = 0
+
+    # Reset camera metrics
+    if cameras:
+        for cs in cameras:
+            cs.persons_detected = 0
+            cs.persons_left = 0
+
+    # Reset faces database: remove intruders, reset known visitor count
+    with _fdb_lock:
+        to_delete = [pid for pid, d in faces_db.items() if not d.get("known", False)]
+        for pid in to_delete:
+            del faces_db[pid]
+        for pid, d in faces_db.items():
+            if d.get("known", False):
+                d["visit_count"] = 0
+        _save_db_json()
 
     app_log.info("System logs and visits database cleared.")
     speak("System logs reset.")
@@ -3627,7 +3652,7 @@ def main():
         elif key == ord('c'):
             export_csv(); speak("Event log exported.")
         elif key == ord('l'):
-            reset_log_files()
+            reset_log_files(cameras)
         elif key == ord('r'):
             register_user_face(cameras, username=Config.USERNAME)
         elif key == ord(' '):

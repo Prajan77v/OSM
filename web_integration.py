@@ -294,7 +294,7 @@ def get_control_handlers(cameras, threat_engine) -> dict:
         try:
             sv = _get_sv()
             if sv:
-                sv.reset_log_files()
+                sv.reset_log_files(_cameras)
         except Exception as e:
             return f"Error: {e}"
         return "Logs cleared successfully"
