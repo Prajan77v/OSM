@@ -1238,17 +1238,19 @@ export default function Dashboard() {
                           className="w-full accent-gold cursor-pointer"
                         />
                       </div>
-                      <div className="flex items-center justify-between mt-2 pt-2 border-t border-white/5">
-                        <span className="font-orbitron text-[9px] text-sec font-bold tracking-wider">DETECT NEW VISITOR / INTRUDER IDS</span>
-                        <input
-                          type="checkbox"
-                          checked={detectNewIds}
-                          onChange={(e) => {
-                            setDetectNewIds(e.target.checked);
-                            speakAI(e.target.checked ? "Intruder detection mode activated" : "Intruder detection suspended. Known operators only.");
+                      <div className="flex items-center justify-between mt-1 pt-1.5 border-t border-white/5">
+                        <span className="font-orbitron text-[9.5px] text-sec font-bold tracking-wider">DETECT NEW VISITOR / INTRUDER IDS</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const newVal = !detectNewIds;
+                            setDetectNewIds(newVal);
+                            speakAI(newVal ? "Intruder detection mode activated" : "Intruder detection suspended. Known operators only.");
                           }}
-                          className="w-4 h-4 cursor-pointer accent-gold"
-                        />
+                          className="text-gold hover:text-gold-accent transition-colors"
+                        >
+                          {detectNewIds ? <ToggleRight size={32} /> : <ToggleLeft size={32} className="text-muted" />}
+                        </button>
                       </div>
                     </div>
 

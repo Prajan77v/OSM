@@ -29,7 +29,7 @@ cameras:
     location: "Mobile Sector D"
 
 detection:
-  confidence: 0.45
+  confidence: 0.95
   process_every_n:
     LOW: 4
     MEDIUM: 3
@@ -45,9 +45,9 @@ detection:
     MEDIUM: 256
     HIGH: 384
   model:
-    LOW: "yolov8n.pt"
-    MEDIUM: "yolov8n.pt"
-    HIGH: "yolov8s.pt"
+    LOW: "yolov8m.pt"
+    MEDIUM: "yolov8m.pt"
+    HIGH: "yolov8m.pt"
   idle_skip_extra: 2
   absent_cycles_thresh: 50
   motion_thresh_init: 300
@@ -84,6 +84,8 @@ ownership:
   abandonment_secs: 8.0         # secs owner must be away before alert
   
 threat:
+  tg_token: "8938780809:AAHzpgv_fbfbmXJ9x_ui44LY83CWnTWfKPo"
+  tg_chat_id: "8076971661"
   cooldown:
     PERSON_ENTERED: 60
     PERSON_RETURNED: 60
