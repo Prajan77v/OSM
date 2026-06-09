@@ -21,6 +21,7 @@ interface CameraInfo {
   id: number; name: string; location: string;
   online: boolean; disconnected: boolean; fps: number;
   persons: number; detections: number; threat_level: string; uptime: string;
+  active_subjects?: any[]; detections_list?: any[];
 }
 interface Telemetry {
   cpu: number; ram: number; disk: number; net_kb: number;
@@ -45,6 +46,8 @@ interface EnrolledUser {
   accuracy: number;
   role: string;
   status: string;
+  photo?: string;
+  pid?: string;
 }
 
 // ─── Nav items ───────────────────────────────────────────────────────────────
@@ -56,6 +59,7 @@ const NAV = [
   { id: "analytics",   icon: BarChart3,       label: "ANALYTICS" },
   { id: "events",      icon: AlertTriangle,   label: "EVENTS" },
   { id: "comms",       icon: MessageSquare,   label: "COMMUNICATION" },
+  { id: "enrollment",  icon: UserPlus,        label: "ENROLLMENT" },
   { id: "settings",    icon: Settings,        label: "SETTINGS" },
 ];
 
@@ -79,9 +83,19 @@ function eventLabel(ev: string) {
 }
 
 // ─── Particle Canvas Background (Luxury Golden Particles) ─────────────────────
-function ParticleCanvas({ active, density = 120 }: { active: boolean; density?: number }) {
+function ParticleCanvas({ active, density = 120, size = 3.0, thickness = 1.0 }: { active: boolean; density?: number; size?: number; thickness?: number }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const mouseRef = useRef({ x: 0, y: 0 });
+  const sizeRef = useRef(size);
+  const thicknessRef = useRef(thickness);
+
+  useEffect(() => {
+    sizeRef.current = size;
+  }, [size]);
+
+  useEffect(() => {
+    thicknessRef.current = thickness;
+  }, [thickness]);
 
   useEffect(() => {
     if (!active) return;
@@ -109,7 +123,7 @@ function ParticleCanvas({ active, density = 120 }: { active: boolean; density?: 
             y: e.clientY + (Math.random() - 0.5) * 8,
             vx: (Math.random() - 0.5) * 0.8,
             vy: (Math.random() - 0.5) * 0.8 - 0.2, // float slightly upward
-            r: Math.random() * 1.5 + 0.5,
+            r: (Math.random() * 1.5 + 0.5) * (sizeRef.current / 3.0),
             life: 1.0
           });
         }
@@ -143,7 +157,7 @@ function ParticleCanvas({ active, density = 120 }: { active: boolean; density?: 
           y: cy,
           vx: Math.cos(angle) * spd,
           vy: Math.sin(angle) * spd,
-          r: Math.random() * 2 + 0.8,
+          r: (Math.random() * 2 + 0.8) * (sizeRef.current / 3.0),
           life: 1.0
         });
       }
@@ -204,9 +218,13 @@ function ParticleCanvas({ active, density = 120 }: { active: boolean; density?: 
         if (p.y > canvas.height) p.y = 0;
 
         ctx.beginPath();
-        ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+        const rScaled = p.r * (sizeRef.current / 3.0);
+        ctx.arc(p.x, p.y, rScaled, 0, Math.PI * 2);
+        ctx.shadowBlur = 10;
+        ctx.shadowColor = "rgba(212, 175, 55, 0.8)";
         ctx.fillStyle = `rgba(212, 175, 55, ${p.alpha})`;
         ctx.fill();
+        ctx.shadowBlur = 0;
       });
 
       // Draw beautiful mesh lines between close particles
@@ -219,8 +237,8 @@ function ParticleCanvas({ active, density = 120 }: { active: boolean; density?: 
             ctx.beginPath();
             ctx.moveTo(particles[i].x, particles[i].y);
             ctx.lineTo(particles[j].x, particles[j].y);
-            ctx.strokeStyle = `rgba(212, 175, 55, ${0.15 * (1 - d/100)})`; // Upgraded link opacity: 3x stronger!
-            ctx.lineWidth = 0.75;                                          // Upgraded link thickness!
+            ctx.strokeStyle = `rgba(212, 175, 55, ${0.18 * (1 - d/100)})`;
+            ctx.lineWidth = thicknessRef.current * (1 - d/100);
             ctx.stroke();
           }
         }
@@ -398,11 +416,17 @@ export default function Dashboard() {
   const [tgBotToken, setTgBotToken] = useState("8938780809:AAHzpgv_fbfbmXJ9x_ui44LY83CWnTWfKPo");
   const [tgChatId, setTgChatId] = useState("8076971661");
   const [detectNewIds, setDetectNewIds] = useState(true);
+  const [useCuda, setUseCuda] = useState(true);
+  const [detectPeople, setDetectPeople] = useState(true);
+  const [detectObjects, setDetectObjects] = useState(true);
   const [particlesActive, setParticlesActive] = useState(true);
   const [particleDensity, setParticleDensity] = useState(120);
+  const [matchThresh, setMatchThresh] = useState(0.36);
+  const [particleSize, setParticleSize] = useState(3.0);
+  const [meshThickness, setMeshThickness] = useState(1.0);
 
-  // Reconnection state inside Camera view
   const [camConnectUrls, setCamConnectUrls] = useState<string[]>(["0", "NONE", "NONE", "NONE"]);
+  const [camNames, setCamNames] = useState<string[]>([]);
 
   // Memory database state
   const [knownUsers, setKnownUsers] = useState<EnrolledUser[]>([
@@ -410,6 +434,20 @@ export default function Dashboard() {
     { name: "Dev Team", visitCount: 84, lastSeen: "Yesterday 18:24", accuracy: 96.1, role: "Core Developer", status: "VERIFIED" },
     { name: "Support AI", visitCount: 210, lastSeen: "Today 05:00", accuracy: 99.8, role: "Autonomous Agent", status: "ACTIVE" }
   ]);
+  const [imgErrors, setImgErrors] = useState<Record<string, boolean>>({});
+
+  // Advanced Face Enrollment States
+  const [enrolledPeople, setEnrolledPeople] = useState<any[]>([]);
+  const [enrollTab, setEnrollTab] = useState<"directory" | "guided" | "folder" | "import_json">("directory");
+  const [guidedName, setGuidedName] = useState("");
+  const [guidedPid, setGuidedPid] = useState("");
+  const [guidedProgress, setGuidedProgress] = useState<Record<string, boolean>>({});
+  const [guidedActivePoseIdx, setGuidedActivePoseIdx] = useState(0);
+  const [guidedLog, setGuidedLog] = useState<string[]>([]);
+  const [importName, setImportName] = useState("");
+  const [importFolder, setImportFolder] = useState("");
+  const [importLog, setImportLog] = useState<string[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Success Face Recognition indicator
   const [isFaceUnlocked, setIsFaceUnlocked] = useState(false);
@@ -463,6 +501,12 @@ export default function Dashboard() {
           setTgBotToken(d.tg_token || "");
           setTgChatId(d.tg_chat_id || "");
           setDetectNewIds(d.detect_new_ids !== false);
+          setUseCuda(d.use_cuda !== false);
+          setDetectPeople(d.detect_people !== false);
+          setDetectObjects(d.detect_objects !== false);
+          setMatchThresh(d.match_threshold !== undefined ? d.match_threshold : 0.36);
+          setParticleSize(d.particle_size !== undefined ? d.particle_size : 3.0);
+          setMeshThickness(d.mesh_thickness !== undefined ? d.mesh_thickness : 1.0);
         }
       } catch {}
     };
@@ -480,6 +524,9 @@ export default function Dashboard() {
         fetch(`${API}/api/faces`).then(r => r.json()),
       ]);
       setCameras(camRes);
+      if (Array.isArray(camRes) && camRes.length > 0) {
+        setCamNames(prev => prev.length === 0 ? camRes.map((c: any) => c.name) : prev);
+      }
       setTelemetry(telRes);
       setEvents(evtRes.slice(-15).reverse());
       setSummary(sumRes);
@@ -491,6 +538,11 @@ export default function Dashboard() {
       setRamHistory(h => [...h.slice(1), telRes.ram || 0]);
       setNetHistory(h => [...h.slice(1), Math.min(telRes.net_kb || 0, 100)]);
       setGpuHistory(h => [...h.slice(1), telRes.gpu || 0]);
+
+      // Sync Auto Register state from backend telemetry (keeps both UIs in sync)
+      if (typeof telRes.detect_new_ids === "boolean") {
+        setDetectNewIds(telRes.detect_new_ids);
+      }
 
       const activeCamDets = camRes[activeCam]?.persons || 0;
       if (activeCamDets > 0) {
@@ -722,6 +774,243 @@ export default function Dashboard() {
     }
   };
 
+  // ── Rename camera channel ──────────────────────────────────────────────────
+  const renameCam = async (idx: number) => {
+    const newName = camNames[idx]?.trim();
+    if (!newName) return;
+    setBtnLoading(prev => ({ ...prev, [`rename_cam_${idx}`]: true }));
+    try {
+      const r = await fetch(`${API}/api/camera/${idx}/rename`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: newName }),
+      });
+      const d = await r.json();
+      if (d.status === "ok") {
+        speakAI(`Camera ${idx + 1} renamed to ${newName}`);
+        fetchAll();
+      }
+    } catch {}
+    setBtnLoading(prev => ({ ...prev, [`rename_cam_${idx}`]: false }));
+  };
+
+  // ── Forget registered face profile ───────────────────────────────────────
+  const forgetFace = async (name: string) => {
+    const confirmForget = window.confirm(`Forget and delete all biometric profiles for '${name}'?`);
+    if (!confirmForget) return;
+    try {
+      const r = await fetch(`${API}/api/face/${encodeURIComponent(name)}`, {
+        method: "DELETE",
+      });
+      const d = await r.json();
+      if (d.status === "ok") {
+        speakAI(`System profile forgotten: ${name}`);
+        fetchAll();
+      } else {
+        alert(d.message || "Failed to delete profile");
+      }
+    } catch (err) {
+      alert("Error deleting face profile");
+    }
+  };
+
+  // Advanced Face Enrollment functions & effects
+  const POSES = ["front", "left", "right", "slight_left", "slight_right", "up", "down", "neutral", "smiling", "glasses", "no_glasses"];
+
+  const loadEnrolledPeople = useCallback(async () => {
+    try {
+      const res = await fetch(`${API}/api/enroll/people`);
+      if (res.ok) {
+        const data = await res.json();
+        setEnrolledPeople(data);
+      }
+    } catch (e) {
+      console.error("Error loading enrolled people:", e);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeNav === "enrollment") {
+      loadEnrolledPeople();
+    }
+  }, [activeNav, loadEnrolledPeople]);
+
+  const startGuidedEnrollment = async (name: string, pidVal?: string) => {
+    try {
+      const res = await fetch(`${API}/api/enroll/start`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, pid: pidVal || "" }),
+      });
+      const data = await res.json();
+      if (data.status === "ok") {
+        setGuidedPid(data.pid);
+        setGuidedName(data.name);
+        setGuidedActivePoseIdx(0);
+        setGuidedLog([`Enrollment session started for ${data.name} (ID: ${data.pid})`]);
+        setEnrollTab("guided");
+        const progressRes = await fetch(`${API}/api/enroll/status/${data.pid}`);
+        const progressData = await progressRes.json();
+        if (progressData.status === "ok") {
+          setGuidedProgress(progressData.progress);
+        }
+      } else {
+        alert("Error starting enrollment: " + (data.message || "Unknown error"));
+      }
+    } catch (e: any) {
+      alert("Network error: " + e.message);
+    }
+  };
+
+  const captureGuidedPose = async (pose: string) => {
+    setBtnLoading(prev => ({ ...prev, capture_pose: true }));
+    try {
+      const res = await fetch(`${API}/api/enroll/capture/${guidedPid}/${pose}`, { method: "POST" });
+      const data = await res.json();
+      if (res.ok && data.status === "ok") {
+        setGuidedLog(prev => [...prev, `✓ Pose '${pose}' captured: Size: ${data.face_size}, Blur: ${data.blur_score.toFixed(1)}, Conf: ${data.confidence.toFixed(2)}`]);
+        setGuidedProgress(prev => ({ ...prev, [pose]: true }));
+        if (guidedActivePoseIdx < POSES.length - 1) {
+          setGuidedActivePoseIdx(prev => prev + 1);
+        }
+      } else {
+        setGuidedLog(prev => [...prev, `✗ Pose '${pose}' rejected: ${data.message || "Failed checks"}`]);
+      }
+    } catch (e: any) {
+      setGuidedLog(prev => [...prev, `✗ Network error capturing pose: ${e.message}`]);
+    } finally {
+      setBtnLoading(prev => ({ ...prev, capture_pose: false }));
+    }
+  };
+
+  const saveGuidedEnrollment = async () => {
+    setBtnLoading(prev => ({ ...prev, save_enroll: true }));
+    try {
+      const res = await fetch(`${API}/api/enroll/save/${guidedPid}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: guidedName })
+      });
+      const data = await res.json();
+      if (res.ok && data.status === "ok") {
+        setGuidedLog(prev => [...prev, `✓ Profile saved successfully! Registered ${data.embeddings_count} embeddings.`]);
+        alert(`Successfully enrolled ${guidedName} with ${data.embeddings_count} embeddings!`);
+        setEnrollTab("directory");
+        loadEnrolledPeople();
+      } else {
+        setGuidedLog(prev => [...prev, `✗ Save failed: ${data.message}`]);
+        alert("Failed to save profile: " + data.message);
+      }
+    } catch (e: any) {
+      alert("Network error saving profile: " + e.message);
+    } finally {
+      setBtnLoading(prev => ({ ...prev, save_enroll: false }));
+    }
+  };
+
+  const handleFolderImport = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!importName.trim() || !importFolder.trim()) return;
+    setImportLoading(true);
+    setImportLog([`Starting folder import from: ${importFolder}...`]);
+    try {
+      const res = await fetch(`${API}/api/enroll/import`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: importName, folder_path: importFolder })
+      });
+      const data = await res.json();
+      if (res.ok && data.status === "ok") {
+        setImportLog(prev => [
+          ...prev,
+          `✓ Successfully imported profile ${data.name} (ID: ${data.pid})`,
+          `✓ Accepted ${data.accepted_count} images`,
+          `✓ Skipped ${data.duplicates_skipped} duplicates`
+        ]);
+        if (data.rejected_reasons && data.rejected_reasons.length > 0) {
+          setImportLog(prev => [...prev, ...data.rejected_reasons.map((r: string) => `- Rejected: ${r}`)]);
+        }
+        alert(`Folder import successful! Imported ${data.accepted_count} images.`);
+        setImportName("");
+        setImportFolder("");
+        loadEnrolledPeople();
+      } else {
+        setImportLog(prev => [...prev, `✗ Import failed: ${data.message}`]);
+        alert("Import failed: " + data.message);
+      }
+    } catch (err: any) {
+      setImportLog(prev => [...prev, `✗ Network error during import: ${err.message}`]);
+    } finally {
+      setImportLoading(false);
+    }
+  };
+
+  const rebuildEnrollment = async (pid: string) => {
+    setBtnLoading(prev => ({ ...prev, [`rebuild_${pid}`]: true }));
+    try {
+      const res = await fetch(`${API}/api/enroll/rebuild/${pid}`, { method: "POST" });
+      const data = await res.json();
+      if (res.ok && data.status === "ok") {
+        alert(data.message);
+        loadEnrolledPeople();
+      } else {
+        alert("Rebuild failed: " + data.message);
+      }
+    } catch (e: any) {
+      alert("Network error rebuilding profile: " + e.message);
+    } finally {
+      setBtnLoading(prev => ({ ...prev, [`rebuild_${pid}`]: false }));
+    }
+  };
+
+  const deleteEnrollment = async (pid: string) => {
+    if (!confirm(`Are you sure you want to permanently delete profile ${pid}? This will remove all enrolled images and metadata.`)) return;
+    setBtnLoading(prev => ({ ...prev, [`delete_${pid}`]: true }));
+    try {
+      const res = await fetch(`${API}/api/enroll/profile/${pid}`, { method: "DELETE" });
+      const data = await res.json();
+      if (res.ok && data.status === "ok") {
+        alert(data.message);
+        loadEnrolledPeople();
+      } else {
+        alert("Delete failed: " + data.message);
+      }
+    } catch (e: any) {
+      alert("Network error deleting profile: " + e.message);
+    } finally {
+      setBtnLoading(prev => ({ ...prev, [`delete_${pid}`]: false }));
+    }
+  };
+
+  const handleJsonImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      try {
+        const body = JSON.parse(event.target?.result as string);
+        const res = await fetch(`${API}/api/enroll/import_profile`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body)
+        });
+        const data = await res.json();
+        if (res.ok && data.status === "ok") {
+          alert(`Successfully imported profile package for ${data.name}!`);
+          loadEnrolledPeople();
+          setEnrollTab("directory");
+        } else {
+          alert("Import failed: " + data.message);
+        }
+      } catch (err: any) {
+        alert("Error parsing or importing JSON: " + err.message);
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const [importLoading, setImportLoading] = useState(false);
+
   // ── Local Face enrollment wizard handler ─────────────────────────────────
   const completeEnrollment = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -791,19 +1080,25 @@ export default function Dashboard() {
           model: activeModel,
           tg_token: tgBotToken,
           tg_chat_id: tgChatId,
-          detect_new_ids: detectNewIds
+          detect_new_ids: detectNewIds,
+          use_cuda: useCuda,
+          detect_people: detectPeople,
+          detect_objects: detectObjects,
+          match_threshold: matchThresh,
+          particle_size: particleSize,
+          mesh_thickness: meshThickness
         })
       });
       const d = await r.json();
       if (d.status === "ok") {
-        setControlMsg("Configuration secured successfully");
+        setControlMsg("Configuration saved successfully.");
         speakAI("Configuration secured");
       } else {
-        setControlMsg("Saving failed: " + d.message);
+        setControlMsg("Configuration could not be saved. Check logs for details.");
         speakAI("Configuration failed");
       }
     } catch (err) {
-      setControlMsg("Transmission failed: " + err);
+      setControlMsg("Configuration could not be saved. Check logs for details.");
       speakAI("Transmission failed");
     } finally {
       setBtnLoading(b => ({ ...b, "save_settings": false }));
@@ -818,7 +1113,7 @@ export default function Dashboard() {
     <div className="w-screen h-screen overflow-hidden flex bg-[#050505] p-3 gap-3 text-[#FFFFFF] font-inter">
       {/* Luxury Ambient Background */}
       <div className="oms-bg" />
-      <ParticleCanvas active={particlesActive} density={particleDensity} />
+       <ParticleCanvas active={particlesActive} density={particleDensity} size={particleSize} thickness={meshThickness} />
 
       {/* ── 1. LEFT EXPANDABLE NAVIGATION RAIL (Perfect Flex sizing, no overlap!) ─ */}
       <motion.nav
@@ -952,8 +1247,7 @@ export default function Dashboard() {
           {/* DYNAMIC MIDDLE VIEW CONTROLLER */}
           <div className="flex-[1.55] flex flex-col gap-3 min-w-0 h-full overflow-hidden">
             
-            {/* OVERVIEW & DETECTION ROUTE VIEW */}
-            {(activeNav === "overview" || activeNav === "detection" || activeNav === "tactical") && (
+            {activeNav === "overview" && (
               <div className="flex-1 flex flex-col gap-3 min-h-0 min-w-0 h-full">
                 
                 {/* Cinematic camera viewport */}
@@ -1157,6 +1451,637 @@ export default function Dashboard() {
               </div>
             )}
 
+            {/* FULLY FUNCTIONAL DYNAMIC DETECTION MATRIX */}
+            {activeNav === "detection" && (
+              <motion.div
+                initial={{ opacity: 0, scale: 0.98 }}
+                animate={{ opacity: 1, scale: 1 }}
+                className="glass-premium flex-1 p-6 flex flex-col min-h-0 h-full overflow-hidden"
+              >
+                <div className="flex items-center justify-between border-b border-white/5 pb-4 mb-4 flex-shrink-0">
+                  <div className="flex items-center gap-3">
+                    <Crosshair className="text-gold-accent animate-pulse" size={20} />
+                    <h2 className="font-orbitron text-base font-black text-gold-accent tracking-widest uppercase">
+                      OMS TARGET DETECTION MATRIX
+                    </h2>
+                  </div>
+                  <span className="font-orbitron text-xs font-bold text-sec bg-white/5 px-3 py-1 rounded tracking-widest">
+                    ACTIVE SOURCE: CAM {activeCam + 1}
+                  </span>
+                </div>
+
+                <div className="flex-1 flex gap-4 min-h-0">
+                  {/* Left Column: Active subjects */}
+                  <div className="flex-1 glass-premium p-4 flex flex-col min-h-0 bg-black/20" style={{ borderRadius: 16 }}>
+                    <h4 className="font-orbitron text-xs font-bold text-gold tracking-widest uppercase flex items-center gap-2 border-b border-white/5 pb-2 mb-3 flex-shrink-0">
+                      <UserCheck size={14} /> ACTIVE TARGET SIGNATURES
+                    </h4>
+                    <div className="flex-1 overflow-y-auto pr-1 flex flex-col gap-3">
+                      {activeCamInfo?.active_subjects && activeCamInfo.active_subjects.length > 0 ? (
+                        activeCamInfo.active_subjects.map((subj: any, i: number) => (
+                          <div key={i} className="glass-premium bg-black/40 p-3 flex items-center gap-4 hover:border-gold-dim/15 transition-all" style={{ borderRadius: 12 }}>
+                            <div className="w-14 h-14 rounded-lg bg-black border border-white/10 overflow-hidden relative flex-shrink-0">
+                              <img
+                                src={`${API}/api/crop/${subj.pid}`}
+                                alt={subj.name}
+                                className="w-full h-full object-cover"
+                                onError={(e) => {
+                                  (e.target as HTMLImageElement).src = `https://api.dicebear.com/7.x/bottts/svg?seed=${subj.pid}`;
+                                }}
+                              />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2">
+                                <span className={`font-orbitron text-xs font-black tracking-wider ${subj.known ? "text-green-oms" : "text-red-500"}`}>
+                                  {subj.name}
+                                </span>
+                                <span className="font-mono text-[9px] text-sec">({subj.pid})</span>
+                              </div>
+                              <div className="flex gap-4 text-[10px] text-sec mt-1">
+                                <span>VERIFICATION: <span className={subj.known ? "text-green-oms font-bold" : "text-red-500 font-bold"}>{subj.known ? "AUTHORIZED" : "INTRUDER"}</span></span>
+                                <span>CONFIDENCE: <span className="font-mono text-gold-accent font-bold">{(subj.confidence * 100).toFixed(1)}%</span></span>
+                              </div>
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="flex-1 flex flex-col items-center justify-center text-center gap-3 text-muted">
+                          <Eye size={24} className="text-muted/40 animate-pulse" />
+                          <span className="font-orbitron text-[9px] tracking-widest">AWAITING FACE IDENTIFICATION PROTOCOLS...</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Right Column: YOLO detections list */}
+                  <div className="flex-1 glass-premium p-4 flex flex-col min-h-0 bg-black/20" style={{ borderRadius: 16 }}>
+                    <h4 className="font-orbitron text-xs font-bold text-gold tracking-widest uppercase flex items-center gap-2 border-b border-white/5 pb-2 mb-3 flex-shrink-0">
+                      <Cpu size={14} /> NEURAL OBJECT DETECTIONS ({(activeCamInfo as any)?.detections_list?.length || 0})
+                    </h4>
+                    <div className="flex-1 overflow-y-auto pr-1 flex flex-col gap-2">
+                      {(activeCamInfo as any)?.detections_list && (activeCamInfo as any).detections_list.length > 0 ? (
+                        (activeCamInfo as any).detections_list.map((det: any, i: number) => (
+                          <div key={i} className="glass-premium bg-black/30 p-3 flex items-center justify-between gap-4 border border-white/5" style={{ borderRadius: 12 }}>
+                            <div>
+                              <span className="font-orbitron text-[10.5px] font-black text-gold-accent tracking-widest uppercase block">
+                                {det.label}
+                              </span>
+                              <span className="font-mono text-[9px] text-sec block mt-0.5">
+                                Target Area: [{det.box ? det.box.join(", ") : "0, 0, 0, 0"}]
+                              </span>
+                            </div>
+                            <div className="glass-premium bg-white/5 px-2.5 py-1 rounded text-right">
+                              <span className="font-mono text-xs font-bold text-[#00FFA3]">{(det.conf * 100).toFixed(0)}%</span>
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="flex-1 flex flex-col items-center justify-center text-center gap-3 text-muted">
+                          <Radar size={24} className="text-muted/40 animate-pulse" />
+                          <span className="font-orbitron text-[9px] tracking-widest">NO NEURAL DETECTION SIGNATURES ACTIVE</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+
+            {/* FULLY FUNCTIONAL DYNAMIC TACTICAL SONAR */}
+            {activeNav === "tactical" && (
+              <motion.div
+                initial={{ opacity: 0, scale: 0.98 }}
+                animate={{ opacity: 1, scale: 1 }}
+                className="glass-premium flex-1 p-6 flex flex-col min-h-0 h-full overflow-hidden"
+              >
+                <div className="flex items-center justify-between border-b border-white/5 pb-4 mb-4 flex-shrink-0">
+                  <div className="flex items-center gap-3">
+                    <Radar className="text-gold-accent animate-pulse" size={20} />
+                    <h2 className="font-orbitron text-base font-black text-gold-accent tracking-widest uppercase">
+                      OMS TACTICAL SONAR MATRIX
+                    </h2>
+                  </div>
+                  <span className="font-orbitron text-xs font-bold text-red-500 bg-red-950/20 border border-red-500/20 px-3 py-1 rounded tracking-widest animate-pulse">
+                    SECURE CONNECTION
+                  </span>
+                </div>
+
+                <div className="flex-1 grid grid-cols-2 gap-5 min-h-0">
+                  {/* Left Side: Circular SVG Radar scanning animation */}
+                  <div className="glass-premium p-4 flex flex-col items-center justify-center bg-black/20 relative overflow-hidden" style={{ borderRadius: 16 }}>
+                    <h4 className="font-orbitron text-xs font-bold text-gold tracking-widest uppercase flex items-center gap-2 border-b border-white/5 pb-2 mb-3 w-full flex-shrink-0">
+                      <Crosshair size={14} /> SONAR GRID RADAR SCAN
+                    </h4>
+                    
+                    <div className="relative w-64 h-64 flex items-center justify-center border border-gold-dim/15 rounded-full my-auto shadow-2xl">
+                      {/* Radar sweep background circles */}
+                      <div className="absolute w-48 h-48 border border-dashed border-gold-dim/10 rounded-full" />
+                      <div className="absolute w-32 h-32 border border-solid border-gold-dim/10 rounded-full" />
+                      <div className="absolute w-16 h-16 border border-dashed border-gold-dim/10 rounded-full" />
+                      
+                      {/* Scanning sweeping arm */}
+                      <div className="absolute inset-0 rounded-full overflow-hidden pointer-events-none">
+                        <div 
+                          className="w-1/2 h-full bg-gradient-to-r from-transparent to-gold-accent/15 origin-right animate-spin" 
+                          style={{ animationDuration: "4s", animationTimingFunction: "linear" }}
+                        />
+                      </div>
+                      
+                      {/* Radar blips (targets) */}
+                      {cameras.map((cam, i) => {
+                        if (!cam.online) return null;
+                        const angle = (i * 90 + 45) * (Math.PI / 180);
+                        const radius = 80;
+                        const x = Math.cos(angle) * radius;
+                        const y = Math.sin(angle) * radius;
+                        const hasPerson = cam.persons > 0;
+                        return (
+                          <div 
+                            key={i}
+                            className={`absolute w-3 h-3 rounded-full flex items-center justify-center transition-all duration-300
+                              ${hasPerson ? "bg-red-500 shadow-red-glow" : "bg-green-oms shadow-gold-glow"}`}
+                            style={{ 
+                              transform: `translate(${x}px, ${y}px)`,
+                              animation: hasPerson ? "ping 1.5s infinite" : "none"
+                            }}
+                            title={`CAM ${cam.id + 1}: ${cam.name}`}
+                          >
+                            <span className="absolute text-[8px] font-orbitron font-bold text-[#FFFFFF] bg-black/80 px-1 py-0.5 rounded -top-5 whitespace-nowrap">
+                              CAM {cam.id + 1}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Right Side: Zone Status & Threat Level Indicator */}
+                  <div className="glass-premium p-4 flex flex-col min-h-0 bg-black/20 gap-4" style={{ borderRadius: 16 }}>
+                    <h4 className="font-orbitron text-xs font-bold text-gold tracking-widest uppercase flex items-center gap-2 border-b border-white/5 pb-2 mb-1 flex-shrink-0">
+                      <AlertTriangle size={14} /> SECURITY THREAT MATRIX
+                    </h4>
+
+                    {/* Threat level panel */}
+                    <div className="glass-premium bg-black/40 p-4 rounded-xl flex items-center justify-between border border-white/5" style={{ borderRadius: 12 }}>
+                      <div>
+                        <span className="font-orbitron text-[9.5px] text-sec font-bold tracking-wider block">CURRENT THREAT LEVEL</span>
+                        <span className={`font-orbitron text-xl font-black tracking-widest uppercase block mt-1
+                          ${telemetry?.threat_level === "RED" ? "text-red-500 animate-pulse" : 
+                            telemetry?.threat_level === "AMBER" ? "text-amber-500" : "text-green-oms"}`}
+                        >
+                          {telemetry?.threat_level || "GREEN"} STATE
+                        </span>
+                      </div>
+                      <div className="flex gap-2">
+                        <button 
+                          onClick={() => doControl("alarm")}
+                          className="btn-gold-luxury border-red-500/20 text-red-400 hover:text-red-300 hover:bg-red-500/10 py-2 px-3 text-[9px] uppercase tracking-widest font-orbitron"
+                        >
+                          ALARM
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Active Zones Grid */}
+                    <div className="flex-1 flex flex-col min-h-0">
+                      <span className="font-orbitron text-[9px] text-sec font-bold tracking-wider mb-2 uppercase block">PROTECTED ZONES MATRIX</span>
+                      <div className="flex-1 overflow-y-auto pr-1 flex flex-col gap-2">
+                        {cameras.map((cam, i) => {
+                          const hasPerson = cam.persons > 0;
+                          return (
+                            <div key={i} className="glass-premium bg-black/30 p-3 flex items-center justify-between gap-3 border border-white/5" style={{ borderRadius: 12 }}>
+                              <div>
+                                <span className="font-orbitron text-xs font-bold text-gold tracking-widest uppercase block">
+                                  {cam.location || `SECTOR ZONE ${i + 1}`}
+                                </span>
+                                <span className="font-inter text-[9.5px] text-sec block mt-0.5">
+                                  Linked Sensor: {cam.name}
+                                </span>
+                              </div>
+                              <span className={`font-orbitron text-[9px] font-black px-2.5 py-1 rounded tracking-widest leading-none border
+                                ${hasPerson ? 
+                                  "text-red-500 bg-red-950/20 border-red-500/20 animate-pulse" : 
+                                  "text-green-oms bg-green-950/20 border-green-500/20"}`}
+                              >
+                                {hasPerson ? "INTRUSION" : "SECURE"}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+
+            {/* FULLY FUNCTIONAL DYNAMIC ADVANCED FACE ENROLLMENT MATRIX */}
+            {activeNav === "enrollment" && (
+              <motion.div
+                initial={{ opacity: 0, scale: 0.98 }}
+                animate={{ opacity: 1, scale: 1 }}
+                className="glass-premium flex-1 p-6 flex flex-col min-h-0 h-full overflow-hidden"
+              >
+                <div className="flex items-center justify-between border-b border-white/5 pb-4 mb-4 flex-shrink-0">
+                  <div className="flex items-center gap-3">
+                    <UserPlus className="text-gold-accent animate-pulse" size={20} />
+                    <h2 className="font-orbitron text-base font-black text-gold-accent tracking-widest uppercase">
+                      OMS ADVANCED FACE ENROLLMENT PROTOCOLS
+                    </h2>
+                  </div>
+                  <div className="flex gap-2">
+                    {[
+                      { id: "directory", label: "ENROLLED DIRECTORY" },
+                      { id: "guided", label: "GUIDED CAPTURE" },
+                      { id: "folder", label: "FOLDER IMPORT" },
+                      { id: "import_json", label: "PROFILE IMPORT" }
+                    ].map(tab => (
+                      <button
+                        key={tab.id}
+                        type="button"
+                        onClick={() => {
+                          setEnrollTab(tab.id as any);
+                          if (tab.id === "directory") loadEnrolledPeople();
+                        }}
+                        className={`font-orbitron text-[9px] font-bold tracking-widest px-3 py-1.5 rounded-lg border transition-all duration-300 ${
+                          enrollTab === tab.id
+                            ? "bg-gold/15 border-gold text-gold-accent shadow-gold-glow"
+                            : "bg-black/40 border-white/10 text-muted hover:border-white/20 hover:text-white"
+                        }`}
+                      >
+                        {tab.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="flex-1 min-h-0 min-w-0">
+                  {/* Pane 1: Enrolled Directory */}
+                  {enrollTab === "directory" && (
+                    <div className="flex flex-col h-full min-h-0">
+                      <div className="flex-1 overflow-y-auto pr-1 flex flex-col gap-3">
+                        {enrolledPeople.length > 0 ? (
+                          enrolledPeople.map((person) => (
+                            <div
+                              key={person.pid}
+                              className="glass-premium bg-black/40 p-4 border border-white/5 hover:border-gold-dim/15 hover:bg-gold/5 transition-all flex items-center justify-between gap-6"
+                              style={{ borderRadius: 16 }}
+                            >
+                              <div className="flex items-center gap-4 min-w-0">
+                                <div className="w-16 h-16 rounded-xl bg-black border border-white/10 overflow-hidden relative flex-shrink-0 flex items-center justify-center">
+                                  {person.photo ? (
+                                    <img
+                                      src={`${API}/${person.photo}`}
+                                      alt={person.name}
+                                      className="w-full h-full object-cover"
+                                      onError={(e) => {
+                                        (e.target as HTMLImageElement).src = `https://api.dicebear.com/7.x/bottts/svg?seed=${person.pid}`;
+                                      }}
+                                    />
+                                  ) : (
+                                    <span className="font-orbitron text-lg font-black text-gold">
+                                      {person.name.slice(0, 2).toUpperCase()}
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="min-w-0">
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-orbitron text-sm font-black text-white truncate leading-none">
+                                      {person.name}
+                                    </span>
+                                    <span className="font-mono text-[9px] text-sec leading-none">({person.pid})</span>
+                                  </div>
+                                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 mt-2 text-[10px] font-mono text-sec">
+                                    <span>TYPE: <span className="text-[#00E5FF] font-bold">{person.type.toUpperCase()} PROFILE</span></span>
+                                    <span>ENROLLED IMAGES: <span className="text-gold-accent font-bold">{person.image_count} POSES</span></span>
+                                    <span className="col-span-2 truncate">ENROLLED ON: <span className="text-white">{person.first_seen || "System Registry"}</span></span>
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div className="flex items-center gap-2 flex-shrink-0">
+                                <button
+                                  onClick={() => startGuidedEnrollment(person.name, person.pid)}
+                                  className="btn-gold-luxury py-2 px-3 text-[9px] uppercase tracking-wider"
+                                  title="Add more photos using guided capture"
+                                >
+                                  ADD PHOTOS
+                                </button>
+                                <button
+                                  onClick={() => rebuildEnrollment(person.pid)}
+                                  disabled={btnLoading[`rebuild_${person.pid}`]}
+                                  className="btn-gold-luxury py-2 px-3 text-[9px] uppercase tracking-wider"
+                                  title="Re-extract SFace embeddings from stored crops"
+                                >
+                                  {btnLoading[`rebuild_${person.pid}`] ? (
+                                    <RefreshCw size={10} className="animate-spin" />
+                                  ) : (
+                                    <RefreshCw size={10} />
+                                  )}
+                                  REBUILD
+                                </button>
+                                <a
+                                  href={`${API}/api/enroll/export/${person.pid}`}
+                                  download
+                                  className="btn-gold-luxury py-2 px-3 text-[9px] uppercase tracking-wider flex items-center gap-1.5"
+                                  title="Export profile package to JSON"
+                                >
+                                  <Download size={10} />
+                                  EXPORT
+                                </a>
+                                <button
+                                  onClick={() => deleteEnrollment(person.pid)}
+                                  disabled={btnLoading[`delete_${person.pid}`]}
+                                  className="btn-danger-luxury py-2 px-3 text-[9px] uppercase tracking-wider flex items-center gap-1.5"
+                                  title="Permanently remove profile registry"
+                                >
+                                  {btnLoading[`delete_${person.pid}`] ? (
+                                    <Trash size={10} className="animate-spin" />
+                                  ) : (
+                                    <Trash size={10} />
+                                  )}
+                                  DELETE
+                                </button>
+                              </div>
+                            </div>
+                          ))
+                        ) : (
+                          <div className="flex-1 flex flex-col items-center justify-center text-center gap-3 text-muted py-12">
+                            <Database size={32} className="text-muted/40 animate-pulse" />
+                            <span className="font-orbitron text-xs tracking-widest uppercase">No advanced face profiles registered in system</span>
+                            <span className="font-inter text-[10px] text-sec max-w-md">Initialize guided pose enrollment or import local directories to create highly accurate multi-angle identity records.</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Pane 2: Guided Capture */}
+                  {enrollTab === "guided" && (
+                    <div className="grid grid-cols-2 gap-5 h-full min-h-0">
+                      {/* Left: Interactive pose guide & Capture controls */}
+                      <div className="glass-premium p-5 flex flex-col min-h-0 bg-black/20 justify-between gap-4" style={{ borderRadius: 16 }}>
+                        {!guidedPid ? (
+                          <form
+                            onSubmit={(e) => {
+                              e.preventDefault();
+                              const inputName = (e.target as any).elements.guidedNameInput.value.trim();
+                              if (inputName) startGuidedEnrollment(inputName);
+                            }}
+                            className="flex flex-col gap-4 my-auto max-w-xs w-full mx-auto"
+                          >
+                            <h4 className="font-orbitron text-xs font-black text-gold-accent tracking-widest text-center uppercase">INITIALIZE SESSION</h4>
+                            <div className="flex flex-col gap-1.5">
+                              <label className="font-orbitron text-[9px] text-sec font-bold tracking-wider">TARGET NAME</label>
+                              <input
+                                name="guidedNameInput"
+                                type="text"
+                                required
+                                placeholder="e.g. John Doe"
+                                className="glass-premium bg-black/60 border border-white/10 text-white font-mono text-sm px-4 py-3 rounded-xl outline-none focus:border-gold-accent transition-colors"
+                              />
+                            </div>
+                            <button type="submit" className="btn-gold-luxury py-3 justify-center gap-2">
+                              <UserPlus size={14} />
+                              INITIALIZE PROTOCOL
+                            </button>
+                          </form>
+                        ) : (
+                          <>
+                            <div>
+                              <div className="flex justify-between items-center border-b border-white/5 pb-2 mb-3">
+                                <div>
+                                  <h4 className="font-orbitron text-xs font-black text-gold-accent tracking-wider uppercase">SESSION ACTIVE: {guidedName}</h4>
+                                  <span className="font-mono text-[9px] text-sec block mt-0.5">Registry ID: {guidedPid}</span>
+                                </div>
+                                <button
+                                  onClick={() => {
+                                    if (confirm("Cancel current enrollment? Captured poses will not be registered.")) {
+                                      setGuidedPid("");
+                                      setGuidedName("");
+                                      setGuidedProgress({});
+                                      setGuidedLog([]);
+                                      setEnrollTab("directory");
+                                    }
+                                  }}
+                                  className="text-red-400 hover:text-red-300 font-orbitron text-[9px] font-bold tracking-widest"
+                                >
+                                  CANCEL
+                                </button>
+                              </div>
+
+                              {/* Active Pose Instruction */}
+                              <div className="glass-premium bg-black/50 p-4 border border-gold-dim/10 flex flex-col items-center justify-center text-center gap-2 mb-4" style={{ borderRadius: 12 }}>
+                                <span className="font-orbitron text-[9px] text-sec font-black tracking-widest uppercase">ACTIVE TARGET POSE REQUIRED</span>
+                                <h3 className="font-orbitron text-xl font-black text-[#FFD700] glow-gold uppercase tracking-wider animate-pulse">
+                                  {POSES[guidedActivePoseIdx] ? POSES[guidedActivePoseIdx].replace("_", " ") : "ALL POSES CAPTURED"}
+                                </h3>
+                                <p className="font-inter text-[9.5px] text-sec max-w-xs mt-1">
+                                  {POSES[guidedActivePoseIdx] === "front" && "Look straight into the camera lens with a neutral face."}
+                                  {POSES[guidedActivePoseIdx] === "left" && "Turn your head to look directly towards your left side."}
+                                  {POSES[guidedActivePoseIdx] === "right" && "Turn your head to look directly towards your right side."}
+                                  {POSES[guidedActivePoseIdx] === "slight_left" && "Rotate head slightly towards the left angle."}
+                                  {POSES[guidedActivePoseIdx] === "slight_right" && "Rotate head slightly towards the right angle."}
+                                  {POSES[guidedActivePoseIdx] === "up" && "Tilt your face slightly upwards towards the ceiling."}
+                                  {POSES[guidedActivePoseIdx] === "down" && "Tilt your face slightly downwards towards the floor."}
+                                  {POSES[guidedActivePoseIdx] === "neutral" && "Hold a natural, relaxed neutral expression."}
+                                  {POSES[guidedActivePoseIdx] === "smiling" && "Give a clear smiling expression showing teeth if natural."}
+                                  {POSES[guidedActivePoseIdx] === "glasses" && "Wear glasses if you wear them, otherwise hold expression."}
+                                  {POSES[guidedActivePoseIdx] === "no_glasses" && "Remove glasses if wearing, otherwise hold expression."}
+                                </p>
+                              </div>
+
+                              <div className="flex gap-2">
+                                <button
+                                  onClick={() => captureGuidedPose(POSES[guidedActivePoseIdx])}
+                                  disabled={btnLoading["capture_pose"] || !POSES[guidedActivePoseIdx]}
+                                  className="btn-gold-luxury flex-1 py-3 justify-center gap-2 font-orbitron font-bold tracking-widest text-xs"
+                                >
+                                  {btnLoading["capture_pose"] ? (
+                                    <RefreshCw size={14} className="animate-spin text-gold-accent" />
+                                  ) : (
+                                    <Video size={14} />
+                                  )}
+                                  CAPTURE FRAME
+                                </button>
+                                <button
+                                  onClick={saveGuidedEnrollment}
+                                  disabled={btnLoading["save_enroll"] || Object.values(guidedProgress).filter(Boolean).length === 0}
+                                  className="btn-gold-luxury border-green-500/20 text-green-400 hover:text-green-300 hover:bg-green-500/10 py-3 px-4 justify-center gap-2 font-orbitron font-bold tracking-widest text-xs"
+                                >
+                                  {btnLoading["save_enroll"] ? (
+                                    <RefreshCw size={14} className="animate-spin text-green-oms" />
+                                  ) : (
+                                    <CheckCircle size={14} />
+                                  )}
+                                  SAVE PROFILE
+                                </button>
+                              </div>
+                            </div>
+
+                            {/* Capture session logs */}
+                            <div className="flex-1 min-h-[120px] glass-premium bg-black/60 border border-white/5 p-3 flex flex-col font-mono text-[9px]" style={{ borderRadius: 12 }}>
+                              <span className="font-orbitron text-[8.5px] font-black text-gold-accent tracking-widest uppercase block mb-1">SESSION METRICS FEED</span>
+                              <div className="flex-1 overflow-y-auto flex flex-col gap-0.5 max-h-[120px] text-sec">
+                                {guidedLog.map((log, i) => (
+                                  <p key={i} className={log.startsWith("✓") ? "text-green-oms" : log.startsWith("✗") ? "text-red-400" : "text-muted"}>
+                                    {log}
+                                  </p>
+                                ))}
+                                {guidedLog.length === 0 && <p className="text-muted">// Awaiting frame capture logs...</p>}
+                              </div>
+                            </div>
+                          </>
+                        )}
+                      </div>
+
+                      {/* Right: Pose checkboxes & stream preview */}
+                      <div className="glass-premium p-5 flex flex-col min-h-0 bg-black/20 justify-between gap-4" style={{ borderRadius: 16 }}>
+                        <h4 className="font-orbitron text-xs font-bold text-gold tracking-widest uppercase flex items-center gap-2 border-b border-white/5 pb-2 mb-1 flex-shrink-0">
+                          <Sliders size={14} /> POSE CHECKLIST PROTOCOLS
+                        </h4>
+
+                        {/* Poses grid */}
+                        <div className="grid grid-cols-2 gap-2 overflow-y-auto max-h-[220px]">
+                          {POSES.map((pose, index) => {
+                            const completed = guidedProgress[pose];
+                            const active = POSES[guidedActivePoseIdx] === pose;
+                            return (
+                              <div
+                                key={pose}
+                                onClick={() => guidedPid && setGuidedActivePoseIdx(index)}
+                                className={`glass-premium p-2.5 flex items-center justify-between border cursor-pointer transition-all ${
+                                  active
+                                    ? "bg-gold/10 border-gold shadow-gold-glow-strong scale-[1.01]"
+                                    : completed
+                                    ? "bg-green-oms/5 border-green-500/20 hover:bg-green-oms/10"
+                                    : "bg-black/30 border-white/5 hover:border-white/10"
+                                }`}
+                                style={{ borderRadius: 10 }}
+                              >
+                                <span className={`font-orbitron text-[9px] font-bold uppercase tracking-wider ${active ? "text-gold-accent" : completed ? "text-green-oms" : "text-sec"}`}>
+                                  {pose.replace("_", " ")}
+                                </span>
+                                {completed ? (
+                                  <Check size={11} className="text-green-oms font-black" />
+                                ) : (
+                                  <div className={`w-3.5 h-3.5 rounded-full border flex items-center justify-center ${active ? "border-gold-accent" : "border-white/10"}`} />
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+
+                        {/* Bottom preview info */}
+                        <div className="glass-premium bg-black/50 border border-white/5 p-3 text-[9.5px] font-mono text-sec" style={{ borderRadius: 10 }}>
+                          <span className="font-orbitron text-[8.5px] text-sec font-bold block mb-1 uppercase">CAMERA LINK STATUS</span>
+                          <p>STREAM: <span className="text-green-oms font-bold">ONLINE (30 FPS)</span></p>
+                          <p>RESOLUTION: <span className="text-white">640x360 SENSOR LAYER</span></p>
+                          <p>COMPLETED: <span className="text-gold-accent font-bold">{Object.values(guidedProgress).filter(Boolean).length} / {POSES.length} NODES</span></p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Pane 3: Folder Import */}
+                  {enrollTab === "folder" && (
+                    <div className="grid grid-cols-2 gap-5 h-full min-h-0">
+                      {/* Left: Input Form */}
+                      <form onSubmit={handleFolderImport} className="glass-premium p-5 flex flex-col min-h-0 bg-black/20 gap-4 justify-center" style={{ borderRadius: 16 }}>
+                        <h4 className="font-orbitron text-xs font-black text-gold-accent tracking-widest uppercase text-center mb-2">FOLDER SCAN SPECIFICATION</h4>
+                        
+                        <div className="flex flex-col gap-1.5">
+                          <label className="font-orbitron text-[9px] text-sec font-bold tracking-wider">TARGET PERSON NAME</label>
+                          <input
+                            type="text"
+                            required
+                            value={importName}
+                            onChange={(e) => setImportName(e.target.value)}
+                            placeholder="e.g. PRAJAN"
+                            className="glass-premium bg-black/60 border border-white/10 text-white font-mono text-xs px-4 py-3 rounded-xl outline-none focus:border-gold-accent transition-colors"
+                          />
+                        </div>
+
+                        <div className="flex flex-col gap-1.5">
+                          <label className="font-orbitron text-[9px] text-sec font-bold tracking-wider">LOCAL DIRECTORY PATH</label>
+                          <input
+                            type="text"
+                            required
+                            value={importFolder}
+                            onChange={(e) => setImportFolder(e.target.value)}
+                            placeholder="e.g. C:\Users\Prajan\Pictures\dataset"
+                            className="glass-premium bg-black/60 border border-white/10 text-white font-mono text-xs px-4 py-3 rounded-xl outline-none focus:border-gold-accent transition-colors"
+                          />
+                        </div>
+
+                        <button
+                          type="submit"
+                          disabled={importLoading || !importName.trim() || !importFolder.trim()}
+                          className="btn-gold-luxury py-3 justify-center gap-2 mt-2"
+                        >
+                          {importLoading ? (
+                            <RefreshCw size={14} className="animate-spin text-gold-accent" />
+                          ) : (
+                            <Package size={14} />
+                          )}
+                          EXECUTE SCAN IMPORT
+                        </button>
+                      </form>
+
+                      {/* Right: Import console logs */}
+                      <div className="glass-premium p-5 flex flex-col min-h-0 bg-black/20 justify-between gap-4" style={{ borderRadius: 16 }}>
+                        <h4 className="font-orbitron text-xs font-bold text-gold tracking-widest uppercase flex items-center gap-2 border-b border-white/5 pb-2 mb-1 flex-shrink-0">
+                          <Bot size={14} /> SECURE SCAN PROCESSING FEED
+                        </h4>
+
+                        <div className="flex-1 glass-premium bg-black/60 border border-white/5 p-4 flex flex-col font-mono text-[9px] min-h-[220px]" style={{ borderRadius: 12 }}>
+                          <div className="flex-1 overflow-y-auto flex flex-col gap-1 text-sec">
+                            {importLog.map((log, i) => (
+                              <p key={i} className={log.startsWith("✓") ? "text-green-oms" : log.startsWith("✗") ? "text-red-400" : log.startsWith("-") ? "text-gold-dim" : "text-muted"}>
+                                {log}
+                              </p>
+                            ))}
+                            {importLog.length === 0 && <p className="text-muted">// Ready. Specify name and path to execute import scanning.</p>}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Pane 4: Profile JSON Import */}
+                  {enrollTab === "import_json" && (
+                    <div className="glass-premium p-6 flex flex-col items-center justify-center text-center gap-4 bg-black/20 h-full min-h-0 border-dashed border-2 border-gold-dim/20" style={{ borderRadius: 16 }}>
+                      <div className="w-16 h-16 rounded-full bg-gold/10 border border-gold-dim flex items-center justify-center text-gold animate-pulse">
+                        <Download size={28} />
+                      </div>
+                      <div>
+                        <h4 className="font-orbitron text-sm font-black text-gold-accent tracking-wider uppercase">PROFILE ARCHIVE PACKAGE IMPORT</h4>
+                        <p className="font-inter text-xs text-sec max-w-sm mt-1 mx-auto leading-relaxed">
+                          Upload a previously exported `.json` profile registry archive to sync and restore all face encodings, visit counts, and metadata.
+                        </p>
+                      </div>
+
+                      <input
+                        type="file"
+                        accept=".json"
+                        ref={fileInputRef}
+                        onChange={handleJsonImport}
+                        className="hidden"
+                      />
+                      
+                      <button
+                        onClick={() => fileInputRef.current?.click()}
+                        className="btn-gold-luxury py-3 px-6 text-xs font-orbitron font-bold tracking-widest gap-2 mt-2"
+                      >
+                        <Download size={14} />
+                        SELECT PROFILE JSON FILE
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </motion.div>
+            )}
+
             {/* FULLY FUNCTIONAL DYNAMIC SETTINGS PANEL */}
             {activeNav === "settings" && (
               <motion.div
@@ -1238,6 +2163,22 @@ export default function Dashboard() {
                           className="w-full accent-gold cursor-pointer"
                         />
                       </div>
+                      <div className="flex flex-col gap-1 pt-1.5 border-t border-white/5">
+                        <div className="flex justify-between font-orbitron text-[9px] text-sec font-bold tracking-wider">
+                          <span>FACE RECOGNITION SIMILARITY THRESHOLD</span>
+                          <span className="font-mono text-gold-accent">{matchThresh.toFixed(2)}</span>
+                        </div>
+                        <span className="text-[7.5px] text-muted font-inter">Lower values increase matching sensitivity (makes detection easier)</span>
+                        <input
+                          type="range"
+                          min="0.15"
+                          max="0.60"
+                          step="0.01"
+                          value={matchThresh}
+                          onChange={(e) => setMatchThresh(parseFloat(e.target.value))}
+                          className="w-full accent-gold cursor-pointer"
+                        />
+                      </div>
                       <div className="flex items-center justify-between mt-1 pt-1.5 border-t border-white/5">
                         <span className="font-orbitron text-[9.5px] text-sec font-bold tracking-wider">DETECT NEW VISITOR / INTRUDER IDS</span>
                         <button
@@ -1250,6 +2191,34 @@ export default function Dashboard() {
                           className="text-gold hover:text-gold-accent transition-colors"
                         >
                           {detectNewIds ? <ToggleRight size={32} /> : <ToggleLeft size={32} className="text-muted" />}
+                        </button>
+                      </div>
+                      <div className="flex items-center justify-between mt-1 pt-1.5 border-t border-white/5">
+                        <span className="font-orbitron text-[9.5px] text-sec font-bold tracking-wider">PERSON TRACKING ENGINE</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const newVal = !detectPeople;
+                            setDetectPeople(newVal);
+                            speakAI(newVal ? "Person tracking activated" : "Person tracking suspended");
+                          }}
+                          className="text-gold hover:text-gold-accent transition-colors"
+                        >
+                          {detectPeople ? <ToggleRight size={32} /> : <ToggleLeft size={32} className="text-muted" />}
+                        </button>
+                      </div>
+                      <div className="flex items-center justify-between mt-1 pt-1.5 border-t border-white/5">
+                        <span className="font-orbitron text-[9.5px] text-sec font-bold tracking-wider">OBJECT DETECTION ENGINE</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const newVal = !detectObjects;
+                            setDetectObjects(newVal);
+                            speakAI(newVal ? "Object detection activated" : "Object detection suspended");
+                          }}
+                          className="text-gold hover:text-gold-accent transition-colors"
+                        >
+                          {detectObjects ? <ToggleRight size={32} /> : <ToggleLeft size={32} className="text-muted" />}
                         </button>
                       </div>
                     </div>
@@ -1286,6 +2255,24 @@ export default function Dashboard() {
                       </h4>
                       <div className="flex items-center justify-between mt-1">
                         <div>
+                          <span className="font-orbitron text-[9.5px] text-sec font-bold tracking-wider block">NVIDIA CUDA GPU INFERENCE</span>
+                          <span className="text-[8.5px] text-muted font-inter">Enable hardware accelerated model detection via CUDA</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const newVal = !useCuda;
+                            setUseCuda(newVal);
+                            speakAI(newVal ? "CUDA acceleration enabled. Relocating models to GPU." : "CUDA acceleration disabled. Running models on CPU.");
+                          }}
+                          className="text-gold hover:text-gold-accent transition-colors"
+                        >
+                          {useCuda ? <ToggleRight size={32} /> : <ToggleLeft size={32} className="text-muted" />}
+                        </button>
+                      </div>
+
+                      <div className="flex items-center justify-between mt-1 pt-1.5 border-t border-white/5">
+                        <div>
                           <span className="font-orbitron text-[9.5px] text-sec font-bold tracking-wider block">GOLD PARTICLE BACKGROUND</span>
                           <span className="text-[8.5px] text-muted font-inter">Controls custom hardware accelerated particle canvas</span>
                         </div>
@@ -1299,25 +2286,63 @@ export default function Dashboard() {
                       </div>
 
                       {particlesActive && (
-                        <div className="flex flex-col gap-2 pt-2.5 mt-2 border-t border-white/5">
-                          <div className="flex justify-between items-center">
-                            <span className="font-orbitron text-[9px] text-sec font-bold tracking-wider uppercase">PARTICLE DENSITY</span>
-                            <span className="font-mono text-[10px] text-gold-accent font-bold">{particleDensity} SHARDS</span>
+                        <>
+                          <div className="flex flex-col gap-2 pt-2.5 mt-2 border-t border-white/5">
+                            <div className="flex justify-between items-center">
+                              <span className="font-orbitron text-[9px] text-sec font-bold tracking-wider uppercase">PARTICLE DENSITY</span>
+                              <span className="font-mono text-[10px] text-gold-accent font-bold">{particleDensity} SHARDS</span>
+                            </div>
+                            <input
+                              type="range"
+                              min="20"
+                              max="250"
+                              step="5"
+                              value={particleDensity}
+                              onChange={(e) => {
+                                const v = parseInt(e.target.value);
+                                setParticleDensity(v);
+                                speakAI(`Density set to ${v}`);
+                              }}
+                              className="w-full accent-[#D4AF37] cursor-pointer bg-white/10 h-1 rounded-lg"
+                            />
                           </div>
-                          <input
-                            type="range"
-                            min="20"
-                            max="250"
-                            step="5"
-                            value={particleDensity}
-                            onChange={(e) => {
-                              const v = parseInt(e.target.value);
-                              setParticleDensity(v);
-                              speakAI(`Density set to ${v}`);
-                            }}
-                            className="w-full accent-[#D4AF37] cursor-pointer bg-white/10 h-1 rounded-lg"
-                          />
-                        </div>
+
+                          <div className="flex flex-col gap-2 pt-2.5 mt-2 border-t border-white/5">
+                            <div className="flex justify-between items-center">
+                              <span className="font-orbitron text-[9px] text-sec font-bold tracking-wider uppercase">PARTICLE BASE SIZE</span>
+                              <span className="font-mono text-[10px] text-gold-accent font-bold">{particleSize.toFixed(1)}px</span>
+                            </div>
+                            <input
+                              type="range"
+                              min="1.0"
+                              max="8.0"
+                              step="0.5"
+                              value={particleSize}
+                              onChange={(e) => {
+                                setParticleSize(parseFloat(e.target.value));
+                              }}
+                              className="w-full accent-[#D4AF37] cursor-pointer bg-white/10 h-1 rounded-lg"
+                            />
+                          </div>
+
+                          <div className="flex flex-col gap-2 pt-2.5 mt-2 border-t border-white/5">
+                            <div className="flex justify-between items-center">
+                              <span className="font-orbitron text-[9px] text-sec font-bold tracking-wider uppercase">MESH CONNECTION THICKNESS</span>
+                              <span className="font-mono text-[10px] text-gold-accent font-bold">{meshThickness.toFixed(1)}px</span>
+                            </div>
+                            <input
+                              type="range"
+                              min="0.2"
+                              max="4.0"
+                              step="0.1"
+                              value={meshThickness}
+                              onChange={(e) => {
+                                setMeshThickness(parseFloat(e.target.value));
+                              }}
+                              className="w-full accent-[#D4AF37] cursor-pointer bg-white/10 h-1 rounded-lg"
+                            />
+                          </div>
+                        </>
                       )}
 
                       <div className="flex flex-col gap-1 pt-1 mt-1 border-t border-white/5">
@@ -1394,34 +2419,71 @@ export default function Dashboard() {
                         )}
                       </div>
 
-                      {/* URL Reconnection Inputs */}
-                      <div className="flex flex-col gap-1 text-[9px] font-orbitron font-bold text-sec tracking-wider">
-                        <span>CCTV URL / DEVICE ID</span>
-                        <div className="flex gap-2">
-                          <input
-                            type="text"
-                            value={camConnectUrls[idx]}
-                            onChange={(e) => {
-                              const newUrls = [...camConnectUrls];
-                              newUrls[idx] = e.target.value;
-                              setCamConnectUrls(newUrls);
-                            }}
-                            placeholder="e.g. 0, rtsp://address, http://"
-                            className="flex-1 glass-premium bg-black/40 border border-white/10 text-white font-mono text-xs px-3 py-1.5 rounded-lg outline-none focus:border-gold-accent transition-colors"
-                          />
-                          <button
-                            onClick={() => connectCctv(idx)}
-                            disabled={btnLoading[`connect_cam_${idx}`]}
-                            className="btn-gold-luxury py-1 px-3 text-[8.5px] justify-center"
-                            title="Toggles a secure feed connection/reconnection logic"
-                          >
-                            {btnLoading[`connect_cam_${idx}`] ? (
-                              <RefreshCw size={10} className="animate-spin text-gold-accent" />
-                            ) : (
-                              <Wifi size={10} />
-                            )}
-                            CONNECT
-                          </button>
+                      {/* Name & URL Reconnection Inputs */}
+                      <div className="flex flex-col gap-2 text-[9px] font-orbitron font-bold text-sec tracking-wider">
+                        <div className="flex flex-col gap-1">
+                          <span>CAMERA CHANNEL NAME</span>
+                          <div className="flex gap-2">
+                            <input
+                              type="text"
+                              value={camNames[idx] !== undefined ? camNames[idx] : cam.name}
+                              onChange={(e) => {
+                                const newNames = [...camNames];
+                                if (newNames.length === 0 && cameras.length > 0) {
+                                  for (let k = 0; k < cameras.length; k++) {
+                                    newNames[k] = cameras[k].name;
+                                  }
+                                }
+                                newNames[idx] = e.target.value;
+                                setCamNames(newNames);
+                              }}
+                              placeholder="e.g. Front Door"
+                              className="flex-1 glass-premium bg-black/40 border border-white/10 text-white font-mono text-xs px-3 py-1.5 rounded-lg outline-none focus:border-gold-accent transition-colors"
+                            />
+                            <button
+                              onClick={() => renameCam(idx)}
+                              disabled={btnLoading[`rename_cam_${idx}`]}
+                              className="btn-gold-luxury py-1 px-3 text-[8.5px] justify-center"
+                              title="Rename this camera channel"
+                            >
+                              {btnLoading[`rename_cam_${idx}`] ? (
+                                <RefreshCw size={10} className="animate-spin text-gold-accent" />
+                              ) : (
+                                <Save size={10} />
+                              )}
+                              RENAME
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="flex flex-col gap-1">
+                          <span>CCTV URL / DEVICE ID</span>
+                          <div className="flex gap-2">
+                            <input
+                              type="text"
+                              value={camConnectUrls[idx]}
+                              onChange={(e) => {
+                                const newUrls = [...camConnectUrls];
+                                newUrls[idx] = e.target.value;
+                                setCamConnectUrls(newUrls);
+                              }}
+                              placeholder="e.g. 0, rtsp://address, http://"
+                              className="flex-1 glass-premium bg-black/40 border border-white/10 text-white font-mono text-xs px-3 py-1.5 rounded-lg outline-none focus:border-gold-accent transition-colors"
+                            />
+                            <button
+                              onClick={() => connectCctv(idx)}
+                              disabled={btnLoading[`connect_cam_${idx}`]}
+                              className="btn-gold-luxury py-1 px-3 text-[8.5px] justify-center"
+                              title="Toggles a secure feed connection/reconnection logic"
+                            >
+                              {btnLoading[`connect_cam_${idx}`] ? (
+                                <RefreshCw size={10} className="animate-spin text-gold-accent" />
+                              ) : (
+                                <Wifi size={10} />
+                              )}
+                              CONNECT
+                            </button>
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -1696,6 +2758,12 @@ export default function Dashboard() {
                               {isScanning ? 'PROCESSING' : isIntruder ? 'BREACHED' : 'SECURED'}
                             </span>
                           </p>
+                          <p className="font-mono text-[8px] text-muted">
+                            BEHAVIOR STATE:{' '}
+                            <span className={isScanning ? 'text-gold-dim font-bold' : activeSubject?.status === 'IDLE' ? 'text-gold-accent font-black animate-pulse' : 'text-green-oms font-bold'}>
+                              {isScanning ? 'PROCESSING' : activeSubject?.status || 'ACTIVE'}
+                            </span>
+                          </p>
                         </div>
                       </div>
                     );
@@ -1729,17 +2797,39 @@ export default function Dashboard() {
                   >
                     <div className="flex items-center justify-between mb-1.5">
                       <div className="flex items-center gap-2">
-                        <div className="w-7 h-7 rounded-full bg-gold/10 border border-gold-dim flex items-center justify-center font-orbitron text-[9px] text-gold font-bold">
-                          {user.name.slice(0, 2).toUpperCase()}
+                        <div className="w-8 h-8 rounded-full overflow-hidden border border-gold-dim flex-shrink-0 bg-gold/10 flex items-center justify-center relative">
+                          {user.photo && !imgErrors[user.name] ? (
+                            <img
+                              src={`${API}/${user.photo.replace(/\\/g, '/')}`}
+                              alt={user.name}
+                              className="w-full h-full object-cover"
+                              onError={() => {
+                                setImgErrors(prev => ({ ...prev, [user.name]: true }));
+                              }}
+                            />
+                          ) : (
+                            <span className="font-orbitron text-[9px] text-gold font-bold">
+                              {user.name.slice(0, 2).toUpperCase()}
+                            </span>
+                          )}
                         </div>
                         <div>
                           <h4 className="font-orbitron text-xs font-bold text-[#FFFFFF] leading-none">{user.name}</h4>
                           <span className="font-inter text-[8.5px] text-sec leading-none">{user.role}</span>
                         </div>
                       </div>
-                      <span className="font-orbitron text-[8px] font-bold text-green-oms bg-green-oms/10 px-1.5 py-0.5 rounded">
-                        {user.status}
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => forgetFace(user.name)}
+                          className="text-[#FFFFFF]/40 hover:text-red-500 transition-colors p-1"
+                          title={`Forget face profile '${user.name}'`}
+                        >
+                          <Trash size={12} />
+                        </button>
+                        <span className="font-orbitron text-[8px] font-bold text-green-oms bg-green-oms/10 px-1.5 py-0.5 rounded">
+                          {user.status}
+                        </span>
+                      </div>
                     </div>
 
                     <div className="grid grid-cols-2 gap-y-0.5 border-t border-white/5 pt-2 text-[9px] font-mono text-sec">
@@ -1846,6 +2936,44 @@ export default function Dashboard() {
                 ENROLL
               </button>
 
+              {/* AUTO REGISTER NEW FACES toggle — mirrors the OpenCV desktop sidebar pill */}
+              <button
+                onClick={async () => {
+                  setBtnLoading(b => ({ ...b, toggle_auto_register: true }));
+                  try {
+                    const r = await fetch(`${API}/api/control/toggle_auto_register`, { method: "POST" });
+                    const d = await r.json();
+                    // Optimistic UI update — telemetry will confirm actual state within 2s
+                    const newVal = !detectNewIds;
+                    setDetectNewIds(newVal);
+                    setControlMsg(d.result || d.message || "Auto Register toggled");
+                    speakAI(newVal ? "Auto register faces ON" : "Auto register faces OFF");
+                    setTimeout(() => setControlMsg(null), 3000);
+                  } catch (e) {
+                    setControlMsg("Toggle failed: " + e);
+                    setTimeout(() => setControlMsg(null), 3000);
+                  } finally {
+                    setBtnLoading(b => ({ ...b, toggle_auto_register: false }));
+                  }
+                }}
+                disabled={btnLoading["toggle_auto_register"]}
+                className={`py-2 px-1 text-[9px] justify-center font-orbitron font-bold tracking-widest rounded-xl border transition-all duration-300 flex items-center gap-1.5 ${
+                  detectNewIds
+                    ? "bg-green-900/30 border-green-500/40 text-green-400 hover:bg-green-900/50 hover:border-green-400"
+                    : "bg-red-900/30 border-red-500/40 text-red-400 hover:bg-red-900/50 hover:border-red-400"
+                }`}
+                title={detectNewIds ? "Auto Register ON — click to disable" : "Auto Register OFF — click to enable"}
+              >
+                {btnLoading["toggle_auto_register"] ? (
+                  <RefreshCw size={11} className="animate-spin" />
+                ) : detectNewIds ? (
+                  <ToggleRight size={13} />
+                ) : (
+                  <ToggleLeft size={13} />
+                )}
+                AUTO REG
+              </button>
+
               <button
                 onClick={() => doControl("export_csv")}
                 disabled={btnLoading["export_csv"]}
@@ -1891,7 +3019,7 @@ export default function Dashboard() {
               <button
                 onClick={() => doControl("reset_logs")}
                 disabled={btnLoading["reset_logs"]}
-                className="btn-danger-luxury col-span-2 py-2 px-1 text-[9px] justify-center"
+                className="btn-danger-luxury py-2 px-1 text-[9px] justify-center"
                 title="Resets and clears all system log files and visit entries"
               >
                 {btnLoading["reset_logs"] ? (

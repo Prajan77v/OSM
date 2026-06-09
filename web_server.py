@@ -69,133 +69,294 @@ def init_web_server(cameras, get_telemetry_fn, get_events_fn, get_summary_fn, co
     _control_handlers = control_handlers
 
 
-def _save_config_yaml_and_env(username, confidence, model, tg_token, tg_chat_id, detect_new_ids=True):
-    # 1. Update/Create .env file
-    env_path = str(WORKING_DIR / ".env")
+def save_config_safe(body: dict) -> dict:
+    import traceback
+    import yaml
+    import shutil
+    import logging
+    
+    app_log = logging.getLogger("OMS.app")
+    app_log.info("[Config] Starting Save Configuration process...")
+    
+    # Step 1: Reading settings
+    app_log.info("[Config] Step 1: Reading settings from request...")
+    
     try:
-        lines = []
-        if os.path.exists(env_path):
-            with open(env_path, "r", encoding="utf-8") as f:
-                lines = f.readlines()
+        # Step 2: Validating settings & applying defaults
+        app_log.info("[Config] Step 2: Validating settings...")
         
-        mapping = {
-            "OSM_OPERATOR": username,
-            "TELEGRAM_BOT_TOKEN": tg_token,
-            "TELEGRAM_CHAT_ID": tg_chat_id
-        }
-        
-        for key, val in mapping.items():
-            updated = False
-            for i, line in enumerate(lines):
-                if line.strip().startswith(f"{key}="):
-                    lines[i] = f"{key}={val}\n"
-                    updated = True
-                    break
-            if not updated:
-                lines.append(f"{key}={val}\n")
-        
-        with open(env_path, "w", encoding="utf-8") as f:
-            f.writelines(lines)
-    except Exception:
-        pass
-
-    # 2. Update/Create config.yaml file
-    yaml_path = str(WORKING_DIR / "config.yaml")
-    try:
-        lines = []
-        if os.path.exists(yaml_path):
-            with open(yaml_path, "r", encoding="utf-8") as f:
-                lines = f.readlines()
-        else:
-            lines = [
-                "operator:\n",
-                f'  username: "{username}"\n',
-                "detection:\n",
-                f"  confidence: {confidence}\n",
-                "  model:\n",
-                f'    LOW: "{model}"\n',
-                f'    MEDIUM: "{model}"\n',
-                f'    HIGH: "{model}"\n',
-                "face_recognition:\n",
-                f"  detect_new_ids: {str(detect_new_ids).lower()}\n",
-                f"  match_threshold: 0.60\n",
-                "threat:\n",
-                f'  tg_token: "{tg_token}"\n',
-                f'  tg_chat_id: "{tg_chat_id}"\n'
-            ]
-        
-        if os.path.exists(yaml_path):
-            current_section = None
-            sub_section = None
-            tg_token_updated = False
-            tg_chat_id_updated = False
-            detect_new_ids_updated = False
-            for i, line in enumerate(lines):
-                striped = line.strip()
-                if striped.endswith(":") and not striped.startswith("-"):
-                    if len(line) - len(line.lstrip()) == 0:
-                        current_section = striped[:-1].strip()
-                        sub_section = None
-                    else:
-                        sub_section = striped[:-1].strip()
+        # Helper to convert to safe float
+        def safe_float(val, default_val):
+            try:
+                if val is None or str(val).strip() == "":
+                    return default_val
+                return float(val)
+            except Exception:
+                return default_val
                 
-                if current_section == "operator" and striped.startswith("username:"):
-                    indent = line.split("username:")[0]
-                    lines[i] = f'{indent}username: "{username}"\n'
-                elif current_section == "detection" and striped.startswith("confidence:"):
-                    indent = line.split("confidence:")[0]
-                    lines[i] = f'{indent}confidence: {confidence}\n'
-                elif current_section == "detection" and sub_section == "model":
-                    if striped.startswith("LOW:"):
-                        indent = line.split("LOW:")[0]
-                        lines[i] = f'{indent}LOW: "{model}"\n'
-                    elif striped.startswith("MEDIUM:"):
-                        indent = line.split("MEDIUM:")[0]
-                        lines[i] = f'{indent}MEDIUM: "{model}"\n'
-                    elif striped.startswith("HIGH:"):
-                        indent = line.split("HIGH:")[0]
-                        lines[i] = f'{indent}HIGH: "{model}"\n'
-                elif current_section == "face_recognition" and striped.startswith("detect_new_ids:"):
-                    indent = line.split("detect_new_ids:")[0]
-                    lines[i] = f'{indent}detect_new_ids: {str(detect_new_ids).lower()}\n'
-                    detect_new_ids_updated = True
-                elif current_section == "threat":
-                    if striped.startswith("tg_token:"):
-                        indent = line.split("tg_token:")[0]
-                        lines[i] = f'{indent}tg_token: "{tg_token}"\n'
-                        tg_token_updated = True
-                    elif striped.startswith("tg_chat_id:"):
-                        indent = line.split("tg_chat_id:")[0]
-                        lines[i] = f'{indent}tg_chat_id: "{tg_chat_id}"\n'
-                        tg_chat_id_updated = True
-            
-            if not detect_new_ids_updated:
-                frec_idx = -1
-                for idx, line in enumerate(lines):
-                    if line.strip() == "face_recognition:":
-                        frec_idx = idx
-                        break
-                if frec_idx != -1:
-                    lines.insert(frec_idx + 1, f"  detect_new_ids: {str(detect_new_ids).lower()}\n")
+        # Helper to convert to safe bool
+        def safe_bool(val, default_val):
+            if val is None or str(val).strip() == "":
+                return default_val
+            if isinstance(val, bool):
+                return val
+            return str(val).lower() in ("true", "1", "yes", "on")
 
-            if not (tg_token_updated and tg_chat_id_updated):
-                threat_idx = -1
-                for idx, line in enumerate(lines):
-                    if line.strip() == "threat:":
-                        threat_idx = idx
-                        break
-                if threat_idx != -1:
-                    insert_lines = []
-                    if not tg_token_updated:
-                        insert_lines.append(f'  tg_token: "{tg_token}"\n')
-                    if not tg_chat_id_updated:
-                        insert_lines.append(f'  tg_chat_id: "{tg_chat_id}"\n')
-                    lines = lines[:threat_idx+1] + insert_lines + lines[threat_idx+1:]
+        # Read values, fallback to defaults or existing configuration
+        sv = _get_sv()
+        
+        username = str(body.get("username") or (sv.Config.USERNAME if sv else "Prajan")).strip()
+        if not username:
+            username = "Prajan"
             
-        with open(yaml_path, "w", encoding="utf-8") as f:
-            f.writelines(lines)
-    except Exception:
-        pass
+        existing_conf = sv.Config.CONFIDENCE if sv else 0.45
+        confidence = safe_float(body.get("confidence"), existing_conf)
+        if not (0.0 <= confidence <= 1.0):
+            confidence = existing_conf if (0.0 <= existing_conf <= 1.0) else 0.45
+            
+        model = str(body.get("model") or (sv.Config.MODEL_NAME if sv else "yolov8n.pt")).strip()
+        if not model:
+            model = "yolov8n.pt"
+            
+        tg_token = str(body.get("tg_token") or (sv.Config.BOT_TOKEN if sv else "")).strip()
+        tg_chat_id = str(body.get("tg_chat_id") or (sv.Config.CHAT_ID if sv else "")).strip()
+        
+        detect_new_ids = safe_bool(body.get("detect_new_ids"), getattr(sv.Config, "DETECT_NEW_IDS", True) if sv else True)
+        use_cuda = safe_bool(body.get("use_cuda"), getattr(sv.Config, "USE_CUDA", True) if sv else True)
+        detect_people = safe_bool(body.get("detect_people"), getattr(sv.Config, "DETECT_PEOPLE", True) if sv else True)
+        detect_objects = safe_bool(body.get("detect_objects"), getattr(sv.Config, "DETECT_OBJECTS", True) if sv else True)
+        
+        existing_thresh = getattr(sv.Config, "FACE_MATCH_THRESH", 0.36) if sv else 0.36
+        match_threshold = safe_float(body.get("match_threshold"), existing_thresh)
+        if not (0.0 <= match_threshold <= 1.0):
+            match_threshold = existing_thresh if (0.0 <= existing_thresh <= 1.0) else 0.36
+            
+        existing_part = getattr(sv.Config, "PARTICLE_SIZE", 3.0) if sv else 3.0
+        particle_size = safe_float(body.get("particle_size"), existing_part)
+        if particle_size <= 0:
+            particle_size = existing_part if (existing_part > 0) else 3.0
+            
+        existing_mesh = getattr(sv.Config, "MESH_THICKNESS", 1.0) if sv else 1.0
+        mesh_thickness = safe_float(body.get("mesh_thickness"), existing_mesh)
+        if mesh_thickness <= 0:
+            mesh_thickness = existing_mesh if (existing_mesh > 0) else 1.0
+
+
+        app_log.info(f"[Config] Validated values: username={username}, confidence={confidence}, model={model}, "
+                     f"tg_token={tg_token[:10]}..., tg_chat_id={tg_chat_id}, detect_new_ids={detect_new_ids}, "
+                     f"use_cuda={use_cuda}, detect_people={detect_people}, detect_objects={detect_objects}, "
+                     f"match_threshold={match_threshold}, particle_size={particle_size}, mesh_thickness={mesh_thickness}")
+
+        # Step 3: Serializing settings
+        app_log.info("[Config] Step 3: Serializing settings...")
+        
+        # Load the existing config.yaml if it exists
+        yaml_path = WORKING_DIR / "config.yaml"
+        config_data = {}
+        if yaml_path.exists():
+            try:
+                with open(yaml_path, "r", encoding="utf-8") as f:
+                    config_data = yaml.safe_load(f) or {}
+            except Exception as e:
+                app_log.warning(f"[Config] Failed to load existing config.yaml: {e}. Starting fresh.")
+                config_data = {}
+
+        # Ensure all required configuration structures exist
+        if "operator" not in config_data or not isinstance(config_data["operator"], dict):
+            config_data["operator"] = {}
+        if "detection" not in config_data or not isinstance(config_data["detection"], dict):
+            config_data["detection"] = {}
+        if "face_recognition" not in config_data or not isinstance(config_data["face_recognition"], dict):
+            config_data["face_recognition"] = {}
+        if "threat" not in config_data or not isinstance(config_data["threat"], dict):
+            config_data["threat"] = {}
+        if "display" not in config_data or not isinstance(config_data["display"], dict):
+            config_data["display"] = {}
+            
+        # Update settings
+        config_data["operator"]["username"] = username
+        config_data["detection"]["confidence"] = confidence
+        config_data["detection"]["use_cuda"] = use_cuda
+        config_data["detection"]["detect_people"] = detect_people
+        config_data["detection"]["detect_objects"] = detect_objects
+        
+        # Handle model dictionary or string
+        if "model" not in config_data["detection"] or not isinstance(config_data["detection"]["model"], dict):
+            config_data["detection"]["model"] = {}
+        config_data["detection"]["model"]["LOW"] = model
+        config_data["detection"]["model"]["MEDIUM"] = model
+        config_data["detection"]["model"]["HIGH"] = model
+        
+        config_data["face_recognition"]["detect_new_ids"] = detect_new_ids
+        config_data["face_recognition"]["match_threshold"] = match_threshold
+        config_data["threat"]["tg_token"] = tg_token
+        config_data["threat"]["tg_chat_id"] = tg_chat_id
+        config_data["display"]["particle_size"] = particle_size
+        config_data["display"]["mesh_thickness"] = mesh_thickness
+
+        # Step 4: Writing settings file safely
+        app_log.info("[Config] Step 4: Writing settings file...")
+        
+        # Ensure directories exist
+        yaml_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        backup_yaml_path = WORKING_DIR / "config.yaml.bak"
+        tmp_yaml_path = WORKING_DIR / "config.yaml.tmp"
+        
+        env_path = WORKING_DIR / ".env"
+        backup_env_path = WORKING_DIR / ".env.bak"
+        tmp_env_path = WORKING_DIR / ".env.tmp"
+
+        # Create backups of current configurations
+        app_log.info("[Config] Creating backups of configuration files...")
+        if yaml_path.exists():
+            try:
+                shutil.copy2(yaml_path, backup_yaml_path)
+            except Exception as e:
+                app_log.warning(f"[Config] Failed to create backup of config.yaml: {e}")
+                
+        if env_path.exists():
+            try:
+                shutil.copy2(env_path, backup_env_path)
+            except Exception as e:
+                app_log.warning(f"[Config] Failed to create backup of .env: {e}")
+
+        # Write to temporary config.yaml file
+        app_log.info("[Config] Writing to temporary config.yaml...")
+        try:
+            with open(tmp_yaml_path, "w", encoding="utf-8") as f:
+                yaml.safe_dump(config_data, f, default_flow_style=False, sort_keys=False)
+        except Exception as e:
+            app_log.error(f"[Config] Failed to write temporary config.yaml: {e}")
+            raise
+
+        # Verify integrity of temporary config.yaml file
+        app_log.info("[Config] Verifying temporary config.yaml integrity...")
+        try:
+            with open(tmp_yaml_path, "r", encoding="utf-8") as f:
+                verify_data = yaml.safe_load(f)
+            if not verify_data or "operator" not in verify_data:
+                raise Exception("Verification failed: config.yaml.tmp is empty or invalid.")
+        except Exception as e:
+            app_log.error(f"[Config] Integrity check failed on config.yaml.tmp: {e}")
+            if tmp_yaml_path.exists():
+                tmp_yaml_path.unlink()
+            raise
+
+        # Write to temporary .env file
+        app_log.info("[Config] Writing to temporary .env...")
+        try:
+            env_lines = []
+            if env_path.exists():
+                with open(env_path, "r", encoding="utf-8") as f:
+                    env_lines = f.readlines()
+            
+            mapping = {
+                "OSM_OPERATOR": username,
+                "TELEGRAM_BOT_TOKEN": tg_token,
+                "TELEGRAM_CHAT_ID": tg_chat_id
+            }
+            
+            for key, val in mapping.items():
+                updated = False
+                for idx, line in enumerate(env_lines):
+                    if line.strip().startswith(f"{key}="):
+                        env_lines[idx] = f"{key}={val}\n"
+                        updated = True
+                        break
+                if not updated:
+                    env_lines.append(f"{key}={val}\n")
+                    
+            with open(tmp_env_path, "w", encoding="utf-8") as f:
+                f.writelines(env_lines)
+        except Exception as e:
+            app_log.error(f"[Config] Failed to write temporary .env: {e}")
+            raise
+
+        # Verify integrity of temporary .env file
+        app_log.info("[Config] Verifying temporary .env integrity...")
+        try:
+            with open(tmp_env_path, "r", encoding="utf-8") as f:
+                env_content = f.read()
+            if "OSM_OPERATOR=" not in env_content:
+                raise Exception("Verification failed: .env.tmp does not contain OSM_OPERATOR.")
+        except Exception as e:
+            app_log.error(f"[Config] Integrity check failed on .env.tmp: {e}")
+            if tmp_env_path.exists():
+                tmp_env_path.unlink()
+            raise
+
+        # Atomically replace original configuration files
+        app_log.info("[Config] Overwriting original configuration files atomically...")
+        try:
+            # Replace config.yaml
+            if tmp_yaml_path.exists():
+                if yaml_path.exists():
+                    try:
+                        yaml_path.unlink()
+                    except Exception:
+                        pass
+                os.replace(str(tmp_yaml_path), str(yaml_path))
+                
+            # Replace .env
+            if tmp_env_path.exists():
+                if env_path.exists():
+                    try:
+                        env_path.unlink()
+                    except Exception:
+                        pass
+                os.replace(str(tmp_env_path), str(env_path))
+            app_log.info("[Config] Configuration files saved successfully.")
+        except Exception as e:
+            app_log.error(f"[Config] Failed to replace original files: {e}. Restoring backups...")
+            if backup_yaml_path.exists():
+                shutil.copy2(backup_yaml_path, yaml_path)
+            if backup_env_path.exists():
+                shutil.copy2(backup_env_path, env_path)
+            raise
+
+        # Step 5: Reloading settings
+        app_log.info("[Config] Step 5: Reloading settings into runtime...")
+        if sv:
+            sv.Config.USERNAME = username
+            sv.Config.CONFIDENCE = confidence
+            sv.Config.MODEL_NAME = model
+            sv.Config.BOT_TOKEN = tg_token
+            sv.Config.CHAT_ID = tg_chat_id
+            sv.Config.DETECT_NEW_IDS = detect_new_ids
+            sv.Config.USE_CUDA = use_cuda
+            sv.Config.DETECT_PEOPLE = detect_people
+            sv.Config.DETECT_OBJECTS = detect_objects
+            sv.Config.FACE_MATCH_THRESH = match_threshold
+            sv.Config.PARTICLE_SIZE = particle_size
+            sv.Config.MESH_THICKNESS = mesh_thickness
+            
+            # Re-apply device on settings change
+            sv.Config.DEVICE = "cuda" if (sv.CUDA_AVAILABLE and use_cuda) else "cpu"
+            
+            # Reload _CFG dict
+            if hasattr(sv, "_CFG"):
+                sv._CFG.clear()
+                sv._CFG.update(config_data)
+            app_log.info("[Config] Runtime settings successfully reloaded.")
+
+        # Step 6: Updating runtime configuration
+        # Signaling camera threads to reload models dynamically (no direct thread blocking operations)
+        app_log.info("[Config] Step 6: Signaling camera threads to reload models...")
+
+        # Clean up temporary backups
+        try:
+            if backup_yaml_path.exists(): backup_yaml_path.unlink()
+            if backup_env_path.exists(): backup_env_path.unlink()
+        except Exception:
+            pass
+
+        return {"status": "ok", "message": "Configuration saved successfully."}
+
+    except Exception as e:
+        err_msg = f"Save Configuration failed: {e}\n{traceback.format_exc()}"
+        app_log.error(f"[Config] {err_msg}")
+        return {"status": "error", "message": "Configuration could not be saved. Check logs for details."}
 
 
 def create_app() -> "FastAPI":
@@ -374,7 +535,13 @@ def create_app() -> "FastAPI":
                 "model": sv.Config.MODEL_NAME,
                 "tg_token": sv.Config.BOT_TOKEN,
                 "tg_chat_id": sv.Config.CHAT_ID,
-                "detect_new_ids": getattr(sv.Config, "DETECT_NEW_IDS", True)
+                "detect_new_ids": getattr(sv.Config, "DETECT_NEW_IDS", True),
+                "use_cuda": getattr(sv.Config, "USE_CUDA", True),
+                "detect_people": getattr(sv.Config, "DETECT_PEOPLE", True),
+                "detect_objects": getattr(sv.Config, "DETECT_OBJECTS", True),
+                "match_threshold": getattr(sv.Config, "FACE_MATCH_THRESH", 0.36),
+                "particle_size": getattr(sv.Config, "PARTICLE_SIZE", 3.0),
+                "mesh_thickness": getattr(sv.Config, "MESH_THICKNESS", 1.0)
             })
         except Exception:
             # Mock fallback if loaded from dev_server
@@ -388,7 +555,13 @@ def create_app() -> "FastAPI":
                     "model": "yolov8n.pt",
                     "tg_token": "8938780809:AAHzpgv_fbfbmXJ9x_ui44LY83CWnTWfKPo",
                     "tg_chat_id": "8076971661",
-                    "detect_new_ids": True
+                    "detect_new_ids": True,
+                    "use_cuda": True,
+                    "detect_people": True,
+                    "detect_objects": True,
+                    "match_threshold": 0.36,
+                    "particle_size": 3.0,
+                    "mesh_thickness": 1.0
                 })
             except Exception as e:
                 return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
@@ -415,12 +588,14 @@ def create_app() -> "FastAPI":
                     name = info.get("name", "Unknown")
                     role = "System Administrator" if name.lower() == sv.Config.USERNAME.lower() else "Authorized Subject"
                     res.append({
+                        "pid": pid,
                         "name": name,
                         "visitCount": info.get("visit_count", 1),
                         "lastSeen": info.get("last_seen", "Just now"),
                         "accuracy": 98.4 if name.lower() == sv.Config.USERNAME.lower() else 96.1,
                         "role": role,
-                        "status": "AUTHORIZED"
+                        "status": "AUTHORIZED",
+                        "photo": info.get("photo")
                     })
             res.sort(key=lambda u: (0 if u["role"] == "System Administrator" else 1, -u["visitCount"]))
             return JSONResponse(res)
@@ -436,12 +611,14 @@ def create_app() -> "FastAPI":
                             name = info.get("name", "Unknown")
                             role = "System Administrator" if name.lower() == "prajan" else "Authorized Subject"
                             res.append({
+                                "pid": pid,
                                 "name": name,
                                 "visitCount": info.get("visit_count", 1),
                                 "lastSeen": info.get("last_seen", "Just now"),
                                 "accuracy": 98.4 if name.lower() == "prajan" else 96.1,
                                 "role": role,
-                                "status": "AUTHORIZED"
+                                "status": "AUTHORIZED",
+                                "photo": info.get("photo")
                             })
                     res.sort(key=lambda u: (0 if u["role"] == "System Administrator" else 1, -u["visitCount"]))
                     return JSONResponse(res)
@@ -452,6 +629,57 @@ def create_app() -> "FastAPI":
                 {"name": "Dev Team", "visitCount": 84, "lastSeen": "Yesterday 18:24", "accuracy": 96.1, "role": "Core Developer", "status": "VERIFIED"},
                 {"name": "Support AI", "visitCount": 210, "lastSeen": "Today 05:00", "accuracy": 99.8, "role": "Autonomous Agent", "status": "ACTIVE"}
             ])
+
+    @app.delete("/api/face/{name}")
+    async def delete_face(name: str):
+        """Delete/forget a face profile from the database by name."""
+        try:
+            sv = _get_sv()
+            if not sv:
+                raise Exception("Main module not running")
+            
+            with sv._fdb_lock:
+                to_delete = []
+                for pid, info in list(sv.faces_db.items()):
+                    if info.get("name", "").lower() == name.lower():
+                        to_delete.append(pid)
+                        # Delete the photo if it exists
+                        photo = info.get("photo")
+                        if photo:
+                            photo_path = WORKING_DIR / photo
+                            if photo_path.exists():
+                                try: photo_path.unlink()
+                                except: pass
+                        # Delete any files matching the face name in the faces/known directory
+                        known_dir = WORKING_DIR / "faces" / "known"
+                        if known_dir.exists():
+                            for fp in known_dir.iterdir():
+                                if fp.is_file() and fp.stem.lower() == name.lower():
+                                    try: fp.unlink()
+                                    except: pass
+                
+                if not to_delete:
+                    return JSONResponse({"status": "error", "message": f"Face '{name}' not found"}, status_code=404)
+                
+                for pid in to_delete:
+                    if pid in sv.faces_db:
+                        del sv.faces_db[pid]
+                    # Also remove from YuNet cache if active
+                    if sv.YUNET_AVAILABLE:
+                        with sv._yunet_lock:
+                            if pid in sv._yunet_enc_cache:
+                                del sv._yunet_enc_cache[pid]
+                
+                # Rebuild dlib cache if active
+                if sv.FACE_RECOG_AVAILABLE:
+                    sv._enc_dirty = True
+                
+                # Save changes
+                sv._save_db_json()
+                
+            return JSONResponse({"status": "ok", "message": f"Forgotten face '{name}' and cleaned up {len(to_delete)} entries"})
+        except Exception as e:
+            return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
     @app.get("/api/cameras")
     async def cameras_info():
@@ -488,12 +716,20 @@ def create_app() -> "FastAPI":
                         if not p_path.exists():
                             photo_val = None
                             
+                    status_val = "ACTIVE"
+                    if hasattr(cs, "behavior") and cs.behavior is not None:
+                        try:
+                            status_val = cs.behavior.get(pid).status
+                        except Exception:
+                            pass
+
                     active_subjects.append({
                         "pid": pid,
                         "name": db[pid].get("name", "Unknown"),
                         "known": db[pid].get("known", False),
                         "photo": photo_val,
-                        "confidence": float(conf)
+                        "confidence": float(conf),
+                        "status": status_val
                     })
                     
             result.append({
@@ -506,6 +742,7 @@ def create_app() -> "FastAPI":
                 "persons":     len(getattr(cs, "present_pids", set())),
                 "active_subjects": active_subjects,
                 "detections":  len(getattr(cs, "latest_dets", [])),
+                "detections_list": [{"label": d.get("label", ""), "conf": float(d.get("conf", 0.0)), "box": list(d.get("box", []))} for d in getattr(cs, "latest_dets", [])],
                 "threat_level":getattr(cs, "threat_level", "GREEN"),
                 "uptime":      getattr(cs, "uptime_str", "00:00:00"),
             })
@@ -724,28 +961,11 @@ def create_app() -> "FastAPI":
                 return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
         if action == "save_settings" and body:
-            try:
-                sv = _get_sv()
-                if not sv:
-                    raise Exception("Main module not running")
-                username = body.get("username", sv.Config.USERNAME)
-                confidence = float(body.get("confidence", sv.Config.CONFIDENCE))
-                model = body.get("model", sv.Config.MODEL_NAME)
-                tg_token = body.get("tg_token", sv.Config.BOT_TOKEN)
-                tg_chat_id = body.get("tg_chat_id", sv.Config.CHAT_ID)
-                detect_new_ids = bool(body.get("detect_new_ids", getattr(sv.Config, "DETECT_NEW_IDS", True)))
-
-                sv.Config.USERNAME = username
-                sv.Config.CONFIDENCE = confidence
-                sv.Config.MODEL_NAME = model
-                sv.Config.BOT_TOKEN = tg_token
-                sv.Config.CHAT_ID = tg_chat_id
-                sv.Config.DETECT_NEW_IDS = detect_new_ids
-
-                _save_config_yaml_and_env(username, confidence, model, tg_token, tg_chat_id, detect_new_ids)
-                return JSONResponse({"status": "ok", "result": "Configuration secured successfully"})
-            except Exception as e:
-                return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+            res = save_config_safe(body)
+            if res["status"] == "ok":
+                return JSONResponse({"status": "ok", "result": res["message"]})
+            else:
+                return JSONResponse({"status": "error", "message": res["message"]}, status_code=500)
 
         handler = _control_handlers.get(action)
         if handler:
@@ -892,6 +1112,705 @@ def create_app() -> "FastAPI":
         threading.Thread(target=lambda: cs.reconnect_to(int(source) if str(source).isdigit() else source),
                          daemon=True).start()
         return JSONResponse({"status": "ok", "message": f"Reconnecting cam {cam_id}"})
+
+    @app.post("/api/camera/{cam_id}/rename")
+    async def rename_camera(cam_id: int, body: dict = None):
+        """Rename a camera channel."""
+        if body is None:
+            return JSONResponse({"status": "error", "message": "No body"}, status_code=400)
+        name = body.get("name", "").strip()
+        if not name:
+            return JSONResponse({"status": "error", "message": "Invalid name"}, status_code=400)
+        if cam_id < 0 or cam_id >= len(_cameras):
+            return JSONResponse({"status": "error", "message": "Invalid cam_id"}, status_code=400)
+        cs = _cameras[cam_id]
+        old_name = cs.name
+        cs.name = name
+        try:
+            sv = _get_sv()
+            if sv:
+                sv.save_config_cameras(_cameras)
+                if hasattr(sv, "rename_camera_in_logs"):
+                    sv.rename_camera_in_logs(old_name, name)
+        except Exception as e:
+            app_log.warning(f"Failed to persist camera config on rename: {e}")
+        return JSONResponse({"status": "ok", "message": f"Camera renamed to {name}"})
+
+    # ─── Advanced Face Enrollment APIs ─────────────────────────────────────────
+    POSES = ["front", "left", "right", "slight_left", "slight_right", "up", "down", "neutral", "smiling", "glasses", "no_glasses"]
+
+    @app.post("/api/enroll/start")
+    async def enroll_start(body: dict = None):
+        if not body:
+            return JSONResponse({"status": "error", "message": "No body provided"}, status_code=400)
+        name = body.get("name", "").strip()
+        if not name:
+            return JSONResponse({"status": "error", "message": "Name is required"}, status_code=400)
+        
+        sv = _get_sv()
+        if not sv:
+            return JSONResponse({"status": "error", "message": "OMS Engine not running"}, status_code=500)
+        
+        pid = body.get("pid", "").strip()
+        if pid:
+            # Check if this is an existing person
+            with sv._fdb_lock:
+                if pid not in sv.faces_db:
+                    pid = ""
+        
+        if not pid:
+            with sv._fdb_lock:
+                pid = sv._new_pid()
+        
+        # Create enrollment folder
+        enroll_dir = WORKING_DIR / "faces" / "enrolled" / pid
+        enroll_dir.mkdir(parents=True, exist_ok=True)
+        
+        return JSONResponse({
+            "status": "ok",
+            "pid": pid,
+            "name": name,
+            "poses": POSES
+        })
+
+    @app.get("/api/enroll/status/{pid}")
+    async def enroll_status(pid: str):
+        sv = _get_sv()
+        if not sv:
+            return JSONResponse({"status": "error", "message": "OMS Engine not running"}, status_code=500)
+            
+        enroll_dir = WORKING_DIR / "faces" / "enrolled" / pid
+        progress = {}
+        for pose in POSES:
+            img_path = enroll_dir / f"{pose}.jpg"
+            progress[pose] = img_path.exists()
+            
+        name = ""
+        with sv._fdb_lock:
+            if pid in sv.faces_db:
+                name = sv.faces_db[pid].get("name", "")
+                
+        return JSONResponse({
+            "status": "ok",
+            "pid": pid,
+            "name": name,
+            "progress": progress
+        })
+
+    @app.post("/api/enroll/capture/{pid}/{pose}")
+    async def enroll_capture(pid: str, pose: str):
+        if pose not in POSES:
+            return JSONResponse({"status": "error", "message": f"Invalid pose '{pose}'"}, status_code=400)
+            
+        sv = _get_sv()
+        if not sv:
+            return JSONResponse({"status": "error", "message": "OMS Engine not running"}, status_code=500)
+        if not getattr(sv, "YUNET_AVAILABLE", False):
+            return JSONResponse({"status": "error", "message": "YuNet face detector is not loaded or online"}, status_code=500)
+            
+        # Find active camera
+        active_cs = None
+        for cs in _cameras:
+            if cs.online and not cs.disconnected:
+                active_cs = cs
+                break
+        if not active_cs:
+            return JSONResponse({"status": "error", "message": "No active online camera found to capture frame"}, status_code=400)
+            
+        frame = None
+        with active_cs.frame_lock:
+            if active_cs.latest_frame is not None:
+                frame = active_cs.latest_frame.copy()
+                
+        if frame is None:
+            return JSONResponse({"status": "error", "message": "Camera did not yield a valid frame. Please try again."}, status_code=400)
+            
+        # Detect faces
+        h, w = frame.shape[:2]
+        with sv._yunet_lock:
+            sv._yunet_detector.setInputSize((w, h))
+            _, faces = sv._yunet_detector.detect(frame)
+            
+        if faces is None or len(faces) == 0:
+            return JSONResponse({"status": "error", "message": "No face detected in the frame. Please look directly at the camera."}, status_code=400)
+        if len(faces) > 1:
+            return JSONResponse({"status": "error", "message": "Multiple faces detected. Please make sure only one person is in the frame."}, status_code=400)
+            
+        face = faces[0]
+        # Coordinates and confidence
+        fx, fy, fw, fh = int(face[0]), int(face[1]), int(face[2]), int(face[3])
+        conf = float(face[14])
+        
+        if conf < 0.70:
+            return JSONResponse({"status": "error", "message": f"Face detection confidence too low ({conf:.0%}). Please look at the camera under better light."}, status_code=400)
+            
+        if fw < 80 or fh < 80:
+            return JSONResponse({"status": "error", "message": f"Face size too small ({fw}x{fh}px). Please move closer to the camera (minimum 80x80px)."}, status_code=400)
+            
+        # Crop face for blur check and saving
+        x1 = max(0, fx)
+        y1 = max(0, fy)
+        x2 = min(w, fx + fw)
+        y2 = min(h, fy + fh)
+        crop = frame[y1:y2, x1:x2]
+        
+        if crop.size == 0:
+            return JSONResponse({"status": "error", "message": "Cropped region is empty."}, status_code=400)
+            
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+        blur_score = cv2.Laplacian(gray, cv2.CV_64F).var()
+        if blur_score < 30.0:
+            return JSONResponse({"status": "error", "message": f"Image too blurry (score: {blur_score:.1f}). Please stay still during capture."}, status_code=400)
+            
+        # Save crop
+        enroll_dir = WORKING_DIR / "faces" / "enrolled" / pid
+        enroll_dir.mkdir(parents=True, exist_ok=True)
+        img_path = enroll_dir / f"{pose}.jpg"
+        cv2.imwrite(str(img_path), crop)
+        
+        return JSONResponse({
+            "status": "ok",
+            "message": f"Pose '{pose}' captured successfully",
+            "blur_score": blur_score,
+            "face_size": f"{fw}x{fh}px",
+            "confidence": conf
+        })
+
+    @app.post("/api/enroll/save/{pid}")
+    async def enroll_save(pid: str, body: dict = None):
+        if not body:
+            return JSONResponse({"status": "error", "message": "No body provided"}, status_code=400)
+        name = body.get("name", "").strip()
+        if not name:
+            return JSONResponse({"status": "error", "message": "Name is required to save profile"}, status_code=400)
+            
+        sv = _get_sv()
+        if not sv:
+            return JSONResponse({"status": "error", "message": "OMS Engine not running"}, status_code=500)
+            
+        enroll_dir = WORKING_DIR / "faces" / "enrolled" / pid
+        if not enroll_dir.exists():
+            return JSONResponse({"status": "error", "message": f"No enrollment session directory found for {pid}"}, status_code=400)
+            
+        # Scan and encode all poses
+        encodings = []
+        first_pose_img = None
+        
+        for pose in POSES:
+            img_path = enroll_dir / f"{pose}.jpg"
+            if img_path.exists():
+                img = cv2.imread(str(img_path))
+                if img is not None:
+                    if first_pose_img is None:
+                        first_pose_img = img
+                    # YuNet encode this crop
+                    h, w = img.shape[:2]
+                    if w >= 30 and h >= 30:
+                        if w < 112 or h < 112:
+                            img = cv2.resize(img, (128, 128), interpolation=cv2.INTER_CUBIC)
+                            h, w = 128, 128
+                        with sv._yunet_lock:
+                            sv._yunet_detector.setInputSize((w, h))
+                            _, faces = sv._yunet_detector.detect(img)
+                            if faces is not None and len(faces) > 0:
+                                aligned = sv._sface_recognizer.alignCrop(img, faces[0])
+                                feat = sv._sface_recognizer.feature(aligned)
+                                if feat is not None:
+                                    encodings.append(feat[0])
+                                    
+        if not encodings:
+            return JSONResponse({"status": "error", "message": "No valid face encodings could be extracted from enrolled photos."}, status_code=400)
+            
+        # Save first crop to faces/known for UI display
+        known_faces_dir = WORKING_DIR / "faces" / "known"
+        known_faces_dir.mkdir(parents=True, exist_ok=True)
+        photo_rel = f"faces/known/{pid}.jpg"
+        photo_path = WORKING_DIR / photo_rel
+        
+        if first_pose_img is not None:
+            cv2.imwrite(str(photo_path), first_pose_img)
+            
+        # Update Database
+        with sv._fdb_lock:
+            sv.faces_db[pid] = {
+                "name": name,
+                "known": True,
+                "first_seen": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "last_seen": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "visit_count": 0,
+                "threat_level": "GREEN",
+                "photo": photo_rel,
+                "encoding": encodings[0],
+                "encodings": encodings
+            }
+            with sv._yunet_lock:
+                sv._yunet_enc_cache[pid] = encodings
+            sv._save_db_json()
+            
+        # Sync to SQLite
+        try:
+            sv.db_log_person(pid, name, True, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        except Exception as e:
+            app_log.warning(f"SQLite sync error on enrollment save: {e}")
+            
+        return JSONResponse({
+            "status": "ok",
+            "pid": pid,
+            "name": name,
+            "photo": photo_rel,
+            "embeddings_count": len(encodings)
+        })
+
+    @app.post("/api/enroll/import")
+    async def enroll_import(body: dict = None):
+        if not body:
+            return JSONResponse({"status": "error", "message": "No body provided"}, status_code=400)
+        name = body.get("name", "").strip()
+        folder_path_str = body.get("folder_path", "").strip()
+        if not name or not folder_path_str:
+            return JSONResponse({"status": "error", "message": "Name and folder_path are required"}, status_code=400)
+            
+        folder_path = Path(folder_path_str)
+        if not folder_path.exists() or not folder_path.is_dir():
+            return JSONResponse({"status": "error", "message": f"Folder directory '{folder_path_str}' does not exist"}, status_code=400)
+            
+        sv = _get_sv()
+        if not sv:
+            return JSONResponse({"status": "error", "message": "OMS Engine not running"}, status_code=500)
+            
+        valid_exts = {".jpg", ".jpeg", ".png", ".bmp"}
+        img_files = [f for f in folder_path.iterdir() if f.is_file() and f.suffix.lower() in valid_exts]
+        
+        if not img_files:
+            return JSONResponse({"status": "error", "message": f"No valid image files found in folder '{folder_path_str}'"}, status_code=400)
+            
+        with sv._fdb_lock:
+            pid = sv._new_pid()
+            
+        enroll_dir = WORKING_DIR / "faces" / "enrolled" / pid
+        enroll_dir.mkdir(parents=True, exist_ok=True)
+        
+        encodings = []
+        accepted_files = []
+        rejected_reasons = []
+        duplicate_count = 0
+        
+        for f in img_files:
+            img = cv2.imread(str(f))
+            if img is None:
+                rejected_reasons.append(f"{f.name}: Failed to read image")
+                continue
+                
+            h, w = img.shape[:2]
+            with sv._yunet_lock:
+                sv._yunet_detector.setInputSize((w, h))
+                _, faces = sv._yunet_detector.detect(img)
+                
+            if faces is None or len(faces) == 0:
+                rejected_reasons.append(f"{f.name}: No face detected")
+                continue
+            if len(faces) > 1:
+                rejected_reasons.append(f"{f.name}: Multiple faces detected")
+                continue
+                
+            face = faces[0]
+            fx, fy, fw, fh = int(face[0]), int(face[1]), int(face[2]), int(face[3])
+            conf = float(face[14])
+            
+            if conf < 0.70:
+                rejected_reasons.append(f"{f.name}: Face confidence too low ({conf:.2f})")
+                continue
+            if fw < 80 or fh < 80:
+                rejected_reasons.append(f"{f.name}: Face too small ({fw}x{fh}px)")
+                continue
+                
+            x1, y1 = max(0, fx), max(0, fy)
+            x2, y2 = min(w, fx + fw), min(h, fy + fh)
+            crop = img[y1:y2, x1:x2]
+            
+            gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+            blur_score = cv2.Laplacian(gray, cv2.CV_64F).var()
+            if blur_score < 30.0:
+                rejected_reasons.append(f"{f.name}: Image too blurry ({blur_score:.1f})")
+                continue
+                
+            aligned = sv._sface_recognizer.alignCrop(img, face)
+            feat = sv._sface_recognizer.feature(aligned)
+            if feat is None:
+                rejected_reasons.append(f"{f.name}: Embedding extraction failed")
+                continue
+                
+            curr_enc = feat[0]
+            
+            is_dup = False
+            for prev_enc in encodings:
+                score = float(sv._sface_recognizer.match(
+                    curr_enc.reshape(1,-1), prev_enc.reshape(1,-1), cv2.FaceRecognizerSF_FR_COSINE))
+                if score > 0.88:
+                    is_dup = True
+                    break
+            if is_dup:
+                duplicate_count += 1
+                continue
+                
+            pose_name = f"import_{len(accepted_files) + 1}"
+            img_path = enroll_dir / f"{pose_name}.jpg"
+            cv2.imwrite(str(img_path), crop)
+            
+            encodings.append(curr_enc)
+            accepted_files.append(f.name)
+            
+        if not encodings:
+            try: shutil.rmtree(str(enroll_dir))
+            except: pass
+            return JSONResponse({"status": "error", "message": f"Failed to import. Rejections: {'; '.join(rejected_reasons[:3])}"}, status_code=400)
+            
+        photo_rel = f"faces/known/{pid}.jpg"
+        photo_path = WORKING_DIR / photo_rel
+        
+        first_img_crop = cv2.imread(str(enroll_dir / "import_1.jpg"))
+        if first_img_crop is not None:
+            cv2.imwrite(str(photo_path), first_img_crop)
+            
+        with sv._fdb_lock:
+            sv.faces_db[pid] = {
+                "name": name,
+                "known": True,
+                "first_seen": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "last_seen": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "visit_count": 0,
+                "threat_level": "GREEN",
+                "photo": photo_rel,
+                "encoding": encodings[0],
+                "encodings": encodings
+            }
+            with sv._yunet_lock:
+                sv._yunet_enc_cache[pid] = encodings
+            sv._save_db_json()
+            
+        try:
+            sv.db_log_person(pid, name, True, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        except: pass
+        
+        return JSONResponse({
+            "status": "ok",
+            "pid": pid,
+            "name": name,
+            "accepted_count": len(accepted_files),
+            "rejected_reasons": rejected_reasons,
+            "duplicates_skipped": duplicate_count
+        })
+
+    @app.get("/api/enroll/people")
+    async def enroll_people():
+        sv = _get_sv()
+        if not sv:
+            return JSONResponse([])
+            
+        people = []
+        with sv._fdb_lock:
+            for pid, d in sv.faces_db.items():
+                if not d.get("known", False):
+                    continue
+                enroll_dir = WORKING_DIR / "faces" / "enrolled" / pid
+                img_count = 0
+                if enroll_dir.exists():
+                    img_count = len([f for f in enroll_dir.iterdir() if f.is_file() and f.suffix.lower() == ".jpg"])
+                
+                has_multi = "encodings" in d and isinstance(d["encodings"], list) and len(d["encodings"]) > 1
+                p_type = "Advanced" if (has_multi or img_count > 1) else "Standard"
+                
+                people.append({
+                    "pid": pid,
+                    "name": d.get("name", "Unknown"),
+                    "type": p_type,
+                    "photo": d.get("photo", ""),
+                    "first_seen": d.get("first_seen", ""),
+                    "last_seen": d.get("last_seen", ""),
+                    "image_count": img_count if img_count > 0 else 1
+                })
+        return JSONResponse(people)
+
+    @app.post("/api/enroll/rebuild/{pid}")
+    async def enroll_rebuild(pid: str):
+        sv = _get_sv()
+        if not sv:
+            return JSONResponse({"status": "error", "message": "OMS Engine not running"}, status_code=500)
+            
+        enroll_dir = WORKING_DIR / "faces" / "enrolled" / pid
+        if not enroll_dir.exists():
+            return JSONResponse({"status": "error", "message": f"No enrolled images folder for {pid}"}, status_code=400)
+            
+        encodings = []
+        valid_files = [f for f in enroll_dir.iterdir() if f.is_file() and f.suffix.lower() == ".jpg"]
+        
+        for f in valid_files:
+            img = cv2.imread(str(f))
+            if img is not None:
+                h, w = img.shape[:2]
+                if w >= 30 and h >= 30:
+                    if w < 112 or h < 112:
+                        img = cv2.resize(img, (128, 128), interpolation=cv2.INTER_CUBIC)
+                        h, w = 128, 128
+                    with sv._yunet_lock:
+                        sv._yunet_detector.setInputSize((w, h))
+                        _, faces = sv._yunet_detector.detect(img)
+                        if faces is not None and len(faces) > 0:
+                            aligned = sv._sface_recognizer.alignCrop(img, faces[0])
+                            feat = sv._sface_recognizer.feature(aligned)
+                            if feat is not None:
+                                encodings.append(feat[0])
+                                
+        if not encodings:
+            return JSONResponse({"status": "error", "message": "No valid face encodings could be extracted from saved photos."}, status_code=400)
+            
+        with sv._fdb_lock:
+            if pid in sv.faces_db:
+                sv.faces_db[pid]["encodings"] = encodings
+                sv.faces_db[pid]["encoding"] = encodings[0]
+                with sv._yunet_lock:
+                    sv._yunet_enc_cache[pid] = encodings
+                sv._save_db_json()
+                
+        return JSONResponse({
+            "status": "ok",
+            "message": f"Rebuilt {len(encodings)} embeddings for {pid}"
+        })
+
+    @app.delete("/api/enroll/profile/{pid}")
+    async def enroll_delete(pid: str):
+        sv = _get_sv()
+        if not sv:
+            return JSONResponse({"status": "error", "message": "OMS Engine not running"}, status_code=500)
+            
+        with sv._fdb_lock:
+            if pid in sv.faces_db:
+                del sv.faces_db[pid]
+            with sv._yunet_lock:
+                sv._yunet_enc_cache.pop(pid, None)
+            sv._save_db_json()
+            
+        enroll_dir = WORKING_DIR / "faces" / "enrolled" / pid
+        if enroll_dir.exists():
+            try: shutil.rmtree(str(enroll_dir))
+            except: pass
+            
+        photo_rel = f"faces/known/{pid}.jpg"
+        photo_path = WORKING_DIR / photo_rel
+        if photo_path.exists():
+            try: photo_path.unlink()
+            except: pass
+            
+        try:
+            with sv._db_lock:
+                if sv._db_conn:
+                    sv._db_conn.execute("DELETE FROM persons WHERE pid=?", (pid,))
+                    sv._db_conn.commit()
+        except: pass
+        
+        return JSONResponse({"status": "ok", "message": f"Deleted profile {pid} successfully"})
+
+    @app.get("/api/enroll/export/{pid}")
+    async def enroll_export(pid: str):
+        sv = _get_sv()
+        if not sv:
+            return JSONResponse({"status": "error", "message": "OMS Engine not running"}, status_code=500)
+            
+        with sv._fdb_lock:
+            if pid not in sv.faces_db:
+                return JSONResponse({"status": "error", "message": f"Profile '{pid}' not found"}, status_code=404)
+            profile = sv.faces_db[pid]
+            
+            encs_list = []
+            if "encodings" in profile:
+                encs_list = [e.tolist() for e in profile["encodings"]]
+            elif "encoding" in profile and profile["encoding"] is not None:
+                encs_list = [profile["encoding"].tolist()]
+                
+            export_data = {
+                "pid": pid,
+                "name": profile.get("name", "Unknown"),
+                "first_seen": profile.get("first_seen", ""),
+                "last_seen": profile.get("last_seen", ""),
+                "visit_count": profile.get("visit_count", 0),
+                "threat_level": profile.get("threat_level", "GREEN"),
+                "encodings": encs_list
+            }
+            
+        content = json.dumps(export_data, indent=2)
+        return Response(
+            content=content,
+            media_type="application/json",
+            headers={"Content-Disposition": f"attachment; filename=profile_{pid}.json"}
+        )
+
+    @app.post("/api/enroll/import_profile")
+    async def enroll_import_profile(body: dict = None):
+        if not body:
+            return JSONResponse({"status": "error", "message": "No body provided"}, status_code=400)
+            
+        pid = body.get("pid", "").strip()
+        name = body.get("name", "").strip()
+        encs_list = body.get("encodings", [])
+        
+        if not pid or not name or not encs_list:
+            return JSONResponse({"status": "error", "message": "Invalid profile format. Missing pid, name, or encodings."}, status_code=400)
+            
+        sv = _get_sv()
+        if not sv:
+            return JSONResponse({"status": "error", "message": "OMS Engine not running"}, status_code=500)
+            
+        encs = [np.array(e, dtype=np.float32) for e in encs_list]
+        
+        enroll_dir = WORKING_DIR / "faces" / "enrolled" / pid
+        enroll_dir.mkdir(parents=True, exist_ok=True)
+        
+        photo_rel = f"faces/known/{pid}.jpg"
+        photo_path = WORKING_DIR / photo_rel
+        if not photo_path.exists():
+            placeholder = np.zeros((128, 128, 3), dtype=np.uint8)
+            placeholder[:] = (22, 20, 18)
+            cv2.circle(placeholder, (64, 64), 30, (55, 175, 212), 1, cv2.LINE_AA)
+            cv2.putText(placeholder, name[:2].upper(), (48, 72), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (55, 175, 212), 2, cv2.LINE_AA)
+            Path(photo_path).parent.mkdir(parents=True, exist_ok=True)
+            cv2.imwrite(str(photo_path), placeholder)
+            cv2.imwrite(str(enroll_dir / "front.jpg"), placeholder)
+            
+        with sv._fdb_lock:
+            sv.faces_db[pid] = {
+                "name": name,
+                "known": True,
+                "first_seen": body.get("first_seen", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+                "last_seen": body.get("last_seen", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+                "visit_count": body.get("visit_count", 0),
+                "threat_level": body.get("threat_level", "GREEN"),
+                "photo": photo_rel,
+                "encoding": encs[0],
+                "encodings": encs
+            }
+            with sv._yunet_lock:
+                sv._yunet_enc_cache[pid] = encs
+            sv._save_db_json()
+            
+        try:
+            sv.db_log_person(pid, name, True, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        except: pass
+        
+        return JSONResponse({
+            "status": "ok",
+            "pid": pid,
+            "name": name,
+            "embeddings_count": len(encs)
+        })
+
+    @app.post("/api/enroll/add_photos/{pid}")
+    async def enroll_add_photos(pid: str, body: dict = None):
+        if not body:
+            return JSONResponse({"status": "error", "message": "No body provided"}, status_code=400)
+        folder_path_str = body.get("folder_path", "").strip()
+        if not folder_path_str:
+            return JSONResponse({"status": "error", "message": "folder_path is required"}, status_code=400)
+            
+        folder_path = Path(folder_path_str)
+        if not folder_path.exists() or not folder_path.is_dir():
+            return JSONResponse({"status": "error", "message": f"Folder '{folder_path_str}' does not exist"}, status_code=400)
+            
+        sv = _get_sv()
+        if not sv:
+            return JSONResponse({"status": "error", "message": "OMS Engine not running"}, status_code=500)
+            
+        with sv._fdb_lock:
+            if pid not in sv.faces_db:
+                return JSONResponse({"status": "error", "message": f"Profile '{pid}' not found"}, status_code=404)
+            profile = sv.faces_db[pid]
+            name = profile.get("name", "Unknown")
+            
+        valid_exts = {".jpg", ".jpeg", ".png"}
+        img_files = [f for f in folder_path.iterdir() if f.is_file() and f.suffix.lower() in valid_exts]
+        
+        if not img_files:
+            return JSONResponse({"status": "error", "message": "No image files found"}, status_code=400)
+            
+        enroll_dir = WORKING_DIR / "faces" / "enrolled" / pid
+        enroll_dir.mkdir(parents=True, exist_ok=True)
+        
+        encodings = []
+        with sv._fdb_lock:
+            if "encodings" in profile:
+                encodings = list(profile["encodings"])
+            elif "encoding" in profile and profile["encoding"] is not None:
+                encodings = [profile["encoding"]]
+                
+        curr_count = len([f for f in enroll_dir.iterdir() if f.is_file() and f.suffix.lower() == ".jpg"])
+        
+        added_count = 0
+        duplicate_count = 0
+        rejected_reasons = []
+        
+        for f in img_files:
+            img = cv2.imread(str(f))
+            if img is None:
+                continue
+            h, w = img.shape[:2]
+            with sv._yunet_lock:
+                sv._yunet_detector.setInputSize((w, h))
+                _, faces = sv._yunet_detector.detect(img)
+                
+            if faces is None or len(faces) == 0 or len(faces) > 1:
+                rejected_reasons.append(f"{f.name}: No single face detected")
+                continue
+                
+            face = faces[0]
+            fx, fy, fw, fh = int(face[0]), int(face[1]), int(face[2]), int(face[3])
+            conf = float(face[14])
+            
+            if conf < 0.70 or fw < 80 or fh < 80:
+                rejected_reasons.append(f"{f.name}: Quality checks failed")
+                continue
+                
+            x1, y1 = max(0, fx), max(0, fy)
+            x2, y2 = min(w, fx + fw), min(h, fy + fh)
+            crop = img[y1:y2, x1:x2]
+            
+            aligned = sv._sface_recognizer.alignCrop(img, face)
+            feat = sv._sface_recognizer.feature(aligned)
+            if feat is None:
+                continue
+                
+            curr_enc = feat[0]
+            
+            is_dup = False
+            for prev_enc in encodings:
+                score = float(sv._sface_recognizer.match(
+                    curr_enc.reshape(1,-1), prev_enc.reshape(1,-1), cv2.FaceRecognizerSF_FR_COSINE))
+                if score > 0.88:
+                    is_dup = True
+                    break
+            if is_dup:
+                duplicate_count += 1
+                continue
+                
+            curr_count += 1
+            pose_name = f"added_{curr_count}"
+            cv2.imwrite(str(enroll_dir / f"{pose_name}.jpg"), crop)
+            encodings.append(curr_enc)
+            added_count += 1
+            
+        if added_count > 0:
+            with sv._fdb_lock:
+                sv.faces_db[pid]["encodings"] = encodings
+                sv.faces_db[pid]["encoding"] = encodings[0]
+                with sv._yunet_lock:
+                    sv._yunet_enc_cache[pid] = encodings
+                sv._save_db_json()
+                
+        return JSONResponse({
+            "status": "ok",
+            "added_count": added_count,
+            "duplicates_skipped": duplicate_count,
+            "rejected_reasons": rejected_reasons,
+            "total_embeddings": len(encodings)
+        })
 
     # Serve face photos/crops
     faces_dir = str(WORKING_DIR / "faces")

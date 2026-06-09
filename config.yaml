@@ -29,7 +29,7 @@ cameras:
     location: "Mobile Sector D"
 
 detection:
-  confidence: 0.95
+  confidence: 0.45
   process_every_n:
     LOW: 4
     MEDIUM: 3
@@ -45,9 +45,9 @@ detection:
     MEDIUM: 256
     HIGH: 384
   model:
-    LOW: "yolov8m.pt"
-    MEDIUM: "yolov8m.pt"
-    HIGH: "yolov8m.pt"
+    LOW: "C:\Users\Prajan\.gemini\antigravity\scratch\smart_surveillance\yolov8n.pt"
+    MEDIUM: "C:\Users\Prajan\.gemini\antigravity\scratch\smart_surveillance\yolov8n.pt"
+    HIGH: "C:\Users\Prajan\.gemini\antigravity\scratch\smart_surveillance\yolov8n.pt"
   idle_skip_extra: 2
   absent_cycles_thresh: 50
   motion_thresh_init: 300
@@ -55,7 +55,7 @@ detection:
 
 face_recognition:
   detect_new_ids: true
-  match_threshold: 0.40         # Lowered to 0.40 to allow highly robust matches under off-angles and shadows
+  match_threshold: 0.36         # OpenCV SFace standard similarity threshold for robust matching
   face_detect_model: "hog"
   pool_workers:
     LOW: 1
@@ -78,6 +78,7 @@ behavior:
   pace_direction_changes: 5     # direction reversals before "pacing"
   pace_window_secs: 15.0        # window to count direction changes
   run_speed_threshold: 120.0    # pixels/sec before "running" flagged
+  idle_secs: 120.0              # seconds before a stationary person is flagged as IDLE
 
 ownership:
   proximity_iou_threshold: 0.05 # min overlap between person and object bbox

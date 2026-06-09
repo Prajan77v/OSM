@@ -59,6 +59,17 @@ def clear_events():
     with _events_lock:
         _events_db.clear()
 
+def rename_camera_in_events(old_name: str, new_name: str):
+    """Rename camera name in in-memory event cache."""
+    with _events_lock:
+        for ev in _events_db:
+            if ev.get("camera") == old_name:
+                ev["camera"] = new_name
+            if ev.get("detail") and f"cam={old_name}" in ev["detail"]:
+                ev["detail"] = ev["detail"].replace(f"cam={old_name}", f"cam={new_name}")
+            elif ev.get("detail") and f"camera={old_name}" in ev["detail"]:
+                ev["detail"] = ev["detail"].replace(f"camera={old_name}", f"camera={new_name}")
+
 
 def _get_net_kb() -> float:
     global _net_bytes_prev, _net_bytes_time
@@ -151,6 +162,14 @@ def get_telemetry() -> dict:
         except Exception:
             pass
 
+    # Get detect_new_ids state
+    detect_new_ids = True
+    try:
+        sv2 = _get_sv()
+        detect_new_ids = getattr(sv2.Config, "DETECT_NEW_IDS", True) if sv2 else True
+    except Exception:
+        pass
+
     return {
         "cpu": cpu, "ram": ram, "disk": disk,
         "net_kb": _get_net_kb(),
@@ -164,6 +183,7 @@ def get_telemetry() -> dict:
         "threat_level": "GREEN",
         "fps_all": fps_all,
         "uptime_secs": round(time.time() - _start_time),
+        "detect_new_ids": detect_new_ids,
     }
 
 
@@ -299,13 +319,48 @@ def get_control_handlers(cameras, threat_engine) -> dict:
             return f"Error: {e}"
         return "Logs cleared successfully"
 
+    def do_toggle_auto_register():
+        """Toggle Config.DETECT_NEW_IDS and persist to config.yaml."""
+        try:
+            sv = _get_sv()
+            if not sv:
+                return "Error: Main module not running"
+            sv.Config.DETECT_NEW_IDS = not sv.Config.DETECT_NEW_IDS
+            state = sv.Config.DETECT_NEW_IDS
+            state_str = "ON — new faces will be auto-registered" if state else "OFF — known faces only"
+            try:
+                sv.speak(f"Auto register faces {state_str}.")
+            except Exception:
+                pass
+            try:
+                sv.app_log.info(f"[WEB] Auto Register Faces toggled via web: {state}")
+            except Exception:
+                pass
+            # Persist to config.yaml
+            try:
+                import web_server as ws
+                ws._save_config_yaml_and_env(
+                    sv.Config.USERNAME,
+                    sv.Config.CONFIDENCE,
+                    sv.Config.MODEL_NAME,
+                    sv.Config.BOT_TOKEN,
+                    sv.Config.CHAT_ID,
+                    state,
+                )
+            except Exception:
+                pass
+            return f"Auto Register Faces {'ON' if state else 'OFF'}"
+        except Exception as e:
+            return f"Error: {e}"
+
     return {
-        "alarm":         do_alarm,
-        "shutdown":      do_shutdown,
-        "export_csv":    do_export_csv,
-        "register_face": do_register_face,
-        "test_telegram": do_test_telegram,
-        "toggle_hud":    do_toggle_hud,
-        "refresh":       do_refresh,
-        "reset_logs":    do_reset_logs,
+        "alarm":                do_alarm,
+        "shutdown":             do_shutdown,
+        "export_csv":           do_export_csv,
+        "register_face":        do_register_face,
+        "test_telegram":        do_test_telegram,
+        "toggle_hud":           do_toggle_hud,
+        "refresh":              do_refresh,
+        "reset_logs":           do_reset_logs,
+        "toggle_auto_register": do_toggle_auto_register,
     }
