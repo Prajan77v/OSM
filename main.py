@@ -2448,17 +2448,34 @@ def camera_thread(cs: CameraState):
                                 is_locked = cs.tid_identity_locked.get(tid, False)
                                 if not is_locked:
                                     np_is_registered = False
+                                    np_is_known = False
                                     with _fdb_lock:
                                         if np_pid in faces_db:
                                             np_is_registered = True
+                                            np_is_known = faces_db[np_pid].get("known", False)
                                     
                                     if np_is_registered:
-                                        votes = cs.tid_face_votes.setdefault(tid, {})
-                                        votes[np_pid] = votes.get(np_pid, 0.0) + conf
-                                        
-                                        # Immediate lock on first match (0.35 threshold)
-                                        if votes[np_pid] >= 0.35:
-                                            cs.tid_identity_locked[tid] = True
+                                        if np_is_known:
+                                            votes = cs.tid_face_votes.setdefault(tid, {})
+                                            votes[np_pid] = votes.get(np_pid, 0.0) + conf
+                                            
+                                            # Immediate lock on first match for known faces (0.35 threshold)
+                                            if votes[np_pid] >= 0.35:
+                                                cs.tid_identity_locked[tid] = True
+                                                cs.pid_confidences[np_pid] = conf
+                                                old = cs.track_to_pid.get(tid)
+                                                if old and old != np_pid:
+                                                    cs.present_pids.discard(old)
+                                                    with _fdb_lock:
+                                                        if old in faces_db:
+                                                            faces_db[old]["in_scene"] = False
+                                                            if not faces_db[old].get("known") and faces_db[old].get("visit_count", 0) <= 1:
+                                                                del faces_db[old]
+                                                cs.track_to_pid[tid] = np_pid
+                                                _ensure_pid(cs, np_pid, np_name)
+                                        else:
+                                            # Do not lock track for auto-registered intruders.
+                                            # Assign the intruder PID, but leave track unlocked to allow recheck on subsequent frames.
                                             cs.pid_confidences[np_pid] = conf
                                             old = cs.track_to_pid.get(tid)
                                             if old and old != np_pid:
@@ -2470,6 +2487,8 @@ def camera_thread(cs: CameraState):
                                                             del faces_db[old]
                                             cs.track_to_pid[tid] = np_pid
                                             _ensure_pid(cs, np_pid, np_name)
+                                            # Cooldown for intruder recheck (about 2 seconds)
+                                            cs.tid_face_cd[tid] = 60
                                     else:
                                         curr_pid = cs.track_to_pid.get(tid)
                                         if curr_pid:
