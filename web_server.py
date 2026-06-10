@@ -318,9 +318,15 @@ def save_config_safe(body: dict) -> dict:
         # Step 5: Reloading settings
         app_log.info("[Config] Step 5: Reloading settings into runtime...")
         if sv:
+            resolved_model = model
+            if hasattr(sv, "BUNDLE_DIR") and sv.BUNDLE_DIR:
+                bundled_path = sv.BUNDLE_DIR / model
+                if bundled_path.exists():
+                    resolved_model = str(bundled_path)
+            
             sv.Config.USERNAME = username
             sv.Config.CONFIDENCE = confidence
-            sv.Config.MODEL_NAME = model
+            sv.Config.MODEL_NAME = resolved_model
             sv.Config.BOT_TOKEN = tg_token
             sv.Config.CHAT_ID = tg_chat_id
             sv.Config.DETECT_NEW_IDS = detect_new_ids
@@ -1384,6 +1390,46 @@ def create_app() -> "FastAPI":
         if not img_files:
             return JSONResponse({"status": "error", "message": f"No valid image files found in folder '{folder_path_str}'"}, status_code=400)
             
+        # Map folder images to the 8 targets
+        mapped = {
+            "front": None,
+            "left": None,
+            "right": None,
+            "up": None,
+            "front_glasses": None,
+            "left_glasses": None,
+            "right_glasses": None,
+            "up_glasses": None
+        }
+        
+        for f in img_files:
+            name_lower = f.stem.lower()
+            has_glasses = "glasses" in name_lower or "spectacles" in name_lower or "with_glasses" in name_lower or "w_glasses" in name_lower
+            
+            if "front" in name_lower or "neutral" in name_lower:
+                pose = "front_glasses" if has_glasses else "front"
+            elif "left" in name_lower:
+                pose = "left_glasses" if has_glasses else "left"
+            elif "right" in name_lower:
+                pose = "right_glasses" if has_glasses else "right"
+            elif "up" in name_lower or "upward" in name_lower or "top" in name_lower:
+                pose = "up_glasses" if has_glasses else "up"
+            else:
+                continue
+                
+            if mapped[pose] is None:
+                mapped[pose] = f
+
+        # Validate required poses
+        required_poses = ["front", "left", "right", "up"]
+        missing_required = [p for p in required_poses if mapped[p] is None]
+        if missing_required:
+            missing_str = ", ".join(p.capitalize() for p in missing_required)
+            return JSONResponse({
+                "status": "error", 
+                "message": f"Missing required poses in folder: {missing_str}. Please ensure image filenames contain keywords like 'front', 'left', 'right', 'up' (e.g. 'front.jpg', 'left.jpg', 'right.jpg', 'up.jpg')."
+            }, status_code=400)
+            
         with sv._fdb_lock:
             pid = sv._new_pid()
             
@@ -1393,12 +1439,23 @@ def create_app() -> "FastAPI":
         encodings = []
         accepted_files = []
         rejected_reasons = []
-        duplicate_count = 0
+        photo_scores = []
+        first_pose_img = None
         
-        for f in img_files:
-            img = cv2.imread(str(f))
+        # We will loop through the mapped poses, validating them.
+        for pose, f_path in mapped.items():
+            if f_path is None:
+                continue
+            is_required = pose in required_poses
+            
+            img = cv2.imread(str(f_path))
             if img is None:
-                rejected_reasons.append(f"{f.name}: Failed to read image")
+                err_msg = f"{f_path.name}: Failed to read image"
+                if is_required:
+                    try: shutil.rmtree(str(enroll_dir))
+                    except: pass
+                    return JSONResponse({"status": "error", "message": f"Required photo failed validation. {err_msg}"}, status_code=400)
+                rejected_reasons.append(err_msg)
                 continue
                 
             h, w = img.shape[:2]
@@ -1407,10 +1464,20 @@ def create_app() -> "FastAPI":
                 _, faces = sv._yunet_detector.detect(img)
                 
             if faces is None or len(faces) == 0:
-                rejected_reasons.append(f"{f.name}: No face detected")
+                err_msg = f"{f_path.name}: No face detected"
+                if is_required:
+                    try: shutil.rmtree(str(enroll_dir))
+                    except: pass
+                    return JSONResponse({"status": "error", "message": f"Required photo failed validation. {err_msg}. Please make sure face is clearly visible." }, status_code=400)
+                rejected_reasons.append(err_msg)
                 continue
             if len(faces) > 1:
-                rejected_reasons.append(f"{f.name}: Multiple faces detected")
+                err_msg = f"{f_path.name}: Multiple faces detected"
+                if is_required:
+                    try: shutil.rmtree(str(enroll_dir))
+                    except: pass
+                    return JSONResponse({"status": "error", "message": f"Required photo failed validation. {err_msg}. Only 1 person must be present." }, status_code=400)
+                rejected_reasons.append(err_msg)
                 continue
                 
             face = faces[0]
@@ -1418,10 +1485,20 @@ def create_app() -> "FastAPI":
             conf = float(face[14])
             
             if conf < 0.70:
-                rejected_reasons.append(f"{f.name}: Face confidence too low ({conf:.2f})")
+                err_msg = f"{f_path.name}: Face confidence too low ({conf:.0%})"
+                if is_required:
+                    try: shutil.rmtree(str(enroll_dir))
+                    except: pass
+                    return JSONResponse({"status": "error", "message": f"Required photo failed validation. {err_msg}. Minimum required is 70%." }, status_code=400)
+                rejected_reasons.append(err_msg)
                 continue
             if fw < 80 or fh < 80:
-                rejected_reasons.append(f"{f.name}: Face too small ({fw}x{fh}px)")
+                err_msg = f"{f_path.name}: Face too small ({fw}x{fh}px)"
+                if is_required:
+                    try: shutil.rmtree(str(enroll_dir))
+                    except: pass
+                    return JSONResponse({"status": "error", "message": f"Required photo failed validation. {err_msg}. Minimum required is 80x80px." }, status_code=400)
+                rejected_reasons.append(err_msg)
                 continue
                 
             x1, y1 = max(0, fx), max(0, fy)
@@ -1431,46 +1508,86 @@ def create_app() -> "FastAPI":
             gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
             blur_score = cv2.Laplacian(gray, cv2.CV_64F).var()
             if blur_score < 30.0:
-                rejected_reasons.append(f"{f.name}: Image too blurry ({blur_score:.1f})")
+                err_msg = f"{f_path.name}: Image too blurry (blur score: {blur_score:.1f})"
+                if is_required:
+                    try: shutil.rmtree(str(enroll_dir))
+                    except: pass
+                    return JSONResponse({"status": "error", "message": f"Required photo failed validation. {err_msg}. Minimum blur score is 30.0." }, status_code=400)
+                rejected_reasons.append(err_msg)
                 continue
                 
-            aligned = sv._sface_recognizer.alignCrop(img, face)
-            feat = sv._sface_recognizer.feature(aligned)
+            # Perform CLAHE and Lanczos sharpening enhancements prior to embedding extraction
+            h_crop, w_crop = crop.shape[:2]
+            enhanced = crop
+            try:
+                # CLAHE
+                ycrcb = cv2.cvtColor(enhanced, cv2.COLOR_BGR2YCrCb)
+                channels = list(cv2.split(ycrcb))
+                clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+                channels[0] = clahe.apply(channels[0])
+                ycrcb = cv2.merge(channels)
+                enhanced = cv2.cvtColor(ycrcb, cv2.COLOR_YCrCb2BGR)
+            except Exception:
+                pass
+                
+            if w_crop < 112 or h_crop < 112:
+                try:
+                    enhanced = cv2.resize(enhanced, (128, 128), interpolation=cv2.INTER_LANCZOS4)
+                    kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]], dtype=np.float32)
+                    enhanced = cv2.filter2D(enhanced, -1, kernel)
+                    h_crop, w_crop = 128, 128
+                except Exception:
+                    pass
+            
+            with sv._yunet_lock:
+                sv._yunet_detector.setInputSize((w_crop, h_crop))
+                _, faces_new = sv._yunet_detector.detect(enhanced)
+                if faces_new is not None and len(faces_new) > 0:
+                    aligned = sv._sface_recognizer.alignCrop(enhanced, faces_new[0])
+                else:
+                    aligned = sv._sface_recognizer.alignCrop(img, face)
+                    
+                feat = sv._sface_recognizer.feature(aligned)
+                
             if feat is None:
-                rejected_reasons.append(f"{f.name}: Embedding extraction failed")
+                err_msg = f"{f_path.name}: Feature embedding extraction failed"
+                if is_required:
+                    try: shutil.rmtree(str(enroll_dir))
+                    except: pass
+                    return JSONResponse({"status": "error", "message": f"Required photo failed validation. {err_msg}." }, status_code=400)
+                rejected_reasons.append(err_msg)
                 continue
                 
             curr_enc = feat[0]
             
-            is_dup = False
-            for prev_enc in encodings:
-                score = float(sv._sface_recognizer.match(
-                    curr_enc.reshape(1,-1), prev_enc.reshape(1,-1), cv2.FaceRecognizerSF_FR_COSINE))
-                if score > 0.88:
-                    is_dup = True
-                    break
-            if is_dup:
-                duplicate_count += 1
-                continue
-                
-            pose_name = f"import_{len(accepted_files) + 1}"
-            img_path = enroll_dir / f"{pose_name}.jpg"
+            # Save crop to enrolled folder with pose name
+            img_path = enroll_dir / f"{pose}.jpg"
             cv2.imwrite(str(img_path), crop)
             
             encodings.append(curr_enc)
-            accepted_files.append(f.name)
+            accepted_files.append(f"{pose}: {f_path.name}")
+            
+            # Record first valid pose (usually front) as the profile photo
+            if first_pose_img is None:
+                first_pose_img = crop
+                
+            # Compute quality score for this photo (max 100%)
+            conf_q = max(0.0, min(1.0, (conf - 0.7) / 0.3)) * 40.0 + 60.0
+            size_q = max(0.0, min(1.0, (fw - 80) / 320.0)) * 40.0 + 60.0
+            blur_q = max(0.0, min(1.0, (blur_score - 30.0) / 170.0)) * 40.0 + 60.0
+            photo_scores.append((conf_q + size_q + blur_q) / 3.0)
             
         if not encodings:
             try: shutil.rmtree(str(enroll_dir))
             except: pass
-            return JSONResponse({"status": "error", "message": f"Failed to import. Rejections: {'; '.join(rejected_reasons[:3])}"}, status_code=400)
+            return JSONResponse({"status": "error", "message": "No valid SFace encodings could be extracted from enrolled photos."}, status_code=400)
             
+        overall_quality = sum(photo_scores) / len(photo_scores) if photo_scores else 0.0
+        
         photo_rel = f"faces/known/{pid}.jpg"
         photo_path = WORKING_DIR / photo_rel
-        
-        first_img_crop = cv2.imread(str(enroll_dir / "import_1.jpg"))
-        if first_img_crop is not None:
-            cv2.imwrite(str(photo_path), first_img_crop)
+        if first_pose_img is not None:
+            cv2.imwrite(str(photo_path), first_pose_img)
             
         with sv._fdb_lock:
             sv.faces_db[pid] = {
@@ -1482,7 +1599,9 @@ def create_app() -> "FastAPI":
                 "threat_level": "GREEN",
                 "photo": photo_rel,
                 "encoding": encodings[0],
-                "encodings": encodings
+                "encodings": encodings,
+                "quality_score": overall_quality,
+                "enrolled_poses": [pose for pose, path in mapped.items() if path is not None]
             }
             with sv._yunet_lock:
                 sv._yunet_enc_cache[pid] = encodings
@@ -1490,15 +1609,17 @@ def create_app() -> "FastAPI":
             
         try:
             sv.db_log_person(pid, name, True, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-        except: pass
-        
+        except Exception as e:
+            app_log.warning(f"SQLite sync error on enrollment save: {e}")
+            
         return JSONResponse({
             "status": "ok",
             "pid": pid,
             "name": name,
             "accepted_count": len(accepted_files),
-            "rejected_reasons": rejected_reasons,
-            "duplicates_skipped": duplicate_count
+            "quality_score": overall_quality,
+            "accepted_files": accepted_files,
+            "rejected_reasons": rejected_reasons
         })
 
     @app.get("/api/enroll/people")
@@ -1527,7 +1648,8 @@ def create_app() -> "FastAPI":
                     "photo": d.get("photo", ""),
                     "first_seen": d.get("first_seen", ""),
                     "last_seen": d.get("last_seen", ""),
-                    "image_count": img_count if img_count > 0 else 1
+                    "image_count": img_count if img_count > 0 else 1,
+                    "quality_score": d.get("quality_score", 0.0)
                 })
         return JSONResponse(people)
 
@@ -1542,39 +1664,55 @@ def create_app() -> "FastAPI":
             return JSONResponse({"status": "error", "message": f"No enrolled images folder for {pid}"}, status_code=400)
             
         encodings = []
+        photo_scores = []
         valid_files = [f for f in enroll_dir.iterdir() if f.is_file() and f.suffix.lower() == ".jpg"]
         
         for f in valid_files:
             img = cv2.imread(str(f))
             if img is not None:
                 h, w = img.shape[:2]
-                if w >= 30 and h >= 30:
-                    if w < 112 or h < 112:
-                        img = cv2.resize(img, (128, 128), interpolation=cv2.INTER_CUBIC)
-                        h, w = 128, 128
-                    with sv._yunet_lock:
-                        sv._yunet_detector.setInputSize((w, h))
-                        _, faces = sv._yunet_detector.detect(img)
-                        if faces is not None and len(faces) > 0:
-                            aligned = sv._sface_recognizer.alignCrop(img, faces[0])
-                            feat = sv._sface_recognizer.feature(aligned)
-                            if feat is not None:
-                                encodings.append(feat[0])
+                with sv._yunet_lock:
+                    sv._yunet_detector.setInputSize((w, h))
+                    _, faces = sv._yunet_detector.detect(img)
+                    if faces is not None and len(faces) > 0:
+                        face = faces[0]
+                        conf = float(face[14])
+                        fw, fh = int(face[2]), int(face[3])
+                        
+                        fx1, fy1 = max(0, int(face[0])), max(0, int(face[1]))
+                        fx2, fy2 = min(w, fx1 + fw), min(h, fy1 + fh)
+                        crop = img[fy1:fy2, fx1:fx2]
+                        
+                        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+                        blur_score = cv2.Laplacian(gray, cv2.CV_64F).var() if gray.size > 0 else 30.0
+                        
+                        conf_q = max(0.0, min(1.0, (conf - 0.7) / 0.3)) * 40.0 + 60.0
+                        size_q = max(0.0, min(1.0, (fw - 80) / 320.0)) * 40.0 + 60.0
+                        blur_q = max(0.0, min(1.0, (blur_score - 30.0) / 170.0)) * 40.0 + 60.0
+                        photo_scores.append((conf_q + size_q + blur_q) / 3.0)
+                        
+                        aligned = sv._sface_recognizer.alignCrop(img, face)
+                        feat = sv._sface_recognizer.feature(aligned)
+                        if feat is not None:
+                            encodings.append(feat[0])
                                 
         if not encodings:
             return JSONResponse({"status": "error", "message": "No valid face encodings could be extracted from saved photos."}, status_code=400)
             
+        overall_quality = sum(photo_scores) / len(photo_scores) if photo_scores else 0.0
+        
         with sv._fdb_lock:
             if pid in sv.faces_db:
                 sv.faces_db[pid]["encodings"] = encodings
                 sv.faces_db[pid]["encoding"] = encodings[0]
+                sv.faces_db[pid]["quality_score"] = overall_quality
                 with sv._yunet_lock:
                     sv._yunet_enc_cache[pid] = encodings
                 sv._save_db_json()
                 
         return JSONResponse({
             "status": "ok",
-            "message": f"Rebuilt {len(encodings)} embeddings for {pid}"
+            "message": f"Rebuilt {len(encodings)} embeddings for {pid} with Quality Score: {overall_quality:.1f}%"
         })
 
     @app.delete("/api/enroll/profile/{pid}")

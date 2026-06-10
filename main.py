@@ -587,6 +587,18 @@ def _init_yunet():
 _yunet_enc_cache:  Dict[str, np.ndarray] = {}  # pid -> feature vector
 _yunet_lock = threading.Lock()
 
+def _preprocess_lighting(img_bgr: np.ndarray) -> np.ndarray:
+    """Apply CLAHE to normalize lighting (low-light and shadows) on the face crop."""
+    try:
+        ycrcb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2YCrCb)
+        channels = list(cv2.split(ycrcb))
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        channels[0] = clahe.apply(channels[0])
+        ycrcb = cv2.merge(channels)
+        return cv2.cvtColor(ycrcb, cv2.COLOR_YCrCb2BGR)
+    except Exception:
+        return img_bgr
+
 def _yunet_encode(img_bgr: np.ndarray) -> Optional[np.ndarray]:
     if not YUNET_AVAILABLE: return None
     with _yunet_lock:
@@ -594,10 +606,16 @@ def _yunet_encode(img_bgr: np.ndarray) -> Optional[np.ndarray]:
             h, w = img_bgr.shape[:2]
             if w < 30 or h < 30: return None
             
-            # Dynamic Resolution Upgrade: If the crop is small, upscale it to 128x128
-            # to significantly enhance landmark precision and match confidence scores!
+            # Normalize lighting (low-light improvement)
+            img_bgr = _preprocess_lighting(img_bgr)
+            
+            # Dynamic Resolution Upgrade: If the crop is small, upscale it using Lanczos
+            # and apply a sharpening filter to enhance features for distant recognition
             if w < 112 or h < 112:
-                img_bgr = cv2.resize(img_bgr, (128, 128), interpolation=cv2.INTER_CUBIC)
+                img_bgr = cv2.resize(img_bgr, (128, 128), interpolation=cv2.INTER_LANCZOS4)
+                # Unsharp mask / Sharpening filter
+                kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]], dtype=np.float32)
+                img_bgr = cv2.filter2D(img_bgr, -1, kernel)
                 h, w = 128, 128
                 
             _yunet_detector.setInputSize((w, h))
@@ -626,15 +644,15 @@ def _yunet_encode(img_bgr: np.ndarray) -> Optional[np.ndarray]:
             app_log.error(f"[YUNET] Encode exception: {e}")
             return None
 
-def _yunet_match(enc: np.ndarray) -> Tuple[Optional[str], Optional[str], bool, float]:
+def _yunet_match(enc: np.ndarray, face_size: Optional[int] = None) -> Tuple[Optional[str], Optional[str], bool, float]:
     """Compare enc against all cached known encodings. Returns (pid, name, is_new, score).
     Supports both single-embedding and multi-embedding (Advanced Enrollment) profiles.
+    Includes adaptive thresholding based on face size.
     """
     best_score, best_pid = -1.0, None
     with _yunet_lock:
         for pid, cached in _yunet_enc_cache.items():
             try:
-                # cached may be a single np.ndarray or a list of np.ndarray
                 if isinstance(cached, list):
                     candidates = cached
                 else:
@@ -646,8 +664,12 @@ def _yunet_match(enc: np.ndarray) -> Tuple[Optional[str], Optional[str], bool, f
                         best_score = score; best_pid = pid
             except Exception:
                 pass
-    # SFace Cosine matching standard threshold is 0.36.
+    # SFace Cosine matching standard threshold is Config.FACE_MATCH_THRESH (e.g. 0.36)
     thresh = Config.FACE_MATCH_THRESH
+    # Adaptive threshold: if the face is very small (distant), make threshold stricter to prevent false positives
+    if face_size is not None and face_size < 50:
+        thresh += 0.03
+        
     if best_pid and best_score >= thresh:
         with _fdb_lock:
             name = faces_db.get(best_pid, {}).get("name", "Unknown")
@@ -1442,12 +1464,21 @@ _enc_dirty = True
 def _rebuild_enc_cache():
     global _enc_arr, _enc_pids, _enc_dirty
     with _fdb_lock:
-        pids      = [p for p,d in faces_db.items() if "encoding" in d]
-        _enc_pids = pids
-        _enc_arr  = np.array([faces_db[p]["encoding"] for p in pids]) if pids else None
+        flat_encs = []
+        flat_pids = []
+        for pid, d in faces_db.items():
+            if "encodings" in d and d["encodings"]:
+                for enc in d["encodings"]:
+                    flat_encs.append(enc)
+                    flat_pids.append(pid)
+            elif "encoding" in d and d["encoding"] is not None:
+                flat_encs.append(d["encoding"])
+                flat_pids.append(pid)
+        _enc_pids = flat_pids
+        _enc_arr  = np.array(flat_encs) if flat_encs else None
         _enc_dirty = False
 
-def match_face_dlib(enc):
+def match_face_dlib(enc, face_size: Optional[int] = None):
     global _enc_dirty
     if _enc_dirty: _rebuild_enc_cache()
     if _enc_arr is None:
@@ -1460,7 +1491,12 @@ def match_face_dlib(enc):
     dists = _fr.face_distance(_enc_arr, enc)
     bi    = int(np.argmin(dists))
     dist  = float(dists[bi])
-    if dist <= Config.FACE_MATCH_THRESH:
+    
+    thresh = Config.FACE_MATCH_THRESH
+    if face_size is not None and face_size < 50:
+        thresh -= 0.03
+        
+    if dist <= thresh:
         pid = _enc_pids[bi]
         with _fdb_lock: name = faces_db[pid]["name"]
         conf = max(0.0, min(1.0, 1.0 - dist))
@@ -1494,6 +1530,8 @@ def _register_face_yunet(enc):
 
 def async_face(rgb_or_bgr: np.ndarray, is_bgr: bool = False):
     """Returns (pid, name, conf) or (None, None, 0.0) for one face from a crop."""
+    h_crop, w_crop = rgb_or_bgr.shape[:2]
+    face_size = min(h_crop, w_crop)
     if FACE_RECOG_AVAILABLE:
         try:
             import face_recognition as _fr
@@ -1504,7 +1542,7 @@ def async_face(rgb_or_bgr: np.ndarray, is_bgr: bool = False):
             if not locs: return None, None, 0.0
             encs = _fr.face_encodings(rgb, locs)
             if not encs: return None, None, 0.0
-            pid, name, _, conf = match_face_dlib(encs[0])
+            pid, name, _, conf = match_face_dlib(encs[0], face_size=face_size)
             return pid, name, conf
         except Exception as e: app_log.debug(f"face dlib: {e}"); return None, None, 0.0
     elif YUNET_AVAILABLE:
@@ -1512,7 +1550,7 @@ def async_face(rgb_or_bgr: np.ndarray, is_bgr: bool = False):
             bgr = rgb_or_bgr if is_bgr else cv2.cvtColor(rgb_or_bgr, cv2.COLOR_RGB2BGR)
             enc = _yunet_encode(bgr)
             if enc is None: return None, None, 0.0
-            pid, name, is_new, score = _yunet_match(enc)
+            pid, name, is_new, score = _yunet_match(enc, face_size=face_size)
             if is_new:
                 # Only register new unknown faces if the setting allows it
                 if Config.DETECT_NEW_IDS:
@@ -1943,6 +1981,8 @@ class CameraState:
         self.tid_face_cd:     Dict[int, int]        = {}
         self.tid_face_votes:  Dict[int, Dict[str, float]] = {}
         self.tid_identity_locked: Dict[int, bool]     = {}
+        self.lost_tracks:     Dict[int, Tuple[str, Tuple[int,int,int,int], float]] = {}
+        self.last_track_boxes: Dict[int, Tuple[int,int,int,int]] = {}
         self.tracker     = SpatialTracker()
         self.behavior    = BehaviorEngine()
         self.ownership   = OwnershipEngine()
@@ -2241,6 +2281,7 @@ def camera_thread(cs: CameraState):
     gc_ctr     = 0
     yolo_ctr   = 0        # counts processed YOLO frames for resource cleanup
     read_fails = 0        # consecutive read-failure counter
+    consecutive_tracking_failures = 0  # tracker watchdog counter
     last_purge = time.time()  # behavior record purge timer
     cs.connect()
 
@@ -2253,11 +2294,7 @@ def camera_thread(cs: CameraState):
                 app_log.info(f"[Camera {cs.name}] Dynamic settings reload detected. Re-init YOLO: {Config.MODEL_NAME} on {Config.DEVICE}")
                 try:
                     with _yolo_lock:
-                        # Clear old model reference to release memory/VRAM
-                        cs.yolo_model = None
-                        gc.collect()
-                        
-                        # Load new model
+                        # Load and dry-run new model first before discarding old one to prevent loss of model
                         new_yolo = YOLO(Config.MODEL_NAME)
                         dummy = np.zeros((Config.DET_H, Config.DET_W, 3), dtype=np.uint8)
                         new_yolo.predict(source=dummy, device=Config.DEVICE, verbose=False, half=(Config.DEVICE == "cuda"))
@@ -2269,6 +2306,9 @@ def camera_thread(cs: CameraState):
                         app_log.info(f"[Camera {cs.name}] YOLO model successfully reloaded.")
                 except Exception as ex:
                     app_log.error(f"[Camera {cs.name}] Failed to reload YOLO model dynamically: {ex}", exc_info=True)
+                    # Mark as loaded to prevent spinning in an infinite load-error loop
+                    cs.loaded_model_name = Config.MODEL_NAME
+                    cs.loaded_device = Config.DEVICE
 
         if cs.disconnected:
             time.sleep(1.0); continue
@@ -2388,6 +2428,7 @@ def camera_thread(cs: CameraState):
 
                     if label == "person" and tid is not None:
                         tid_seen.add(tid)
+                        cs.last_track_boxes[tid] = (x1, y1, x2, y2)
                         fut = cs.pending_futures.get(tid)
                         if fut and fut.done():
                             try:
@@ -2435,8 +2476,45 @@ def camera_thread(cs: CameraState):
                                             cs.pid_confidences[curr_pid] = conf
 
                         if tid not in cs.track_to_pid:
-                            new_p = f"Unknown-{tid}"
-                            cs.track_to_pid[tid] = new_p
+                            # Spatial tracking recovery fallback
+                            recovered_pid = None
+                            recovered_tid = None
+                            now = time.time()
+                            
+                            # Clean up old lost tracks
+                            stale_lost = [t for t, (_, _, t_lost) in cs.lost_tracks.items() if now - t_lost > 5.0]
+                            for t in stale_lost:
+                                cs.lost_tracks.pop(t, None)
+                            
+                            # Build candidates list
+                            candidates = []
+                            for l_tid, (l_pid, l_box, l_time) in cs.lost_tracks.items():
+                                candidates.append((l_tid, l_pid, l_box))
+                            for active_tid, active_pid in cs.track_to_pid.items():
+                                if active_tid not in tid_seen and active_tid in cs.last_track_boxes:
+                                    candidates.append((active_tid, active_pid, cs.last_track_boxes[active_tid]))
+                            
+                            cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+                            best_dist = 150.0  # max 150px
+                            for c_tid, c_pid, c_box in candidates:
+                                cx1, cy1, cx2, cy2 = c_box
+                                ccx, ccy = (cx1 + cx2) / 2.0, (cy1 + cy2) / 2.0
+                                dist = math.hypot(cx - ccx, cy - ccy)
+                                if dist < best_dist:
+                                    best_dist = dist
+                                    recovered_pid = c_pid
+                                    recovered_tid = c_tid
+                            
+                            if recovered_pid:
+                                app_log.info(f"[{cs.name}] [TRACK RECOVERY] Recovered tracking ID {tid} as {recovered_pid} (previously {recovered_tid}) spatially (dist={best_dist:.1f}px)")
+                                cs.track_to_pid[tid] = recovered_pid
+                                cs.tid_identity_locked[tid] = True
+                                if recovered_tid in cs.track_to_pid:
+                                    cs.track_to_pid.pop(recovered_tid, None)
+                                cs.lost_tracks.pop(recovered_tid, None)
+                            else:
+                                new_p = f"Unknown-{tid}"
+                                cs.track_to_pid[tid] = new_p
 
                         pid = cs.track_to_pid[tid]
                         if pid.startswith("Unknown-"):
@@ -2455,7 +2533,18 @@ def camera_thread(cs: CameraState):
                             fr_cd = cs.tid_face_cd.get(tid, 0)
                             if fr_cd <= 0 and tid not in cs.pending_futures:
                                 x1f,y1f,x2f,y2f = d["box"]
-                                crop = frame[y1f:y2f, x1f:x2f]
+                                fh_tot = y2f - y1f
+                                fw_tot = x2f - x1f
+                                head_y1 = y1f
+                                head_y2 = y1f + fh_tot // 2
+                                pad_y = int(fh_tot * 0.1)
+                                pad_x = int(fw_tot * 0.2)
+                                h_img, w_img = frame.shape[:2]
+                                crop_y1 = max(0, head_y1 - pad_y)
+                                crop_y2 = min(h_img, head_y2 + pad_y)
+                                crop_x1 = max(0, x1f - pad_x)
+                                crop_x2 = min(w_img, x2f + pad_x)
+                                crop = frame[crop_y1:crop_y2, crop_x1:crop_x2]
                                 if crop.size > 0:
                                     cs.pending_futures[tid] = face_pool.submit(async_face, crop.copy(), True)
                                 # Speed up frequency when not locked for faster recognition
@@ -2496,17 +2585,25 @@ def camera_thread(cs: CameraState):
                         if pi_g:
                             pi_g.absent_cycles += 1
                             if pi_g.absent_cycles > Config.ABSENT_CYCLES_THRESH:
+                                if tid_gone in cs.last_track_boxes:
+                                    cs.lost_tracks[tid_gone] = (pid_g, cs.last_track_boxes[tid_gone], time.time())
+                                    app_log.info(f"[{cs.name}] Tracker lost ID {tid_gone} ({pid_g}) after {pi_g.absent_cycles} cycles absent. Added to recovery buffer.")
                                 if pid_g in cs.present_pids:
                                     cs.present_pids.discard(pid_g)
                                     name_g = faces_db.get(pid_g,{}).get("name","Unknown")
                                     on_person_left(cs, pid_g, name_g, frame)
                                 del cs.track_to_pid[tid_gone]
+                                cs.last_track_boxes.pop(tid_gone, None)
                                 if hasattr(cs, "tid_face_votes") and tid_gone in cs.tid_face_votes:
                                     del cs.tid_face_votes[tid_gone]
                                 if hasattr(cs, "tid_identity_locked") and tid_gone in cs.tid_identity_locked:
                                     del cs.tid_identity_locked[tid_gone]
                         else:
+                            if tid_gone in cs.last_track_boxes:
+                                cs.lost_tracks[tid_gone] = (pid_g, cs.last_track_boxes[tid_gone], time.time())
+                                app_log.info(f"[{cs.name}] Tracker lost ID {tid_gone} ({pid_g}) (no Info). Added to recovery buffer.")
                             del cs.track_to_pid[tid_gone]
+                            cs.last_track_boxes.pop(tid_gone, None)
                             if hasattr(cs, "tid_face_votes") and tid_gone in cs.tid_face_votes:
                                 del cs.tid_face_votes[tid_gone]
                             if hasattr(cs, "tid_identity_locked") and tid_gone in cs.tid_identity_locked:
@@ -2543,28 +2640,51 @@ def camera_thread(cs: CameraState):
                     if fut and not fut.done():
                         fut.cancel()
 
-                # Prune other stale tid records
+                # Prune other stale tid records (only when they are fully absent and deleted)
                 for t in list(cs.tid_face_votes.keys()):
-                    if t not in tid_seen: cs.tid_face_votes.pop(t, None)
+                    if t not in cs.track_to_pid: cs.tid_face_votes.pop(t, None)
                 for t in list(cs.tid_identity_locked.keys()):
-                    if t not in tid_seen: cs.tid_identity_locked.pop(t, None)
+                    if t not in cs.track_to_pid: cs.tid_identity_locked.pop(t, None)
                 for t in list(cs.tid_face_cd.keys()):
-                    if t not in tid_seen: cs.tid_face_cd.pop(t, None)
+                    if t not in cs.track_to_pid: cs.tid_face_cd.pop(t, None)
 
                 with cs.frame_lock:
                     cs.latest_frame = frame; cs.latest_dets = new_dets; cs.tile_dirty = True
 
                 # Release YOLO result tensors immediately to avoid tensor accumulation
                 yolo_ctr += 1
+                consecutive_tracking_failures = 0
                 try:
                     del results, small, boxes
                 except Exception:
                     pass
                 if yolo_ctr % 10 == 0:
                     gc.collect(0)
+                if yolo_ctr % 100 == 0 and Config.DEVICE == "cuda":
+                    try:
+                        import torch
+                        torch.cuda.empty_cache()
+                    except Exception:
+                        pass
 
             except Exception as e:
-                app_log.error(f"[{cs.name}] YOLO error: {e}")
+                consecutive_tracking_failures += 1
+                app_log.error(f"[{cs.name}] YOLO tracking error: {e}", exc_info=True)
+                if consecutive_tracking_failures >= 3:
+                    app_log.warning(f"[{cs.name}] Watchdog: {consecutive_tracking_failures} consecutive YOLO errors. Re-initializing tracker...")
+                    try:
+                        with _yolo_lock:
+                            cs.yolo_model = None
+                            gc.collect()
+                            new_yolo = YOLO(Config.MODEL_NAME)
+                            dummy = np.zeros((Config.DET_H, Config.DET_W, 3), dtype=np.uint8)
+                            new_yolo.predict(source=dummy, device=Config.DEVICE, verbose=False, half=(Config.DEVICE == "cuda"))
+                            cs.yolo_model = new_yolo
+                            yolo = new_yolo
+                            app_log.info(f"[{cs.name}] Watchdog successfully re-initialized YOLO.")
+                    except Exception as ex:
+                        app_log.error(f"[{cs.name}] Watchdog failed to re-initialize YOLO: {ex}", exc_info=True)
+                    consecutive_tracking_failures = 0
                 with cs.frame_lock: cs.latest_frame = frame
 
         else:

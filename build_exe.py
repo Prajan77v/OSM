@@ -169,21 +169,70 @@ else:
     print("  [WARNING] 'faces/' folder not found in project root.")
 
 # ---------------------------------------------------------------------------
+# STEP 6 -- Generate Portable ZIP and Standalone Installer
+# ---------------------------------------------------------------------------
+print("\n[STEP 6] Packaging Portable ZIP and Standalone Installer ...")
+
+import zipfile
+portable_zip_path = DIST / "OMS_Sentinel_Portable.zip"
+print(f"  Creating portable archive: {portable_zip_path.name}...")
+try:
+    with zipfile.ZipFile(portable_zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+        zipf.write(DIST / "OMS_Sentinel.exe", "OMS_Sentinel.exe")
+        if (ROOT / "config.yaml").exists():
+            zipf.write(ROOT / "config.yaml", "config.yaml")
+        if (ROOT / ".env.example").exists():
+            zipf.write(ROOT / ".env.example", ".env.example")
+        faces_folder = ROOT / "faces"
+        if faces_folder.exists():
+            for file_path in faces_folder.rglob('*'):
+                if file_path.is_file():
+                    zipf.write(file_path, file_path.relative_to(ROOT))
+    print("  [OK] Portable ZIP created.")
+except Exception as e:
+    print(f"  [WARNING] Failed to create portable ZIP: {e}")
+
+print("  Compiling Installer GUI Wizard...")
+try:
+    run([
+        sys.executable, "-m", "PyInstaller",
+        "--noconfirm",
+        "--clean",
+        "--onefile",
+        "--noconsole",
+        "--name=OMS_Sentinel_Installer",
+        "--add-data=main.py;.",
+        "--add-data=web_server.py;.",
+        "--add-data=web_integration.py;.",
+        "--add-data=requirements.txt;.",
+        "--add-data=faces;faces",
+        "--add-data=config.yaml;.",
+        "--add-data=frontend/out;frontend/out",
+        "create_installer.py"
+    ])
+    print("  [OK] Standalone Installer compiled.")
+except Exception as e:
+    print(f"  [ERROR] Failed to compile Standalone Installer: {e}")
+    sys.exit(1)
+
+# ---------------------------------------------------------------------------
 # DONE
 # ---------------------------------------------------------------------------
 exe_path = DIST / "OMS_Sentinel.exe"
+installer_path = DIST / "OMS_Sentinel_Installer.exe"
 if exe_path.exists():
     size_mb = exe_path.stat().st_size / (1024 * 1024)
     print("\n" + "=" * 62)
     print("  BUILD SUCCESSFUL!")
-    print("  Executable : " + str(exe_path))
-    print("  Size       : " + f"{size_mb:.1f}" + " MB")
+    print("  Executable        : " + str(exe_path))
+    print("  Portable ZIP      : " + str(portable_zip_path))
+    if installer_path.exists():
+        print("  Windows Installer : " + str(installer_path))
+    print("  Size              : " + f"{size_mb:.1f}" + " MB")
     print("=" * 62)
     print("\nHOW TO DEPLOY:")
-    print("  1. Copy  dist/OMS_Sentinel.exe  to any Windows PC.")
-    print("  2. Place your  config.yaml  and  .env  beside the exe.")
-    print("  3. Double-click OMS_Sentinel.exe  (no Python / Node needed).")
-    print("  4. Web dashboard opens automatically at http://localhost:8000")
+    print("  1. Run  dist/OMS_Sentinel_Installer.exe  to install via GUI wizard.")
+    print("  2. Or extract  dist/OMS_Sentinel_Portable.zip  for portable deployment.")
 else:
     print("\n[ERROR] Build failed -- dist/OMS_Sentinel.exe not found.")
     sys.exit(1)

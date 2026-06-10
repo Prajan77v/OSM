@@ -447,6 +447,10 @@ export default function Dashboard() {
   const [importName, setImportName] = useState("");
   const [importFolder, setImportFolder] = useState("");
   const [importLog, setImportLog] = useState<string[]>([]);
+  const [settingsEnrollName, setSettingsEnrollName] = useState("");
+  const [settingsEnrollFolder, setSettingsEnrollFolder] = useState("");
+  const [settingsEnrollLoading, setSettingsEnrollLoading] = useState(false);
+  const [settingsEnrollLog, setSettingsEnrollLog] = useState<string[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Success Face Recognition indicator
@@ -942,6 +946,44 @@ export default function Dashboard() {
       setImportLog(prev => [...prev, `✗ Network error during import: ${err.message}`]);
     } finally {
       setImportLoading(false);
+    }
+  };
+
+  const handleSettingsEnrollImport = async () => {
+    if (!settingsEnrollName.trim() || !settingsEnrollFolder.trim()) return;
+    setSettingsEnrollLoading(true);
+    setSettingsEnrollLog([`Starting advanced person enrollment from: ${settingsEnrollFolder}...`]);
+    try {
+      const res = await fetch(`${API}/api/enroll/import`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: settingsEnrollName, folder_path: settingsEnrollFolder })
+      });
+      const data = await res.json();
+      if (res.ok && data.status === "ok") {
+        setSettingsEnrollLog(prev => [
+          ...prev,
+          `✓ Successfully enrolled profile ${data.name} (ID: ${data.pid})`,
+          `✓ Enrolled Quality Score: ${data.quality_score.toFixed(1)}%`,
+          `✓ Accepted ${data.accepted_count} images:`,
+          ...data.accepted_files.map((f: string) => `- Enrolled: ${f}`)
+        ]);
+        if (data.rejected_reasons && data.rejected_reasons.length > 0) {
+          setSettingsEnrollLog(prev => [...prev, ...data.rejected_reasons.map((r: string) => `- Skipped: ${r}`)]);
+        }
+        alert(`Advanced Person Enrollment successful!\nSubject: ${data.name}\nQuality Score: ${data.quality_score.toFixed(1)}%`);
+        setSettingsEnrollName("");
+        setSettingsEnrollFolder("");
+        loadEnrolledPeople();
+      } else {
+        setSettingsEnrollLog(prev => [...prev, `✗ Enrollment failed: ${data.message}`]);
+        alert("Enrollment failed: " + data.message);
+      }
+    } catch (err: any) {
+      setSettingsEnrollLog(prev => [...prev, `✗ Network error during enrollment: ${err.message}`]);
+      alert("Network error: " + err.message);
+    } finally {
+      setSettingsEnrollLoading(false);
     }
   };
 
@@ -1754,7 +1796,8 @@ export default function Dashboard() {
                                   <div className="grid grid-cols-2 gap-x-4 gap-y-1 mt-2 text-[10px] font-mono text-sec">
                                     <span>TYPE: <span className="text-[#00E5FF] font-bold">{person.type.toUpperCase()} PROFILE</span></span>
                                     <span>ENROLLED IMAGES: <span className="text-gold-accent font-bold">{person.image_count} POSES</span></span>
-                                    <span className="col-span-2 truncate">ENROLLED ON: <span className="text-white">{person.first_seen || "System Registry"}</span></span>
+                                    <span>QUALITY SCORE: <span className="text-green-oms font-bold">{person.quality_score ? `${person.quality_score.toFixed(1)}%` : "N/A"}</span></span>
+                                    <span className="truncate">ENROLLED ON: <span className="text-white">{person.first_seen || "System Registry"}</span></span>
                                   </div>
                                 </div>
                               </div>
@@ -2353,6 +2396,63 @@ export default function Dashboard() {
                         </div>
                       </div>
                     </div>
+
+                    {/* Advanced Person Enrollment Section */}
+                    <div className="glass-premium p-4 col-span-2 flex flex-col gap-3.5" style={{ borderRadius: 16 }}>
+                      <h4 className="font-orbitron text-xs font-bold text-gold tracking-widest uppercase flex items-center gap-2">
+                        <UserPlus size={14} /> ADVANCED PERSON ENROLLMENT PROTOCOLS
+                      </h4>
+                      <p className="text-[8.5px] text-muted font-inter">
+                        Enroll a new identity using SFace multi-angle profiles. Provide the target's name and local folder path. Minimum required poses: Front, Left, Right, Up.
+                      </p>
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="flex flex-col gap-1.5">
+                          <label className="font-orbitron text-[9px] text-sec font-bold tracking-wider">TARGET SUBJECT NAME</label>
+                          <input
+                            type="text"
+                            value={settingsEnrollName}
+                            onChange={(e) => setSettingsEnrollName(e.target.value)}
+                            placeholder="e.g. PRAJAN"
+                            className="glass-premium bg-black/50 border border-white/10 text-white font-mono text-xs px-4 py-2.5 rounded-lg outline-none focus:border-gold-accent transition-colors"
+                          />
+                        </div>
+                        <div className="flex flex-col gap-1.5">
+                          <label className="font-orbitron text-[9px] text-sec font-bold tracking-wider">LOCAL DIRECTORY PATH</label>
+                          <input
+                            type="text"
+                            value={settingsEnrollFolder}
+                            onChange={(e) => setSettingsEnrollFolder(e.target.value)}
+                            placeholder="e.g. C:\Users\Prajan\Pictures\dataset"
+                            className="glass-premium bg-black/50 border border-white/10 text-white font-mono text-xs px-4 py-2.5 rounded-lg outline-none focus:border-gold-accent transition-colors"
+                          />
+                        </div>
+                      </div>
+                      {settingsEnrollLog.length > 0 && (
+                        <div className="glass-premium bg-black/60 border border-white/5 p-3 font-mono text-[9px] text-sec max-h-[120px] overflow-y-auto" style={{ borderRadius: 10 }}>
+                          {settingsEnrollLog.map((log, i) => (
+                            <p key={i} className={log.startsWith("✓") ? "text-green-oms" : log.startsWith("✗") ? "text-red-400" : "text-muted"}>
+                              {log}
+                            </p>
+                          ))}
+                        </div>
+                      )}
+                      <div className="flex justify-end mt-1">
+                        <button
+                          type="button"
+                          onClick={handleSettingsEnrollImport}
+                          disabled={settingsEnrollLoading || !settingsEnrollName.trim() || !settingsEnrollFolder.trim()}
+                          className="btn-gold-luxury px-6 justify-center gap-2 py-2.5"
+                        >
+                          {settingsEnrollLoading ? (
+                            <RefreshCw size={12} className="animate-spin text-gold-accent" />
+                          ) : (
+                            <UserPlus size={12} />
+                          )}
+                          ENROLL NEW IDENTITY
+                        </button>
+                      </div>
+                    </div>
+
                   </div>
 
                   {/* Actions footer */}
