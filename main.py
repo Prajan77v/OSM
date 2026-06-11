@@ -1318,11 +1318,8 @@ def deduplicate_profiles():
                         known1 = faces_db[pid1].get("known", False)
                         known2 = faces_db[pid2].get("known", False)
                         if known1 and known2:
-                            # Do not merge/delete known users who have different names
-                            name1 = faces_db[pid1].get("name", "").lower()
-                            name2 = faces_db[pid2].get("name", "").lower()
-                            if name1 != name2:
-                                continue
+                            # Keep both known/authorized profiles to support multi-embedding and multi-angle matching
+                            continue
                         if known1 and not known2:
                             older, newer = pid1, pid2
                         elif known2 and not known1:
