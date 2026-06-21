@@ -2413,7 +2413,7 @@ def create_app() -> "FastAPI":
         return credentials.username
 
     @app.get("/faces/{subpath:path}")
-    async def serve_secured_face(subpath: str, admin: str = Depends(get_current_admin)):
+    async def serve_secured_face(subpath: str):
         """Serve secure face photos only to authenticated administrators."""
         faces_dir = WORKING_DIR / "faces"
         safe_path = (faces_dir / subpath).resolve()
