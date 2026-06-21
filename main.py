@@ -694,8 +694,14 @@ def _yunet_match(enc: np.ndarray, face_size: Optional[int] = None) -> Tuple[Opti
                         best_score = score; best_pid = pid
             except Exception:
                 pass
-    # SFace Cosine matching standard threshold is Config.FACE_MATCH_THRESH (e.g. 0.36)
+    # SFace Cosine matching standard threshold is e.g. 0.36
     thresh = Config.FACE_MATCH_THRESH
+    # If matching against an intruder profile, we can be slightly more lenient to merge duplicates (0.35)
+    with _fdb_lock:
+        is_known = faces_db.get(best_pid, {}).get("known", False) if best_pid else False
+    if not is_known:
+        thresh = min(thresh, 0.35)
+
     # Adaptive threshold: if the face is very small (distant), make threshold stricter to prevent false positives
     if face_size is not None and face_size < 50:
         thresh += 0.03
@@ -705,6 +711,7 @@ def _yunet_match(enc: np.ndarray, face_size: Optional[int] = None) -> Tuple[Opti
             name = faces_db.get(best_pid, {}).get("name", "Unknown")
         return best_pid, name, False, best_score
     return None, None, True, 0.0
+
 
 def _yunet_detect_faces(frame: np.ndarray) -> List[Tuple[int,int,int,int]]:
     """Return list of (x1,y1,x2,y2) face boxes found in frame."""
@@ -1714,10 +1721,13 @@ def async_face(rgb_or_bgr: np.ndarray, is_bgr: bool = False):
             if enc is None: return None, None, 0.0
             pid, name, is_new, score = _yunet_match(enc, face_size=face_size)
             if is_new:
-                # Only register new unknown faces if the setting allows it
+                # Only register new unknown faces if the setting allows it, and the crop size is clear enough (>= 75px)
                 if Config.DETECT_NEW_IDS:
-                    pid, name, _ = _register_face_yunet(enc)
-                    score = 0.5
+                    if face_size is not None and face_size >= 75:
+                        pid, name, _ = _register_face_yunet(enc)
+                        score = 0.5
+                    else:
+                        return None, None, 0.0
                 else:
                     return None, None, 0.0
             return pid, name, score
