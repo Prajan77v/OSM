@@ -2335,10 +2335,45 @@ def create_app() -> "FastAPI":
             "total_embeddings": len(encodings)
         })
 
-    # Serve face photos/crops
-    faces_dir = str(WORKING_DIR / "faces")
-    if os.path.exists(faces_dir):
-        app.mount("/faces", StaticFiles(directory=faces_dir), name="faces")
+    # Serve face photos/crops with Authentication Security Check
+    from fastapi.security import HTTPBasic, HTTPBasicCredentials
+    from fastapi.responses import FileResponse
+    from fastapi import Depends, HTTPException, status
+    import secrets
+
+    security = HTTPBasic()
+
+    def get_current_admin(credentials: HTTPBasicCredentials = Depends(security)):
+        # Retrieve credentials from Environment secrets loaded by main.py
+        admin_username = os.environ.get("OSM_OPERATOR", "Admin")
+        admin_password = os.environ.get("OSM_ADMIN_PASSWORD", "Sentinel90")
+        
+        is_user_ok = secrets.compare_digest(credentials.username, admin_username)
+        is_pass_ok = secrets.compare_digest(credentials.password, admin_password)
+        
+        if not (is_user_ok and is_pass_ok):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Access Denied: Invalid credentials.",
+                headers={"WWW-Authenticate": "Basic"},
+            )
+        return credentials.username
+
+    @app.get("/faces/{subpath:path}")
+    async def serve_secured_face(subpath: str, admin: str = Depends(get_current_admin)):
+        """Serve secure face photos only to authenticated administrators."""
+        faces_dir = WORKING_DIR / "faces"
+        safe_path = (faces_dir / subpath).resolve()
+        
+        # Verify directory traversal guard
+        if not str(safe_path).startswith(str(faces_dir.resolve())):
+            raise HTTPException(status_code=403, detail="Access denied.")
+            
+        if not safe_path.exists() or not safe_path.is_file():
+            raise HTTPException(status_code=404, detail="File not found.")
+            
+        return FileResponse(safe_path)
+
 
     # ─── Static Frontend ──────────────────────────────────────────────────────
     frontend_dir = str(BUNDLE_DIR / "frontend" / "out")
