@@ -1,98 +1,114 @@
-# Object Sentinel Matrix (OSM) v9.0
+# Object Sentinel Matrix (OSM) — v9.0
 
-A next-generation, ultra-premium AI smart surveillance system and command center. Built with Python and Next.js, OSM features real-time video processing, deep-learning facial recognition, behavior analytics, and a high-performance Next.js web dashboard, all wrapped in a cinematic Black & Gold luxury UI design.
+[![Python Version](https://img.shields.io/badge/Python-3.10%20%7C%203.11-gold?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
+[![Next.js Version](https://img.shields.io/badge/Next.js-16%2B-gold?style=for-the-badge&logo=nextdotjs&logoColor=white)](https://nextjs.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-Modern--API-gold?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-gold?style=for-the-badge)](https://opensource.org/licenses/MIT)
 
----
-
-## 🌟 What I Have Built
-Throughout the development of this project, I have completely transformed a standard camera feed into an elite AI command center:
-* **Premium Cinematic UI**: Re-engineered the OpenCV visual feed to feature glassmorphism, neon glows, animated crosshairs, and a true 1920x1080 UI-free fullscreen camera preview mode.
-* **Deep Learning Face Recognition (No dlib required!)**: Implemented a state-of-the-art fallback engine using OpenCV's YuNet and SFace models, eliminating the notorious Windows `dlib` C++ compilation nightmare.
-* **Intelligent Threat Engine**: Built a dynamic threat evaluation system (Green, Yellow, Orange, Red) that tracks object abandonment, running, pacing, and loitering.
-* **Full-Stack Integration**: Developed a sleek Next.js frontend that hooks seamlessly into the Python FastAPI backend to monitor telemetry, view events, and trigger commands remotely.
-* **Repository Restructuring**: Completely organized the codebase, designated `main.py` as the undisputed entry point, and purged all unwanted AI-generated scratch files for a professional GitHub presentation.
+**Object Sentinel Matrix (OSM)** is an enterprise-grade AI-powered smart surveillance system and interactive command center. By combining Python’s computer vision capability with a high-performance Next.js dashboard, OSM delivers real-time video telemetry, deep learning facial recognition, and behavioral anomaly detection wrapped in a stunning, cinematic luxury **Black & Gold** interface.
 
 ---
 
-## 🚀 What It Can Do
-* **Real-Time Object Detection**: Uses ultralytics YOLOv8 for high-speed, high-confidence tracking of people and objects.
-* **Behavior Anomalies**: Autonomously flags suspicious behavior like pacing back and forth, sprinting, or abandoning objects (like backpacks).
-* **Automated Evidence Capture**: Automatically isolates and saves high-quality cropped photos of intruders to the `faces/captured/` evidence locker.
-* **Voice Annunciator**: Speaks critical alerts aloud (e.g., "Intruder detected", "Identity confirmed").
-* **Immersive Fullscreen Mode**: Hides all data panels to give you a pure, unobstructed 1920x1080 view of your active camera.
-* **Telegram Integration**: Can dispatch instant mobile alerts with photo evidence of security breaches.
+## 📸 System Overview
+
+*(Add screenshots of your premium OpenCV layout and Next.js Web Dashboard here to showcase the Black & Gold UI)*
 
 ---
 
-## 🎮 How To Use (Keyboard Commands)
-When the main OpenCV dashboard is running, use these keys to control the Matrix:
+## 🌟 Key Features
 
-| Key | Action |
-|:---:|:---|
-| **`Z`** | **Toggle Cinematic Fullscreen**: Hides the UI and expands the focused camera to 1920x1080. |
-| **`S` / `Tab`** | **Cycle Cameras**: Switches the active/focused camera feed. |
-| **`R`** | **Register Face**: Looks at the active camera to capture and save your face as an authorized Operator. |
-| **`Space`** | **Manual Alarm**: Instantly elevates the threat level to RED and triggers sirens. |
-| **`C`** | **Export Logs**: Dumps all recent events to a CSV file. |
-| **`Q`** | **Shutdown**: Safely terminates the AI, saves databases, and exits. |
+* **High-Performance Vision Engine**: Utilizes Ultralytics **YOLOv8** for real-time tracking of personnel and object telemetry.
+* **No-Compile Facial Recognition**: Features a state-of-the-art fallback recognition pipeline powered by OpenCV's **YuNet** and **SFace** ONNX engines, bypassing complex C++ compilation setups on Windows/macOS.
+* **Dynamic Node Orchestration**: Add, remove, rename, and monitor camera streams dynamically from the web interface without stopping the surveillance core.
+* **Behavior Anomaly Detection**: Autonomously flags loitering, running/sprinting, and abandoned objects using relative velocity and temporal calculations.
+* **Async Logging & Storage**: Employs an event-driven, non-blocking dirty-flag architecture to flush database states and save frame capture logs without impacting high-FPS camera rendering.
+* **Security Integrations**: Instant snapshot captures saved directly to the `/faces/captured/` evidence directory with options for Telegram alert broadcasts.
 
 ---
 
-## 🛠 Installation (Windows Only)
+## 📂 Repository Structure
 
-**Prerequisites:**
-* Python 3.10 or 3.11
-* Node.js (v18+)
-
-**Step 1: Clone the Repository**
-```powershell
-git clone https://github.com/Prajan77v/OSM.git
-cd OSM
+```directory
+OSM/
+├── main.py                     # AI core execution engine & OpenCV rendering loop
+├── web_server.py               # FastAPI backend exposing camera control & log telemetry APIs
+├── dev_server.py               # Local server coordination script
+├── config.yaml                 # System configurations & camera settings
+├── requirements.txt            # Python dependencies list
+├── frontend/                   # Next.js web application
+│   ├── src/
+│   │   └── app/
+│   │       ├── page.tsx        # Command center web dashboard UI
+│   │       └── globals.css     # CSS style variables & layout configurations
+│   └── package.json
+└── faces/
+    ├── baselines/              # Reference face photos for registered personnel
+    └── captured/               # Auto-isolated security breach snapshot evidence
 ```
-
-**Step 2: Install Python Dependencies**
-*Note: You do NOT need Visual Studio C++ build tools because i integrated YuNet as a dlib bypass!*
-```powershell
-pip install -r requirements.txt
-```
-
-**Step 3: Setup the Next.js Frontend**
-```powershell
-cd frontend
-npm install
-cd ..
-```
-
-**Step 4: Launch the Command Center**
-You need two terminals.
-
-*Terminal 1 (The AI Core):*
-```powershell
-# Inside the root OSM folder
-python main.py
-```
-
-*Terminal 2 (The Web Dashboard):*
-```powershell
-# Inside the frontend folder
-npm run dev
-```
-Once both are running, your local OpenCV window will pop up, and you can view the web UI at `http://localhost:3000`.
 
 ---
 
-## 🧗‍♂️ Problems Undergone & Solved
-Building a system of this complexity required solving several major technical hurdles:
+## 🛠️ Quick Start & Installation
 
-1. **The `dlib` Windows Compilation Nightmare**: 
-   * *Problem*: Installing `face_recognition` requires compiling `dlib`, which consistently fails on Windows machines without massive GBs of Visual Studio C++ tools installed.
-   * *Solution*: Engineered a custom deep-learning fallback engine utilizing OpenCV's `YuNet` and `SFace` ONNX models. The system dynamically downloads these models and perfectly executes facial recognition using pure OpenCV.
-2. **Cluttered UI in Fullscreen**: 
-   * *Problem*: Expanding the window to fullscreen originally just stretched the side-panels and headers, creating an ugly layout. 
-   * *Solution*: Re-wrote the rendering loop so that pressing `Z` suspends the UI canvas, forcing the focused camera to seamlessly take over the entire 1920x1080 viewport.
-3. **Accidental Git Initialization in System Folders**: 
-   * *Problem*: Git was accidentally initialized in the `AppData` VS Code directory, causing fatal identity errors.
-   * *Solution*: Destroyed the bad git instance, re-initialized it cleanly inside the project workspace, and forcefully scrubbed 20+ temporary scratch files before pushing to GitHub.
-4. **"Zone" Clutter**: 
-   * *Problem*: The UI was bloated with bounding boxes for "Restricted Zones".
-   * *Solution*: Systematically scrubbed all zone-rendering logic from the Python backend and Next.js frontend, returning the system to a clean, luxury "Black & Gold" aesthetic.
+### Prerequisites
+* **Python**: `3.10` or `3.11`
+* **Node.js**: `v18+` (npm included)
+
+### Step-by-Step Setup
+
+1. **Clone the Repository**
+   ```bash
+   git clone https://github.com/Prajan77v/OSM.git
+   cd OSM
+   ```
+
+2. **Configure Python Core**
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+3. **Install Frontend Dependencies**
+   ```bash
+   cd frontend
+   npm install
+   cd ..
+   ```
+
+4. **Launch Command Center**
+   Run the backend core and frontend dashboard simultaneously:
+
+   * **Terminal 1 (AI Surveillance Core)**:
+     ```bash
+     python main.py
+     ```
+   * **Terminal 2 (Next.js Dashboard)**:
+     ```bash
+     cd frontend
+     npm run dev
+     ```
+
+   Once initialized, open `http://localhost:3000` in your web browser.
+
+---
+
+## 🎮 Desktop Shortcuts & Interface Controls
+
+When the active OpenCV window is selected, use these hotkeys to navigate the interface:
+
+| Key | Operation | Description |
+| :---: | :--- | :--- |
+| **`Z`** | **Toggle Fullscreen Preview** | Instantly toggles a clean, distraction-free camera stream layout. |
+| **`Tab`** | **Cycle Camera Stream** | Cycles active focus through available video devices. |
+| **`R`** | **Register Face** | Registers the current frame subject as an authorized operator database baseline. |
+| **`Space`** | **Trigger Alarm** | Sets the current threat level to MAXIMUM (Red alert). |
+| **`C`** | **Export Logs** | Syncs system logs and outputs a clean CSV log export. |
+| **`Q`** | **Graceful Shutdown** | Releases hardware feeds, saves operational databases, and exits. |
+
+---
+
+## 🧗‍♂️ Challenges Solved
+
+* **Windows dlib Dependency Bypass**: Building face recognition on Windows traditionally requires compiling C++ `dlib` binaries, which demands gigabytes of Visual Studio workloads. We bypassed this entirely by engineering a dual-engine fallback using **YuNet** and **SFace** running directly via OpenCV's `dnn` module.
+* **Dynamic Camera Hot-Swapping**: Traditional surveillance loops freeze or crash when camera devices are unplugged or added. We resolved this by building a dedicated thread cleanup guard checking `removed` states and cleaning index shifts dynamically.
+* **Non-Blocking Write Queue**: Standard file writing blocks vision runtime loops. We optimized file writes through an asynchronous dirty-flag system which schedules saves off the main GUI thread.
+* **Cinematic Aesthetic Refinements**: Scrubbed cluttering HUD indicators and zone outlines to guarantee a luxury UI look with high-visibility neon Gold/Black themes.ck & Gold" aesthetic.
