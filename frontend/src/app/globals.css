@@ -119,6 +119,18 @@ html, body {
     inset 0 1px 0 rgba(212, 175, 55, 0.15);
 }
 
+.glass-red-active {
+  background: rgba(25, 18, 18, 0.5);
+  backdrop-filter: blur(24px) saturate(140%);
+  -webkit-backdrop-filter: blur(24px) saturate(140%);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  border-radius: 20px;
+  box-shadow: 
+    0 16px 48px rgba(0, 0, 0, 0.7), 
+    0 0 32px rgba(239, 68, 68, 0.25),
+    inset 0 1px 0 rgba(239, 68, 68, 0.15);
+}
+
 /* ── Typography & Glowing Hierarchy ────────────────────────────────── */
 .font-orbitron { font-family: var(--font-orbitron), 'Orbitron', sans-serif; }
 .font-inter { font-family: var(--font-inter), 'Inter', sans-serif; }

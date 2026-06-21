@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   LayoutDashboard, Video, Crosshair, Radar, BarChart3,
@@ -8,9 +8,9 @@ import {
   Shield, Activity, Cpu, HardDrive, Wifi, Send, Bell, Eye,
   UserCheck, Package, MapPin, Clock, Zap, TrendingUp,
   Database, Bot, Download, Volume2, RefreshCw, Maximize2, Minimize2,
-  Mic, Play, Pause, Square, CheckCircle, Info,
+  Mic, Play, Pause, Square, CheckCircle, Info, XCircle,
   UserPlus, Award, Check, Save, ToggleLeft, ToggleRight,
-  Sliders, SlidersHorizontal, SlidersVertical, Edit2, X, Trash
+  Sliders, SlidersHorizontal, SlidersVertical, Edit2, X, Trash, Plus
 } from "lucide-react";
 
 // ─── API base URL (proxied in dev, same-origin in prod) ──────────────────────
@@ -18,7 +18,7 @@ const API = "";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 interface CameraInfo {
-  id: number; name: string; location: string;
+  id: number; name: string; location: string; source?: string;
   online: boolean; disconnected: boolean; fps: number;
   persons: number; detections: number; threat_level: string; uptime: string;
   active_subjects?: any[]; detections_list?: any[];
@@ -413,8 +413,8 @@ export default function Dashboard() {
   const [ttsEnabled, setTtsEnabled] = useState(true);
   const [activeModel, setActiveModel] = useState("yolov8n.pt");
   const [confThresh, setConfThresh] = useState(0.45);
-  const [tgBotToken, setTgBotToken] = useState("8938780809:AAHzpgv_fbfbmXJ9x_ui44LY83CWnTWfKPo");
-  const [tgChatId, setTgChatId] = useState("8076971661");
+  const [tgBotToken, setTgBotToken] = useState("");
+  const [tgChatId, setTgChatId] = useState("");
   const [detectNewIds, setDetectNewIds] = useState(true);
   const [useCuda, setUseCuda] = useState(true);
   const [detectPeople, setDetectPeople] = useState(true);
@@ -425,8 +425,55 @@ export default function Dashboard() {
   const [particleSize, setParticleSize] = useState(3.0);
   const [meshThickness, setMeshThickness] = useState(1.0);
 
+  const lastActivePidRef = useRef<string>("");
+  const [cropKey, setCropKey] = useState<string>("");
+  const activeTimeoutsRef = useRef<NodeJS.Timeout[]>([]);
+  const fetchAbortControllerRef = useRef<AbortController | null>(null);
+
+  const safeSetTimeout = useCallback((fn: () => void, delay: number) => {
+    const timer = setTimeout(fn, delay);
+    activeTimeoutsRef.current.push(timer);
+    return timer;
+  }, []);
+
+  // Clear timeouts on unmount
+  useEffect(() => {
+    return () => {
+      activeTimeoutsRef.current.forEach(clearTimeout);
+    };
+  }, []);
+
+  // Client-side persistence for particlesActive and particleDensity
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const active = localStorage.getItem("particlesActive");
+      if (active !== null) {
+        setParticlesActive(active === "true");
+      }
+      const density = localStorage.getItem("particleDensity");
+      if (density !== null) {
+        setParticleDensity(parseInt(density, 10));
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      localStorage.setItem("particlesActive", particlesActive.toString());
+    }
+  }, [particlesActive]);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      localStorage.setItem("particleDensity", particleDensity.toString());
+    }
+  }, [particleDensity]);
+
   const [camConnectUrls, setCamConnectUrls] = useState<string[]>(["0", "NONE", "NONE", "NONE"]);
   const [camNames, setCamNames] = useState<string[]>([]);
+  const [newCamName, setNewCamName] = useState("");
+  const [newCamSource, setNewCamSource] = useState("");
+  const [newCamLocation, setNewCamLocation] = useState("");
 
   // Memory database state
   const [knownUsers, setKnownUsers] = useState<EnrolledUser[]>([
@@ -468,13 +515,13 @@ export default function Dashboard() {
     const el = viewportRef.current;
     if (!el) return;
     if (!document.fullscreenElement) {
-      el.requestFullscreen().catch(() => {});
-      setIsFullscreen(true);
-      speakAI("Fullscreen preview activated");
+      el.requestFullscreen()
+        .then(() => speakAI("Fullscreen preview activated"))
+        .catch(() => {});
     } else {
-      document.exitFullscreen();
-      setIsFullscreen(false);
-      speakAI("Fullscreen preview deactivated");
+      document.exitFullscreen()
+        .then(() => speakAI("Fullscreen preview deactivated"))
+        .catch(() => {});
     }
   };
 
@@ -519,53 +566,113 @@ export default function Dashboard() {
 
   // ── Data polling ──────────────────────────────────────────────────────────
   const fetchAll = useCallback(async () => {
+    if (fetchAbortControllerRef.current) {
+      fetchAbortControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    fetchAbortControllerRef.current = controller;
+    const signal = controller.signal;
+
     try {
-      const [camRes, telRes, evtRes, sumRes, facRes] = await Promise.all([
-        fetch(`${API}/api/cameras`).then(r => r.json()),
-        fetch(`${API}/api/telemetry`).then(r => r.json()),
-        fetch(`${API}/api/events`).then(r => r.json()),
-        fetch(`${API}/api/summary`).then(r => r.json()),
-        fetch(`${API}/api/faces`).then(r => r.json()),
+      const safeFetch = async (url: string) => {
+        try {
+          const res = await fetch(url, { signal });
+          if (!res.ok) return null;
+          return await res.json();
+        } catch (e: any) {
+          if (e.name === 'AbortError') throw e;
+          return null;
+        }
+      };
+
+      const results = await Promise.allSettled([
+        safeFetch(`${API}/api/cameras`),
+        safeFetch(`${API}/api/telemetry`),
+        safeFetch(`${API}/api/events`),
+        safeFetch(`${API}/api/summary`),
+        safeFetch(`${API}/api/faces`),
       ]);
-      setCameras(camRes);
-      if (Array.isArray(camRes) && camRes.length > 0) {
-        setCamNames(prev => prev.length === 0 ? camRes.map((c: any) => c.name) : prev);
+
+      const camRes = results[0].status === 'fulfilled' ? results[0].value : null;
+      const telRes = results[1].status === 'fulfilled' ? results[1].value : null;
+      const evtRes = results[2].status === 'fulfilled' ? results[2].value : null;
+      const sumRes = results[3].status === 'fulfilled' ? results[3].value : null;
+      const facRes = results[4].status === 'fulfilled' ? results[4].value : null;
+
+      if (camRes) {
+        setCameras(camRes);
+        if (Array.isArray(camRes)) {
+          setCamNames(prev => {
+            if (prev.length !== camRes.length) {
+              return camRes.map((c: any) => c.name);
+            }
+            return prev;
+          });
+          setCamConnectUrls(prev => {
+            if (prev.length !== camRes.length) {
+              return camRes.map((c: any) => c.source || "");
+            }
+            return prev;
+          });
+
+          if (camRes.length > 0) {
+            const activeSubject = camRes[activeCam]?.active_subjects?.[0];
+            const currentPid = activeSubject?.pid || "";
+            if (currentPid && currentPid !== lastActivePidRef.current) {
+              lastActivePidRef.current = currentPid;
+              setCropKey(Date.now().toString());
+            }
+          }
+        }
+        const activeCamDets = camRes[activeCam]?.persons || 0;
+        setIsFaceUnlocked(activeCamDets > 0);
       }
-      setTelemetry(telRes);
-      setEvents(evtRes.slice(-15).reverse());
-      setSummary(sumRes);
-      if (Array.isArray(facRes) && facRes.length > 0) {
+
+      if (telRes) {
+        setTelemetry(telRes);
+        setCpuHistory(h => [...h.slice(1), telRes.cpu || 0]);
+        setRamHistory(h => [...h.slice(1), telRes.ram || 0]);
+        setNetHistory(h => [...h.slice(1), Math.min(telRes.net_kb || 0, 100)]);
+        setGpuHistory(h => [...h.slice(1), telRes.gpu || 0]);
+
+        if (typeof telRes.detect_new_ids === "boolean") {
+          setDetectNewIds(telRes.detect_new_ids);
+        }
+      }
+
+      if (evtRes) {
+        setEvents(evtRes.slice(-15).reverse());
+      }
+
+      if (sumRes) {
+        setSummary(sumRes);
+      }
+
+      if (facRes && Array.isArray(facRes) && facRes.length > 0) {
         setKnownUsers(facRes);
       }
-
-      setCpuHistory(h => [...h.slice(1), telRes.cpu || 0]);
-      setRamHistory(h => [...h.slice(1), telRes.ram || 0]);
-      setNetHistory(h => [...h.slice(1), Math.min(telRes.net_kb || 0, 100)]);
-      setGpuHistory(h => [...h.slice(1), telRes.gpu || 0]);
-
-      // Sync Auto Register state from backend telemetry (keeps both UIs in sync)
-      if (typeof telRes.detect_new_ids === "boolean") {
-        setDetectNewIds(telRes.detect_new_ids);
+    } catch (e: any) {
+      if (e.name === 'AbortError') {
+        // Ignored
       }
-
-      const activeCamDets = camRes[activeCam]?.persons || 0;
-      if (activeCamDets > 0) {
-        setIsFaceUnlocked(true);
-      } else {
-        setIsFaceUnlocked(false);
-      }
-    } catch {}
+    }
   }, [activeCam]);
 
   useEffect(() => {
     fetchAll();
     const t = setInterval(fetchAll, 2000);
-    return () => clearInterval(t);
+    return () => {
+      clearInterval(t);
+      if (fetchAbortControllerRef.current) {
+        fetchAbortControllerRef.current.abort();
+      }
+    };
   }, [fetchAll]);
 
   // ── Browser Voice Speech Output ──────────────────────────────────────────
-  const speakAI = (txt: string) => {
-    if (!ttsEnabled) return;
+  const speakAI = useCallback((txt: string, forceEnabled?: boolean) => {
+    const enabled = forceEnabled !== undefined ? forceEnabled : ttsEnabled;
+    if (!enabled) return;
     if (typeof window !== "undefined" && window.speechSynthesis) {
       window.speechSynthesis.cancel();
       const utt = new SpeechSynthesisUtterance(txt);
@@ -576,7 +683,7 @@ export default function Dashboard() {
       utt.pitch = 0.95;
       window.speechSynthesis.speak(utt);
     }
-  };
+  }, [ttsEnabled]);
 
   // ── Real-time Inline Profile Renaming & Subject Promotion ────────────────
   const handleRenameSave = async (pid: string, newName: string) => {
@@ -616,7 +723,7 @@ export default function Dashboard() {
       setAiSubText("Vocal simulation active. Listening...");
       speakAI("Listening");
 
-      setTimeout(async () => {
+      safeSetTimeout(async () => {
         setAiState("processing");
         setAiSubText("Simulating neural voice mapping...");
         
@@ -650,7 +757,7 @@ export default function Dashboard() {
           speakAI(text);
         }
 
-        setTimeout(() => {
+        safeSetTimeout(() => {
           setAiState("idle");
           setAiSubText("Awaiting voice command input");
           setSpeechOutput("");
@@ -713,7 +820,7 @@ export default function Dashboard() {
               setWizardOpen(true);
             }
 
-            setTimeout(() => {
+            safeSetTimeout(() => {
               setAiState("idle");
               setAiSubText("Awaiting voice command input");
               setSpeechOutput("");
@@ -745,10 +852,10 @@ export default function Dashboard() {
       const d = await r.json();
       setControlMsg(d.result || d.message || "Operation Completed Successfully");
       speakAI(d.result || d.message || "Executed");
-      setTimeout(() => setControlMsg(null), 3000);
+      safeSetTimeout(() => setControlMsg(null), 3000);
     } catch (e) {
       setControlMsg("Transmission failed: " + e);
-      setTimeout(() => setControlMsg(null), 3000);
+      safeSetTimeout(() => setControlMsg(null), 3000);
     } finally {
       setBtnLoading(b => ({ ...b, [action]: false }));
     }
@@ -769,10 +876,10 @@ export default function Dashboard() {
       });
       const d = await r.json();
       setControlMsg(`Camera ${camId + 1} Reconnection Initiated`);
-      setTimeout(() => setControlMsg(null), 3000);
+      safeSetTimeout(() => setControlMsg(null), 3000);
     } catch (e) {
       setControlMsg("Reconnection failed: " + e);
-      setTimeout(() => setControlMsg(null), 3000);
+      safeSetTimeout(() => setControlMsg(null), 3000);
     } finally {
       setBtnLoading(b => ({ ...b, [action]: false }));
     }
@@ -796,6 +903,69 @@ export default function Dashboard() {
       }
     } catch {}
     setBtnLoading(prev => ({ ...prev, [`rename_cam_${idx}`]: false }));
+  };
+
+  // ── Add new camera node ────────────────────────────────────────────────────
+  const addCam = async () => {
+    if (!newCamName.trim()) {
+      alert("Camera name is required");
+      return;
+    }
+    setBtnLoading(prev => ({ ...prev, add_cam: true }));
+    try {
+      const r = await fetch(`${API}/api/camera/add`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: newCamName.trim(),
+          source: newCamSource.trim() || "NONE",
+          location: newCamLocation.trim() || "Monitored Sector"
+        })
+      });
+      const d = await r.json();
+      if (d.status === "ok") {
+        speakAI(`Camera ${newCamName} added successfully`);
+        setNewCamName("");
+        setNewCamSource("");
+        setNewCamLocation("");
+        setCamNames([]);
+        setCamConnectUrls([]);
+        fetchAll();
+      } else {
+        alert(d.message || "Failed to add camera");
+      }
+    } catch (err) {
+      alert("Error adding camera: " + err);
+    } finally {
+      setBtnLoading(prev => ({ ...prev, add_cam: false }));
+    }
+  };
+
+  // ── Remove camera node ─────────────────────────────────────────────────────
+  const removeCam = async (idx: number) => {
+    const cam = cameras[idx];
+    if (!cam) return;
+    const confirmRemove = window.confirm(`Are you sure you want to remove camera '${cam.name}'?`);
+    if (!confirmRemove) return;
+    setBtnLoading(prev => ({ ...prev, [`remove_cam_${idx}`]: true }));
+    try {
+      const r = await fetch(`${API}/api/camera/${idx}/remove`, {
+        method: "POST"
+      });
+      const d = await r.json();
+      if (d.status === "ok") {
+        speakAI(`Camera ${cam.name} removed successfully`);
+        setCamNames([]);
+        setCamConnectUrls([]);
+        fetchAll();
+      } else {
+        alert(d.message || "Failed to remove camera");
+      }
+    } catch (err) {
+      alert("Error removing camera: " + err);
+    } finally {
+      setBtnLoading(prev => ({ ...prev, [`remove_cam_${idx}`]: false }));
+    }
   };
 
   // ── Forget registered face profile ───────────────────────────────────────
@@ -911,6 +1081,8 @@ export default function Dashboard() {
       setBtnLoading(prev => ({ ...prev, save_enroll: false }));
     }
   };
+
+  const [importLoading, setImportLoading] = useState(false);
 
   const handleFolderImport = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1051,8 +1223,6 @@ export default function Dashboard() {
     reader.readAsText(file);
   };
 
-  const [importLoading, setImportLoading] = useState(false);
-
   // ── Local Face enrollment wizard handler ─────────────────────────────────
   const completeEnrollment = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1062,7 +1232,7 @@ export default function Dashboard() {
     setWizardStep(2);
     speakAI("Initiating face scanning and database enrollment");
 
-    setTimeout(async () => {
+    safeSetTimeout(async () => {
       try {
         const r = await fetch(`${API}/api/control/register_face`, {
           method: "POST",
@@ -1083,7 +1253,7 @@ export default function Dashboard() {
           setKnownUsers(u => [newUser, ...u]);
           setWizardStep(3);
           speakAI("Registration complete. Enrolled " + wizardName + " into memory database.");
-          setTimeout(() => {
+          safeSetTimeout(() => {
             setWizardOpen(false);
             setWizardStep(1);
             setWizardName("");
@@ -1091,7 +1261,7 @@ export default function Dashboard() {
         } else {
           setControlMsg(d.message || "Registration failed: No face detected");
           speakAI("Registration failed");
-          setTimeout(() => {
+          safeSetTimeout(() => {
             setWizardStep(1);
             setWizardOpen(false);
           }, 2000);
@@ -1103,7 +1273,7 @@ export default function Dashboard() {
       } finally {
         setBtnLoading(b => ({ ...b, "enroll": false }));
       }
-    }, 1000);
+    }, 2000);
   };
 
   // ── Save configurations ───────────────────────────────────────────────────
@@ -1119,11 +1289,9 @@ export default function Dashboard() {
         body: JSON.stringify({
           username: opName,
           confidence: confThresh,
-          model: activeModel,
           tg_token: tgBotToken,
           tg_chat_id: tgChatId,
           detect_new_ids: detectNewIds,
-          use_cuda: useCuda,
           detect_people: detectPeople,
           detect_objects: detectObjects,
           match_threshold: matchThresh,
@@ -1144,12 +1312,12 @@ export default function Dashboard() {
       speakAI("Transmission failed");
     } finally {
       setBtnLoading(b => ({ ...b, "save_settings": false }));
-      setTimeout(() => setControlMsg(null), 3000);
+      safeSetTimeout(() => setControlMsg(null), 3000);
     }
   };
 
-  const activeCamInfo = cameras[activeCam];
-  const liveCount = cameras.filter(c => c.online).length;
+  const activeCamInfo = useMemo(() => cameras[activeCam], [cameras, activeCam]);
+  const liveCount = useMemo(() => cameras.filter(c => c.online).length, [cameras]);
 
   return (
     <div className="w-screen h-screen overflow-hidden flex bg-[#050505] p-3 gap-3 text-[#FFFFFF] font-inter">
@@ -1473,7 +1641,7 @@ export default function Dashboard() {
                     >
                       {cam.online ? (
                         <img
-                          src={`${API}/api/stream/${idx}`}
+                          src={`${API}/api/camera/${idx}/snapshot?t=${telemetry?.uptime_secs || 0}`}
                           alt={cam.name}
                           className="w-full h-full object-cover opacity-65 group-hover:opacity-90 transition-opacity"
                         />
@@ -2018,7 +2186,16 @@ export default function Dashboard() {
                         {/* Bottom preview info */}
                         <div className="glass-premium bg-black/50 border border-white/5 p-3 text-[9.5px] font-mono text-sec" style={{ borderRadius: 10 }}>
                           <span className="font-orbitron text-[8.5px] text-sec font-bold block mb-1 uppercase">CAMERA LINK STATUS</span>
-                          <p>STREAM: <span className="text-green-oms font-bold">ONLINE (30 FPS)</span></p>
+                          {(() => {
+                            const activeCamObj = (cameras as any)[activeCam] || (cameras as any)[0] || {};
+                            const camOnline = activeCamObj.online;
+                            const camFps = activeCamObj.fps || 0;
+                            return (
+                              <p>STREAM: <span className={camOnline ? "text-green-oms font-bold" : "text-red-500 font-bold"}>
+                                {camOnline ? `ONLINE (${camFps} FPS)` : "OFFLINE"}
+                              </span></p>
+                            );
+                          })()}
                           <p>RESOLUTION: <span className="text-white">640x360 SENSOR LAYER</span></p>
                           <p>COMPLETED: <span className="text-gold-accent font-bold">{Object.values(guidedProgress).filter(Boolean).length} / {POSES.length} NODES</span></p>
                         </div>
@@ -2161,8 +2338,9 @@ export default function Dashboard() {
                         <button
                           type="button"
                           onClick={() => {
-                            setTtsEnabled(!ttsEnabled);
-                            speakAI("Voice assistance toggled");
+                            const nextVal = !ttsEnabled;
+                            setTtsEnabled(nextVal);
+                            speakAI("Voice assistance toggled", nextVal);
                           }}
                           className="text-gold hover:text-gold-accent transition-colors"
                         >
@@ -2176,62 +2354,29 @@ export default function Dashboard() {
                       <h4 className="font-orbitron text-xs font-bold text-gold tracking-widest uppercase flex items-center gap-2">
                         <Cpu size={14} /> AI DETECTOR HYPERPARAMETERS
                       </h4>
-                      <div className="flex flex-col gap-1.5">
-                        <label className="font-orbitron text-[9px] text-sec font-bold tracking-wider">YOLO ENGINE WEIGHTS MODEL</label>
-                        <select
-                          value={activeModel}
-                          onChange={(e) => {
-                            setActiveModel(e.target.value);
-                            speakAI("Model configured to " + e.target.value);
-                          }}
-                          className="glass-premium bg-black/50 border border-white/10 text-white font-mono text-xs px-4 py-2.5 rounded-lg outline-none focus:border-gold-accent transition-colors"
-                        >
-                          <option value="yolov8n.pt">yolov8n.pt (Nano Core - Ultra light)</option>
-                          <option value="yolov8s.pt">yolov8s.pt (Standard Core - Balanced)</option>
-                          <option value="yolov8m.pt">yolov8m.pt (Medium Core - High accuracy)</option>
-                        </select>
-                      </div>
-                      <div className="flex flex-col gap-1">
-                        <div className="flex justify-between font-orbitron text-[9px] text-sec font-bold tracking-wider">
-                          <span>CONFIDENCE THRESHOLD</span>
-                          <span className="font-mono text-gold-accent">{(confThresh * 100).toFixed(0)}%</span>
-                        </div>
-                        <input
-                          type="range"
-                          min="0.10"
-                          max="0.95"
-                          step="0.05"
-                          value={confThresh}
-                          onChange={(e) => setConfThresh(parseFloat(e.target.value))}
-                          className="w-full accent-gold cursor-pointer"
-                        />
-                      </div>
-                      <div className="flex flex-col gap-1 pt-1.5 border-t border-white/5">
-                        <div className="flex justify-between font-orbitron text-[9px] text-sec font-bold tracking-wider">
-                          <span>FACE RECOGNITION SIMILARITY THRESHOLD</span>
-                          <span className="font-mono text-gold-accent">{matchThresh.toFixed(2)}</span>
-                        </div>
-                        <span className="text-[7.5px] text-muted font-inter">Lower values increase matching sensitivity (makes detection easier)</span>
-                        <input
-                          type="range"
-                          min="0.15"
-                          max="0.60"
-                          step="0.01"
-                          value={matchThresh}
-                          onChange={(e) => setMatchThresh(parseFloat(e.target.value))}
-                          className="w-full accent-gold cursor-pointer"
-                        />
-                      </div>
-                      <div className="flex items-center justify-between mt-1 pt-1.5 border-t border-white/5">
-                        <span className="font-orbitron text-[9.5px] text-sec font-bold tracking-wider">DETECT NEW VISITOR / INTRUDER IDS</span>
+                      <div className="flex items-center justify-between mt-1">
+                        <span className="font-orbitron text-[9.5px] text-sec font-bold tracking-wider">AUTO REGISTER FACES</span>
                         <button
                           type="button"
-                          onClick={() => {
-                            const newVal = !detectNewIds;
-                            setDetectNewIds(newVal);
-                            speakAI(newVal ? "Intruder detection mode activated" : "Intruder detection suspended. Known operators only.");
+                          onClick={async () => {
+                            setBtnLoading(b => ({ ...b, toggle_auto_register: true }));
+                            try {
+                              const r = await fetch(`${API}/api/control/toggle_auto_register`, { method: "POST" });
+                              const d = await r.json();
+                              const newVal = !detectNewIds;
+                              setDetectNewIds(newVal);
+                              speakAI(newVal ? "Intruder detection mode activated" : "Intruder detection suspended. Known operators only.");
+                              setControlMsg(d.result || d.message || "Auto Register toggled");
+                              safeSetTimeout(() => setControlMsg(null), 3000);
+                            } catch (e) {
+                              setControlMsg("Toggle failed: " + e);
+                              safeSetTimeout(() => setControlMsg(null), 3000);
+                            } finally {
+                              setBtnLoading(b => ({ ...b, toggle_auto_register: false }));
+                            }
                           }}
-                          className="text-gold hover:text-gold-accent transition-colors"
+                          disabled={btnLoading["toggle_auto_register"]}
+                          className="text-gold hover:text-gold-accent transition-colors disabled:opacity-50"
                         >
                           {detectNewIds ? <ToggleRight size={32} /> : <ToggleLeft size={32} className="text-muted" />}
                         </button>
@@ -2297,24 +2442,6 @@ export default function Dashboard() {
                         <Sliders size={14} /> SYSTEM PERFORMANCE GRAPHICS
                       </h4>
                       <div className="flex items-center justify-between mt-1">
-                        <div>
-                          <span className="font-orbitron text-[9.5px] text-sec font-bold tracking-wider block">NVIDIA CUDA GPU INFERENCE</span>
-                          <span className="text-[8.5px] text-muted font-inter">Enable hardware accelerated model detection via CUDA</span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const newVal = !useCuda;
-                            setUseCuda(newVal);
-                            speakAI(newVal ? "CUDA acceleration enabled. Relocating models to GPU." : "CUDA acceleration disabled. Running models on CPU.");
-                          }}
-                          className="text-gold hover:text-gold-accent transition-colors"
-                        >
-                          {useCuda ? <ToggleRight size={32} /> : <ToggleLeft size={32} className="text-muted" />}
-                        </button>
-                      </div>
-
-                      <div className="flex items-center justify-between mt-1 pt-1.5 border-t border-white/5">
                         <div>
                           <span className="font-orbitron text-[9.5px] text-sec font-bold tracking-wider block">GOLD PARTICLE BACKGROUND</span>
                           <span className="text-[8.5px] text-muted font-inter">Controls custom hardware accelerated particle canvas</span>
@@ -2507,7 +2634,7 @@ export default function Dashboard() {
                       <div className="h-[120px] rounded-lg bg-black/60 border border-white/5 overflow-hidden relative flex items-center justify-center flex-shrink-0">
                         {cam.online ? (
                           <img
-                            src={`${API}/api/stream/${idx}`}
+                            src={`${API}/api/camera/${idx}/snapshot?t=${telemetry?.uptime_secs || 0}`}
                             alt={cam.name}
                             className="w-full h-full object-cover"
                           />
@@ -2553,6 +2680,19 @@ export default function Dashboard() {
                               )}
                               RENAME
                             </button>
+                            <button
+                              onClick={() => removeCam(idx)}
+                              disabled={btnLoading[`remove_cam_${idx}`]}
+                              className="glass-premium flex items-center gap-1 py-1 px-3 text-[8.5px] justify-center border border-red-500/20 hover:border-red-500/40 bg-red-950/20 hover:bg-red-900/30 text-red-400 rounded-lg transition-all"
+                              title="Remove this camera channel"
+                            >
+                              {btnLoading[`remove_cam_${idx}`] ? (
+                                <RefreshCw size={10} className="animate-spin text-red-400" />
+                              ) : (
+                                <Trash size={10} />
+                              )}
+                              REMOVE
+                            </button>
                           </div>
                         </div>
 
@@ -2561,9 +2701,14 @@ export default function Dashboard() {
                           <div className="flex gap-2">
                             <input
                               type="text"
-                              value={camConnectUrls[idx]}
+                              value={camConnectUrls[idx] !== undefined ? camConnectUrls[idx] : cam.source || ""}
                               onChange={(e) => {
                                 const newUrls = [...camConnectUrls];
+                                if (newUrls.length === 0 && cameras.length > 0) {
+                                  for (let k = 0; k < cameras.length; k++) {
+                                    newUrls[k] = cameras[k].source || "";
+                                  }
+                                }
                                 newUrls[idx] = e.target.value;
                                 setCamConnectUrls(newUrls);
                               }}
@@ -2588,6 +2733,66 @@ export default function Dashboard() {
                       </div>
                     </div>
                   ))}
+
+                  {/* ADD NEW CAMERA NODE */}
+                  <div className="glass-premium p-4 flex flex-col gap-3 min-h-0 border border-dashed border-white/10 hover:border-gold-accent/40 hover:bg-white/[0.01] rounded-xl transition-all">
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <Plus className="text-gold-accent" size={14} />
+                      <h4 className="font-orbitron text-xs font-black text-gold tracking-widest leading-none">
+                        ADD NEW CCTV NODE
+                      </h4>
+                    </div>
+
+                    <div className="flex flex-col gap-2 text-[9px] font-orbitron font-bold text-sec tracking-wider">
+                      <div className="flex flex-col gap-1">
+                        <span>CAMERA CHANNEL NAME</span>
+                        <input
+                          type="text"
+                          value={newCamName}
+                          onChange={(e) => setNewCamName(e.target.value)}
+                          placeholder="e.g. Back Alley Cam"
+                          className="glass-premium bg-black/40 border border-white/10 text-white font-mono text-xs px-3 py-1.5 rounded-lg outline-none focus:border-gold-accent transition-colors"
+                        />
+                      </div>
+
+                      <div className="flex flex-col gap-1">
+                        <span>CCTV URL / DEVICE ID</span>
+                        <input
+                          type="text"
+                          value={newCamSource}
+                          onChange={(e) => setNewCamSource(e.target.value)}
+                          placeholder="e.g. 1, rtsp://address, http://"
+                          className="glass-premium bg-black/40 border border-white/10 text-white font-mono text-xs px-3 py-1.5 rounded-lg outline-none focus:border-gold-accent transition-colors"
+                        />
+                      </div>
+
+                      <div className="flex flex-col gap-1">
+                        <span>LOCATION / ZONE</span>
+                        <div className="flex gap-2">
+                          <input
+                            type="text"
+                            value={newCamLocation}
+                            onChange={(e) => setNewCamLocation(e.target.value)}
+                            placeholder="e.g. Server Room Entrance"
+                            className="flex-1 glass-premium bg-black/40 border border-white/10 text-white font-mono text-xs px-3 py-1.5 rounded-lg outline-none focus:border-gold-accent transition-colors"
+                          />
+                          <button
+                            onClick={addCam}
+                            disabled={btnLoading["add_cam"]}
+                            className="btn-gold-luxury py-1 px-4 text-[8.5px] justify-center flex-shrink-0"
+                            title="Register and initialize this new camera channel"
+                          >
+                            {btnLoading["add_cam"] ? (
+                              <RefreshCw size={10} className="animate-spin text-gold-accent" />
+                            ) : (
+                              <Plus size={10} />
+                            )}
+                            ADD CAMERA
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </motion.div>
             )}
@@ -2761,7 +2966,7 @@ export default function Dashboard() {
                         <div className={`w-18 h-18 rounded-full border-2 ${isScanning ? 'border-gold-dim/40 animate-pulse' : isIntruder ? 'border-red-500/50 animate-pulse' : 'border-gold-accent/40 success-ring-lock'} overflow-hidden relative flex-shrink-0`}>
                           {hasActiveSubject ? (
                             <img
-                              src={`${API}/api/crop/${activeSubject.pid}?t=${time.getTime()}`}
+                              src={`${API}/api/crop/${activeSubject.pid}?t=${cropKey}`}
                               alt="Active Subject Crop"
                               className="w-full h-full object-cover"
                             />
@@ -3043,15 +3248,14 @@ export default function Dashboard() {
                   try {
                     const r = await fetch(`${API}/api/control/toggle_auto_register`, { method: "POST" });
                     const d = await r.json();
-                    // Optimistic UI update — telemetry will confirm actual state within 2s
                     const newVal = !detectNewIds;
                     setDetectNewIds(newVal);
-                    setControlMsg(d.result || d.message || "Auto Register toggled");
                     speakAI(newVal ? "Auto register faces ON" : "Auto register faces OFF");
-                    setTimeout(() => setControlMsg(null), 3000);
+                    setControlMsg(d.result || d.message || "Auto Register toggled");
+                    safeSetTimeout(() => setControlMsg(null), 3000);
                   } catch (e) {
                     setControlMsg("Toggle failed: " + e);
-                    setTimeout(() => setControlMsg(null), 3000);
+                    safeSetTimeout(() => setControlMsg(null), 3000);
                   } finally {
                     setBtnLoading(b => ({ ...b, toggle_auto_register: false }));
                   }
@@ -3233,10 +3437,18 @@ export default function Dashboard() {
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 20, scale: 0.95 }}
             transition={{ type: "spring", stiffness: 300, damping: 28 }}
-            className="fixed bottom-6 left-1/2 -translate-x-1/2 glass-gold-active px-6 py-3 z-50 rounded-xl"
+            className={`fixed bottom-6 left-1/2 -translate-x-1/2 px-6 py-3 z-50 rounded-xl ${
+              /failed|error|could not|invalid/i.test(controlMsg)
+                ? "glass-red-active border border-red-500/30 text-red-500"
+                : "glass-gold-active text-gold-accent"
+            }`}
           >
-            <span className="font-orbitron text-xs font-black text-gold-accent tracking-wider uppercase flex items-center gap-2">
-              <CheckCircle size={14} className="text-green-oms" />
+            <span className="font-orbitron text-xs font-black tracking-wider uppercase flex items-center gap-2">
+              {/failed|error|could not|invalid/i.test(controlMsg) ? (
+                <XCircle size={14} className="text-red-500" />
+              ) : (
+                <CheckCircle size={14} className="text-green-oms" />
+              )}
               {controlMsg}
             </span>
           </motion.div>

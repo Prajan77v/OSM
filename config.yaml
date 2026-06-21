@@ -1,20 +1,20 @@
 operator:
-  username: Prajan
+  username: TestOperator
 detection:
-  confidence: 0.45
+  confidence: 0.5
   use_cuda: false
-  detect_people: true
-  detect_objects: false
+  detect_people: false
+  detect_objects: true
   model:
-    LOW: yolov8n.pt
-    MEDIUM: yolov8n.pt
-    HIGH: yolov8n.pt
+    LOW: yolov8s.pt
+    MEDIUM: yolov8s.pt
+    HIGH: yolov8s.pt
 face_recognition:
-  detect_new_ids: true
-  match_threshold: 0.36
+  detect_new_ids: false
+  match_threshold: 0.4
 threat:
-  tg_token: test_token
-  tg_chat_id: '12345'
+  tg_token: new_token
+  tg_chat_id: '99999'
 display:
-  particle_size: 3.0
-  mesh_thickness: 1.0
+  particle_size: 2.5
+  mesh_thickness: 1.5

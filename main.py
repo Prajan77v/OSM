@@ -248,7 +248,7 @@ class Config:
     TOP_H      = _cfg("display","top_h",  default=65)
     FOOTER_H   = _cfg("display","footer_h", default=45)
 
-    DB_SAVE_SECS      = _cfg("storage","db_save_secs", default=45)
+    DB_SAVE_SECS      = _cfg("storage","db_save_secs", default=30)
     CAM_QUEUE_SIZE    = _cfg("storage","cam_queue_size", default=1)
     OVERLOAD_CPU_PCT  = _cfg("storage","overload_cpu_pct", default=88.0)
     GC_GEN0_FRAMES    = _cfg("storage","gc_gen0_frames", default=25)
@@ -323,14 +323,28 @@ class ThreatEngine:
         self._decay = 0.0
 
     def raise_threat(self, level: str, reason: str):
-        pass
+        with self._lock:
+            level = level.upper()
+            if level not in THREAT_RANK:
+                return
+            current_rank = THREAT_RANK.get(self.level, 0)
+            new_rank = THREAT_RANK.get(level, 0)
+            if new_rank > current_rank:
+                self.level = level
+            if reason and reason not in self.factors:
+                self.factors.append(reason)
+            self._decay = time.time() + 8.0  # Threat persists for 8 seconds
 
     def tick(self):
-        self.level = "GREEN"
-        self.factors = []
+        with self._lock:
+            if self.level != "GREEN" and time.time() > self._decay:
+                self.level = "GREEN"
+                self.factors = []
 
     @property
-    def color(self): return C_GREEN
+    def color(self):
+        with self._lock:
+            return THREAT_COLORS.get(self.level, C_GREEN)
 
 threat_engine = ThreatEngine()
 
@@ -396,6 +410,7 @@ class DiagSnapshot:
 
 _diag = DiagSnapshot()
 _diag_lock = threading.Lock()
+ui_static_dirty = True
 
 def _diag_worker(cameras):
     global _diag
@@ -522,7 +537,7 @@ def db_log_person(pid, name, known, ts):
         try:
             _db_conn.execute("""
                 INSERT INTO persons(pid,name,known,first_seen,last_seen,visit_count) VALUES(?,?,?,?,?,1)
-                ON CONFLICT(pid) DO UPDATE SET name=excluded.name, last_seen=excluded.last_seen,
+                ON CONFLICT(pid) DO UPDATE SET name=excluded.name, known=excluded.known, last_seen=excluded.last_seen,
                 visit_count=visit_count+1""",
                 (pid, name, 1 if known else 0, ts, ts))
             _db_conn.commit()
@@ -536,6 +551,18 @@ def db_log_visit_enter(pid, camera, ts, conf, threat):
                              (pid, camera, ts, conf, threat))
             _db_conn.commit()
         except Exception as e: app_log.debug(f"DB visit enter: {e}")
+
+def db_log_visit_exit(pid, camera, ts):
+    if _db_conn is None: return
+    with _db_lock:
+        try:
+            _db_conn.execute("""
+                UPDATE visits
+                SET exited_at = ?
+                WHERE pid = ? AND camera = ? AND exited_at IS NULL
+            """, (ts, pid, camera))
+            _db_conn.commit()
+        except Exception as e: app_log.debug(f"DB visit exit: {e}")
 
 def db_log_threat(ts, level, reason, camera):
     if _db_conn is None: return
@@ -601,48 +628,51 @@ def _preprocess_lighting(img_bgr: np.ndarray) -> np.ndarray:
 
 def _yunet_encode(img_bgr: np.ndarray) -> Optional[np.ndarray]:
     if not YUNET_AVAILABLE: return None
-    with _yunet_lock:
-        try:
-            h, w = img_bgr.shape[:2]
-            if w < 30 or h < 30: return None
+    try:
+        h, w = img_bgr.shape[:2]
+        if w < 30 or h < 30: return None
+        
+        # Normalize lighting (low-light improvement)
+        img_bgr = _preprocess_lighting(img_bgr)
+        
+        # Dynamic Resolution Upgrade: If the crop is small, upscale it using Lanczos
+        # and apply a sharpening filter to enhance features for distant recognition
+        if w < 112 or h < 112:
+            img_bgr = cv2.resize(img_bgr, (128, 128), interpolation=cv2.INTER_LANCZOS4)
+            # Unsharp mask / Sharpening filter
+            kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]], dtype=np.float32)
+            img_bgr = cv2.filter2D(img_bgr, -1, kernel)
+            h, w = 128, 128
             
-            # Normalize lighting (low-light improvement)
-            img_bgr = _preprocess_lighting(img_bgr)
-            
-            # Dynamic Resolution Upgrade: If the crop is small, upscale it using Lanczos
-            # and apply a sharpening filter to enhance features for distant recognition
-            if w < 112 or h < 112:
-                img_bgr = cv2.resize(img_bgr, (128, 128), interpolation=cv2.INTER_LANCZOS4)
-                # Unsharp mask / Sharpening filter
-                kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]], dtype=np.float32)
-                img_bgr = cv2.filter2D(img_bgr, -1, kernel)
-                h, w = 128, 128
-                
+        with _yunet_lock:
             _yunet_detector.setInputSize((w, h))
             _, faces = _yunet_detector.detect(img_bgr)
-            
-            # Smart Padding Fallback: If no face is detected on a tight crop,
-            # pad the image with black borders on all sides to give YuNet convolutional layers context!
-            if faces is None or len(faces) == 0:
-                pad_h, pad_w = h // 2, w // 2
-                padded = cv2.copyMakeBorder(img_bgr, pad_h, pad_h, pad_w, pad_w, cv2.BORDER_CONSTANT, value=[0, 0, 0])
-                ph, pw = padded.shape[:2]
+        
+        # Smart Padding Fallback: If no face is detected on a tight crop,
+        # pad the image with black borders on all sides to give YuNet convolutional layers context!
+        if faces is None or len(faces) == 0:
+            pad_h, pad_w = h // 2, w // 2
+            padded = cv2.copyMakeBorder(img_bgr, pad_h, pad_h, pad_w, pad_w, cv2.BORDER_CONSTANT, value=[0, 0, 0])
+            ph, pw = padded.shape[:2]
+            with _yunet_lock:
                 _yunet_detector.setInputSize((pw, ph))
                 _, faces = _yunet_detector.detect(padded)
-                if faces is not None and len(faces) > 0:
-                    face = faces[0]
+            if faces is not None and len(faces) > 0:
+                face = faces[0]
+                with _yunet_lock:
                     aligned = _sface_recognizer.alignCrop(padded, face)
                     feat    = _sface_recognizer.feature(aligned)
-                    return feat[0] if feat is not None else None
-                return None
-            
-            face = faces[0]
+                return feat[0] if feat is not None else None
+            return None
+        
+        face = faces[0]
+        with _yunet_lock:
             aligned = _sface_recognizer.alignCrop(img_bgr, face)
             feat    = _sface_recognizer.feature(aligned)
-            return feat[0] if feat is not None else None
-        except Exception as e:
-            app_log.error(f"[YUNET] Encode exception: {e}")
-            return None
+        return feat[0] if feat is not None else None
+    except Exception as e:
+        app_log.error(f"[YUNET] Encode exception: {e}")
+        return None
 
 def _yunet_match(enc: np.ndarray, face_size: Optional[int] = None) -> Tuple[Optional[str], Optional[str], bool, float]:
     """Compare enc against all cached known encodings. Returns (pid, name, is_new, score).
@@ -750,7 +780,7 @@ def _format_log_cols(ev, person_name, obj, detail):
         pid, name = _find_id_and_name(person_name)
         id_col = pid if pid else "—"
         name_obj_col = name if name else "—"
-        event_col = "RETURNED" if "Intruder" in name else "ARRIVED"
+        event_col = "ARRIVED" if "Intruder" in name else "RETURNED"
         visits = "1"
         if "visits=" in detail:
             try:
@@ -852,6 +882,10 @@ def _log_worker():
             ev, cam, person, obj, detail = item
             ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             evt_log.info(json.dumps({"ts":ts,"event":ev,"camera":cam,"person":person,"object":obj,"detail":detail}))
+            # Flush JSONL log immediately so it's visible in real-time
+            for h in evt_log.handlers:
+                try: h.flush()
+                except Exception: pass
             append_to_pretty_log(ev, cam, person, obj, detail)
             db_log_incident(ts, ev, _clean_cam_name(cam), person, obj, detail, threat_engine.level)
             clean_ev = ev
@@ -864,12 +898,18 @@ def _log_worker():
             hex_s = " ".join(f"{random.randint(0,255):02X}" for _ in range(8))
             _data_stream.append(f"{ts[11:]} >> {clean_ev[:8]} :: {hex_s}")
             app_log.info(f"{clean_ev:<18}| cam={_clean_cam_name(cam)} person={person} | {detail}")
+            # Flush app log immediately for real-time visibility
+            for h in app_log.handlers:
+                try: h.flush()
+                except Exception: pass
         except queue.Empty: continue
         except Exception as e: print(f"[LOG-ERR] {e}")
 
 threading.Thread(target=_log_worker, daemon=True, name="LogWorker").start()
 
 def log_event(ev: str, camera: str="", person: str="--", obj: str="--", detail: str=""):
+    global ui_static_dirty
+    ui_static_dirty = True
     try: _lq.put_nowait((ev, camera, person, obj, detail))
     except queue.Full: pass
     # Mirror to web dashboard
@@ -894,9 +934,19 @@ def export_csv(path: str = "logs/events_export.csv"):
     app_log.info(f"CSV exported -> {path}")
 
 def save_config_cameras(cameras):
+    if not YAML_AVAILABLE:
+        app_log.warning("YAML module not available. Cannot save camera settings.")
+        return
+    import shutil
     config_path = WORKING_DIR / "config.yaml"
     if not config_path.exists():
-        return
+        # Create a minimal config.yaml so cameras can be saved
+        try:
+            with open(config_path, "w", encoding="utf-8") as f:
+                yaml.safe_dump({}, f)
+        except Exception as e:
+            app_log.error(f"Could not create config.yaml: {e}")
+            return
     try:
         with open(config_path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
@@ -910,16 +960,60 @@ def save_config_cameras(cameras):
                 "location": getattr(cs, "location", "Monitored Sector")
             })
         data["cameras"] = cams_list
-        with open(config_path, "w", encoding="utf-8") as f:
+
+        tmp_path = config_path.with_suffix(".tmp")
+        bak_path = config_path.with_suffix(".bak")
+
+        # Atomic write to temp file
+        with open(tmp_path, "w", encoding="utf-8") as f:
             yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
+
+        # Integrity verification
+        with open(tmp_path, "r", encoding="utf-8") as f:
+            verify_data = yaml.safe_load(f)
+            if not verify_data or "cameras" not in verify_data:
+                raise Exception("Verification failed: invalid config written.")
+
+        # Create backup
+        try:
+            shutil.copy2(config_path, bak_path)
+        except Exception as e:
+            app_log.warning(f"Failed to create config backup: {e}")
+
+        # Rename/replace safely with retries on Windows
+        success = False
+        for attempt in range(5):
+            try:
+                os.replace(str(tmp_path), str(config_path))
+                success = True
+                break
+            except Exception as ex:
+                if attempt == 4:
+                    raise ex
+                time.sleep(0.05)
+
+        # Also update dist config if exists
         dist_config_path = WORKING_DIR / "dist" / "config.yaml"
         if dist_config_path.exists():
-            with open(dist_config_path, "w", encoding="utf-8") as f:
+            dist_tmp = dist_config_path.with_suffix(".tmp")
+            with open(dist_tmp, "w", encoding="utf-8") as f:
                 yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
+            
+            success_dist = False
+            for attempt in range(5):
+                try:
+                    os.replace(str(dist_tmp), str(dist_config_path))
+                    success_dist = True
+                    break
+                except Exception as ex:
+                    if attempt == 4:
+                        raise ex
+                    time.sleep(0.05)
+
         Config.CAMERA_CONFIGS = [{"source": c["source"], "name": c["name"], "enabled": c["enabled"], "location": c["location"]} for c in cams_list]
-        app_log.info("Saved camera configurations to config.yaml")
+        app_log.info("Saved camera configurations atomically to config.yaml")
     except Exception as e:
-        app_log.error(f"Error saving camera config: {e}")
+        app_log.error(f"Error saving camera config atomically: {e}")
 
 def reset_log_files(cameras=None):
     """Clear app.log, events.jsonl, events.log, clear SQLite events/visits, and reset Today's summary metrics."""
@@ -962,7 +1056,8 @@ def reset_log_files(cameras=None):
     with _db_lock:
         if _db_conn:
             try:
-                _db_conn.execute("DELETE FROM visits")
+                today = datetime.now().strftime("%Y-%m-%d")
+                _db_conn.execute("DELETE FROM visits WHERE entered_at LIKE ?", (f"{today}%",))
                 _db_conn.commit()
             except Exception as e:
                 app_log.error(f"Reset DB visits failed: {e}")
@@ -998,6 +1093,12 @@ def reset_log_files(cameras=None):
             if d.get("known", False):
                 d["visit_count"] = 0
         _save_db_json()
+
+    # Clear deleted intruders from YuNet memory cache (H17 fix)
+    if YUNET_AVAILABLE:
+        with _yunet_lock:
+            for pid in to_delete:
+                _yunet_enc_cache.pop(pid, None)
 
     app_log.info("System logs and visits database cleared.")
     speak("System logs reset.")
@@ -1124,6 +1225,11 @@ def rename_camera_in_logs(old_name: str, new_name: str):
             app_log.addHandler(sh); app_log.addHandler(fh)
         except Exception as e:
             app_log.error(f"Failed to reopen app_log handler: {e}")
+
+    try:
+        export_csv()
+    except Exception as e:
+        app_log.error(f"Failed to regenerate events_export.csv: {e}")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TELEGRAM NOTIFICATIONS
@@ -1291,6 +1397,18 @@ for _d in ["logs", "faces/known", "faces/unknown", "faces/captured", "models", "
 
 _next_pid = 1
 faces_db: Dict[str, dict] = {}
+_known_count = 0
+_unknown_count = 0
+
+def update_db_counts():
+    global _known_count, _unknown_count
+    k = 0; u = 0
+    with _fdb_lock:
+        for d in faces_db.values():
+            if d.get("known"): k += 1
+            else: u += 1
+    _known_count = k
+    _unknown_count = u
 
 def deduplicate_profiles():
     """Scan faces_db and merge/delete duplicate face profiles based on SFace embedding similarity."""
@@ -1310,9 +1428,19 @@ def deduplicate_profiles():
                     continue
                 enc2 = _yunet_enc_cache[pid2]
                 try:
-                    score = float(_sface_recognizer.match(
-                        enc1.reshape(1,-1), enc2.reshape(1,-1), cv2.FaceRecognizerSF_FR_COSINE))
-                    if score >= 0.40:
+                    # Support both single arrays and lists of arrays for multi-embedding profiles
+                    encs1 = enc1 if isinstance(enc1, list) else [enc1]
+                    encs2 = enc2 if isinstance(enc2, list) else [enc2]
+                    
+                    max_score = -1.0
+                    for e1 in encs1:
+                        for e2 in encs2:
+                            score = float(_sface_recognizer.match(
+                                e1.reshape(1,-1), e2.reshape(1,-1), cv2.FaceRecognizerSF_FR_COSINE))
+                            if score > max_score:
+                                max_score = score
+                    
+                    if max_score >= Config.FACE_MATCH_THRESH:
                         id1 = int(pid1[1:]) if pid1[1:].isdigit() else 0
                         id2 = int(pid2[1:]) if pid2[1:].isdigit() else 0
                         known1 = faces_db[pid1].get("known", False)
@@ -1327,7 +1455,7 @@ def deduplicate_profiles():
                         else:
                             older, newer = (pid1, pid2) if id1 < id2 else (pid2, pid1)
                         to_delete.add(newer)
-                        app_log.info(f"[DEDUP] Detected duplicate faces: {pid1} ({faces_db[pid1].get('name')}) and {pid2} ({faces_db[pid2].get('name')}) with similarity {score:.2f}. Auto-deleting recent profile {newer}.")
+                        app_log.info(f"[DEDUP] Detected duplicate faces: {pid1} ({faces_db[pid1].get('name')}) and {pid2} ({faces_db[pid2].get('name')}) with similarity {max_score:.2f}. Auto-deleting recent profile {newer}.")
                 except Exception as e:
                     pass
         if to_delete:
@@ -1371,7 +1499,15 @@ def _load_db_json():
                     with _yunet_lock:
                         _yunet_enc_cache[pid] = enc_arr
         faces_db = db
-    except Exception as e: app_log.error(f"DB load: {e}"); faces_db = {}
+        update_db_counts()
+    except Exception as e: app_log.error(f"DB load: {e}"); faces_db = {}; update_db_counts()
+
+# Async dirty-flag for face DB saves — avoids blocking camera threads
+_db_dirty_event = threading.Event()
+
+def _mark_db_dirty():
+    """Signal the DB saver thread to flush the face DB soon (non-blocking)."""
+    _db_dirty_event.set()
 
 def _save_db_json():
     deduplicate_profiles()
@@ -1389,9 +1525,22 @@ def _save_db_json():
             out[pid] = row
     tmp = Config.FACES_DB_FILE.with_suffix(".tmp")
     try:
+        tmp.parent.mkdir(parents=True, exist_ok=True)
         with open(tmp,"w",encoding="utf-8") as f: json.dump(out, f, indent=2)
-        if IS_WINDOWS and Config.FACES_DB_FILE.exists(): Config.FACES_DB_FILE.unlink()
-        tmp.rename(Config.FACES_DB_FILE)
+        
+        success = False
+        for attempt in range(5):
+            try:
+                os.replace(str(tmp), str(Config.FACES_DB_FILE))
+                success = True
+                break
+            except Exception as ex:
+                if attempt == 4:
+                    raise ex
+                time.sleep(0.05)
+                
+        if success:
+            update_db_counts()
     except Exception as e: app_log.error(f"DB save: {e}")
 
 _load_db_json()
@@ -1401,9 +1550,14 @@ for _p in faces_db:
         if n >= _next_pid: _next_pid = n + 1
     except: pass
 
+_next_pid_lock = threading.Lock()
+
 def _new_pid() -> str:
     global _next_pid
-    p = f"P{_next_pid}"; _next_pid += 1; return p
+    with _next_pid_lock:
+        p = f"P{_next_pid}"
+        _next_pid += 1
+        return p
 
 def preload_known():
     if not FACE_RECOG_AVAILABLE and not YUNET_AVAILABLE: return
@@ -1436,11 +1590,21 @@ def preload_known():
                                      "photo":rel_photo,"in_scene":False}
                 loaded.append(name)
             elif YUNET_AVAILABLE:
+                rel_photo = str(fp.relative_to(WORKING_DIR)) if WORKING_DIR in fp.parents else str(fp)
+                pid = by_name.get(name.lower())
+                
+                # OPTIMIZATION: Skip re-encoding if photo and encoding match already in database
+                if pid and faces_db.get(pid, {}).get("photo") == rel_photo and faces_db.get(pid, {}).get("encoding") is not None:
+                    enc = faces_db[pid]["encoding"]
+                    with _yunet_lock:
+                        if pid not in _yunet_enc_cache:
+                            _yunet_enc_cache[pid] = enc
+                    loaded.append(name)
+                    continue
+                
                 enc = _yunet_encode(img)
                 if enc is None: continue
-                rel_photo = str(fp.relative_to(WORKING_DIR)) if WORKING_DIR in fp.parents else str(fp)
-                if name.lower() in by_name:
-                    pid = by_name[name.lower()]
+                if pid:
                     faces_db[pid]["encoding"] = enc
                     faces_db[pid]["photo"] = rel_photo
                 else:
@@ -1451,7 +1615,7 @@ def preload_known():
                     _yunet_enc_cache[pid] = enc
                 loaded.append(name)
         except Exception as e: app_log.error(f"Load face {fp.name}: {e}")
-    _save_db_json()
+    _mark_db_dirty()  # async — let saver thread flush to disk
     if loaded: app_log.info(f"Known faces loaded: {loaded}")
 
 _enc_arr:  Optional[np.ndarray] = None
@@ -1500,7 +1664,7 @@ def match_face_dlib(enc, face_size: Optional[int] = None):
         return pid, name, False, conf
     if Config.DETECT_NEW_IDS:
         pid, name, is_new = _register_face_dlib(enc)
-        return pid, name, is_new, 1.0
+        return pid, name, is_new, 0.5
     else:
         return None, None, False, 0.0
 
@@ -1511,7 +1675,8 @@ def _register_face_dlib(enc):
         now  = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         faces_db[pid] = {"name":name,"encoding":enc,"first_seen":now,"last_seen":now,
                          "visit_count":0,"known":False,"photo":None,"in_scene":False}
-        _enc_dirty = True; _save_db_json()
+        _enc_dirty = True
+    _mark_db_dirty()  # async — avoids blocking the camera detection thread
     return pid, name, True
 
 def _register_face_yunet(enc):
@@ -1522,7 +1687,7 @@ def _register_face_yunet(enc):
                          "visit_count":0,"known":False,"photo":None,"in_scene":False}
     with _yunet_lock:
         _yunet_enc_cache[pid] = enc
-    _save_db_json()
+    _mark_db_dirty()  # async — avoids blocking the camera detection thread
     return pid, name, True
 
 def async_face(rgb_or_bgr: np.ndarray, is_bgr: bool = False):
@@ -1552,7 +1717,7 @@ def async_face(rgb_or_bgr: np.ndarray, is_bgr: bool = False):
                 # Only register new unknown faces if the setting allows it
                 if Config.DETECT_NEW_IDS:
                     pid, name, _ = _register_face_yunet(enc)
-                    score = 1.0
+                    score = 0.5
                 else:
                     return None, None, 0.0
             return pid, name, score
@@ -1631,7 +1796,7 @@ def register_user_face(cameras, username: str = Config.USERNAME):
                                         faces_db[pid] = {"name":username,"first_seen":now,"last_seen":now,
                                                          "visit_count":0,"known":True,"photo":rel_out,"in_scene":False}
                                 with _yunet_lock: _yunet_enc_cache[pid] = enc
-                                _save_db_json()
+                                _mark_db_dirty()  # async flush
                                 preload_known()
                                 _enc_dirty = True
                                 log_event("USER_REGISTERED", camera=cs.name, person=username)
@@ -1745,11 +1910,14 @@ class BehaviorEngine:
         n = min(_STILL_SMOOTH_N, len(rec.positions))
         if n == 0:
             return None
-        positions_list = list(rec.positions)
-        recent = positions_list[-n:]
-        avg_cx = sum(p[0] for p in recent) / n
-        avg_cy = sum(p[1] for p in recent) / n
-        return avg_cx, avg_cy
+        pos_len = len(rec.positions)
+        avg_cx = 0.0
+        avg_cy = 0.0
+        for i in range(pos_len - n, pos_len):
+            p = rec.positions[i]
+            avg_cx += p[0]
+            avg_cy += p[1]
+        return avg_cx / n, avg_cy / n
 
     def update(self, pid: str, cx: float, cy: float, zones_in: List[str]) -> List[str]:
         """Update position and return list of anomaly event strings."""
@@ -1889,13 +2057,28 @@ class OwnershipEngine:
         self._owners: Dict[str, str] = {}   # obj_id -> pid
         self._last_with_owner: Dict[str, float] = {}  # obj_id -> time
         self._alerted: Dict[str, float] = {}
+        self._last_prune = 0.0
 
     def _obj_id(self, label: str, box: Tuple) -> str:
-        return f"{label}_{box[0]}_{box[1]}"
+        # M12: Snapping centroid to 20px grid cell to prevent jitter
+        cx = (box[0] + box[2]) // 2
+        cy = (box[1] + box[3]) // 2
+        cx_s = (cx // 20) * 20
+        cy_s = (cy // 20) * 20
+        return f"{label}_{cx_s}_{cy_s}"
 
     def update(self, person_dets: List[dict], obj_dets: List[dict]) -> List[Tuple[str,str]]:
         """Returns list of (obj_label, owner_pid) for abandonment events."""
         now = time.time()
+        # H16: Evict stale records older than 1 hour (3600 seconds)
+        if now - self._last_prune > 60.0:
+            stale_keys = [oid for oid, t in self._last_with_owner.items() if now - t > 3600.0]
+            for oid in stale_keys:
+                self._owners.pop(oid, None)
+                self._last_with_owner.pop(oid, None)
+                self._alerted.pop(oid, None)
+            self._last_prune = now
+
         events = []
         TRACKABLE = {"backpack","suitcase","laptop","cell phone","handbag","bag","bottle","book","clock"}
         for obj in obj_dets:
@@ -2000,6 +2183,7 @@ class CameraState:
         self._url_input    = ""
         self._input_mode   = False
         self.zone_intruder_alerted: Dict[str, float] = {}
+        self._reconnect_attempts = 0
 
     def connect(self) -> bool:
         if str(self.source).upper() == "NONE":
@@ -2013,7 +2197,7 @@ class CameraState:
                 self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, Config.FRAME_H)
                 self.cap.set(cv2.CAP_PROP_FPS, 30)
             else:
-                os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS","rtsp_transport;tcp|buffer_size;1048576")
+                os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|buffer_size;1048576|stimeout;5000000"
                 self.cap = cv2.VideoCapture(str(self.source), cv2.CAP_FFMPEG)
             if self.cap:
                 self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
@@ -2115,10 +2299,11 @@ def on_person_arrived(cs: CameraState, pid: str, name: str, frame: np.ndarray, b
         photo_path = rel_path
         app_log.info(f"[CAPTURE] Face crop for {name} captured from camera {cs.name} -> {photo_path}")
         with _fdb_lock:
-            if db is not None:
-                db["photo"] = photo_path
-
-    _save_db_json()
+            db_ref = faces_db.get(pid)
+            if db_ref is not None:
+                db_ref["photo"] = photo_path
+        # Async flush — never block the camera thread on a JSON write
+        _mark_db_dirty()
     is_intruder = "Intruder" in name
     if is_intruder:
         threat_engine.raise_threat("RED", f"INTRUDER: {name}")
@@ -2148,6 +2333,7 @@ def on_person_left(cs: CameraState, pid: str, name: str, frame: np.ndarray):
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     cv2.imwrite(cs.after_img, frame)
     log_event("PERSON_LEFT", camera=cs.name, person=name, detail=f"last_seen={now}")
+    db_log_visit_exit(pid, cs.name, now)
     cs.persons_left += 1
     is_transient = pid.startswith("Unknown-") or name == "Unknown"
     if not is_transient:
@@ -2283,41 +2469,32 @@ def camera_thread(cs: CameraState):
     cs.connect()
 
     while True:
+        if getattr(cs, "removed", False):
+            cs.release()
+            break
         loop_t = time.perf_counter()  # Frame-rate throttle reference
 
-        # Safely reload YOLO model or migrate device inside the camera thread
-        if YOLO_AVAILABLE:
-            if cs.yolo_model is None or not hasattr(cs, "loaded_model_name") or cs.loaded_model_name != Config.MODEL_NAME or cs.loaded_device != Config.DEVICE:
-                app_log.info(f"[Camera {cs.name}] Dynamic settings reload detected. Re-init YOLO: {Config.MODEL_NAME} on {Config.DEVICE}")
-                try:
-                    with _yolo_lock:
-                        # Load and dry-run new model first before discarding old one to prevent loss of model
-                        new_yolo = YOLO(Config.MODEL_NAME)
-                        dummy = np.zeros((Config.DET_H, Config.DET_W, 3), dtype=np.uint8)
-                        new_yolo.predict(source=dummy, device=Config.DEVICE, verbose=False, half=(Config.DEVICE == "cuda"))
-                        
-                        cs.yolo_model = new_yolo
-                        cs.loaded_model_name = Config.MODEL_NAME
-                        cs.loaded_device = Config.DEVICE
-                        yolo = new_yolo
-                        app_log.info(f"[Camera {cs.name}] YOLO model successfully reloaded.")
-                except Exception as ex:
-                    app_log.error(f"[Camera {cs.name}] Failed to reload YOLO model dynamically: {ex}", exc_info=True)
-                    # Mark as loaded to prevent spinning in an infinite load-error loop
-                    cs.loaded_model_name = Config.MODEL_NAME
-                    cs.loaded_device = Config.DEVICE
+        # (Dynamic YOLO reloading disabled to prevent UI crashes. Changes apply on restart.)
 
         if cs.disconnected:
             time.sleep(1.0); continue
         if not cs.online:
-            time.sleep(3.0); cs.release(); cs.connect()
+            reconnect_attempts = getattr(cs, "_reconnect_attempts", 0)
+            delay = min(60.0, 3.0 * (2 ** min(reconnect_attempts, 4)))
+            app_log.info(f"[{cs.name}] Reconnecting in {delay} seconds (attempt {reconnect_attempts + 1})...")
+            time.sleep(delay)
+            cs.release()
+            cs.connect()
             if cs.online:
+                cs._reconnect_attempts = 0
                 read_fails = 0
                 log_event("CAM_RECONNECT", camera=cs.name)
+            else:
+                cs._reconnect_attempts = reconnect_attempts + 1
             continue
 
-        ret, frame = cs.cap.read()
-        if not ret or frame is None:
+        ret, raw_frame = cs.cap.read()
+        if not ret or raw_frame is None:
             read_fails += 1
             if read_fails >= 5:
                 # Only declare offline after 5 consecutive failures (transient drops ignored)
@@ -2326,8 +2503,32 @@ def camera_thread(cs: CameraState):
             time.sleep(0.02)  # Small back-off to avoid spinning on a broken stream
             continue
         read_fails = 0  # Reset on successful read
-        frame = cv2.resize(frame, (Config.FRAME_W, Config.FRAME_H), interpolation=cv2.INTER_LINEAR)
 
+        # Motion detection is extremely cheap when run on raw_frame because has_motion resizes directly to 160x90
+        has_motion = cs.motion.has_motion(raw_frame)
+        if has_motion: cs.last_motion = time.time(); cs.idle_cnt = 0
+        else: cs.idle_cnt += 1
+        idle   = (time.time() - cs.last_motion) > 3.0 and not has_motion
+        skip_n = adaptive.skip_n + (Config.IDLE_SKIP_EXTRA if idle else 0)
+
+        # Defer main frame resizing to Config.FRAME_W, Config.FRAME_H
+        if cs.frame_cnt % skip_n != 0:
+            frame = cv2.resize(raw_frame, (Config.FRAME_W, Config.FRAME_H), interpolation=cv2.INTER_LINEAR)
+            with cs.frame_lock: cs.latest_frame = frame; cs.tile_dirty = has_motion
+            cs.frame_cnt += 1; cs._fps_cnt += 1
+            t = time.perf_counter(); e = t - cs._fps_t
+            if e >= 1.0:
+                cs.fps_inst = cs._fps_cnt / e; cs._fps_cnt = 0; cs._fps_t = t
+                cs.fps_spark.append(cs.fps_inst)
+            # Throttle sleep
+            elapsed_loop = time.perf_counter() - loop_t
+            target_s = 1.0 / max(1, adaptive.fps_target)
+            sleep_s  = target_s - elapsed_loop
+            if sleep_s > 0.001:
+                time.sleep(sleep_s)
+            continue
+
+        frame = cv2.resize(raw_frame, (Config.FRAME_W, Config.FRAME_H), interpolation=cv2.INTER_LINEAR)
         cs.frame_cnt += 1; cs._fps_cnt += 1
         t = time.perf_counter(); e = t - cs._fps_t
         if e >= 1.0:
@@ -2344,7 +2545,8 @@ def camera_thread(cs: CameraState):
             cv2.imwrite(cs.before_img, frame)
             if yolo:
                 try:
-                    small = cv2.resize(frame, (adaptive.det_w, adaptive.det_h), interpolation=cv2.INTER_LINEAR)
+                    # Resize directly from raw_frame to avoid double resizing
+                    small = cv2.resize(raw_frame, (adaptive.det_w, adaptive.det_h), interpolation=cv2.INTER_LINEAR)
                     results = yolo.predict(source=small, conf=Config.CONFIDENCE, device=Config.DEVICE, verbose=False, half=(Config.DEVICE == "cuda"))
                     base_objs = []
                     for box in results[0].boxes:
@@ -2362,16 +2564,6 @@ def camera_thread(cs: CameraState):
                 f"🟢 OMS NODE ONLINE\n━━━━━━━━━━━━━━━━━━━\n\nCamera: {_clean_cam_name(cs.name)}\nLocation: {cs.location}\nProfile: {HW_PROFILE}\nBaseline captured.",
                 event_type="BASELINE", camera=cs.name)
 
-        has_motion = cs.motion.has_motion(frame)
-        if has_motion: cs.last_motion = time.time(); cs.idle_cnt = 0
-        else: cs.idle_cnt += 1
-        idle   = (time.time() - cs.last_motion) > 3.0 and not has_motion
-        skip_n = adaptive.skip_n + (Config.IDLE_SKIP_EXTRA if idle else 0)
-
-        if cs.frame_cnt % skip_n != 0:
-            with cs.frame_lock: cs.latest_frame = frame; cs.tile_dirty = has_motion
-            continue
-
         dw, dh   = adaptive.det_w, adaptive.det_h
         new_dets: List[dict] = []
         cur_objs: List[str]  = []
@@ -2380,7 +2572,8 @@ def camera_thread(cs: CameraState):
         # ── YOLO DETECTION + TRACKING ─────────────────────────────────────────
         if yolo:
             try:
-                small   = cv2.resize(frame, (dw, dh), interpolation=cv2.INTER_LINEAR)
+                # Resize directly from raw_frame to detector resolution (dw, dh), avoiding double-resizing!
+                small   = cv2.resize(raw_frame, (dw, dh), interpolation=cv2.INTER_LINEAR)
                 results = yolo.track(source=small, conf=Config.CONFIDENCE,
                                      device=Config.DEVICE, persist=Config.TRACK_PERSIST,
                                      verbose=False, half=(Config.DEVICE == "cuda"), imgsz=max(dw, dh))
@@ -2442,7 +2635,27 @@ def camera_thread(cs: CameraState):
                             del cs.pending_futures[tid]
 
                             if np_pid:
+                                curr_pid = cs.track_to_pid.get(tid)
+                                curr_conf = cs.pid_confidences.get(curr_pid, 0.0) if curr_pid else 0.0
                                 is_locked = cs.tid_identity_locked.get(tid, False)
+                                
+                                # Lock Override on Strong Match: If currently locked but prediction shows a different known PID
+                                # with strong confidence (>= 0.58), and the current lock confidence is weak (< 0.45),
+                                # override the lock to perform a correction.
+                                if is_locked and curr_pid and np_pid != curr_pid and conf >= 0.58 and curr_conf < 0.45:
+                                    app_log.info(f"[{cs.name}] [LOCK OVERRIDE] Correcting track {tid} from {curr_pid} (conf={curr_conf:.3f}) to {np_pid} (conf={conf:.3f}) due to strong match")
+                                    is_locked = False
+                                    cs.tid_identity_locked[tid] = False
+                                    if tid in cs.tid_face_votes:
+                                        cs.tid_face_votes[tid] = {}
+                                    if curr_pid in cs.present_pids:
+                                        cs.present_pids.discard(curr_pid)
+                                    with _fdb_lock:
+                                        if curr_pid in faces_db:
+                                            faces_db[curr_pid]["in_scene"] = False
+                                            if not faces_db[curr_pid].get("known") and faces_db[curr_pid].get("visit_count", 0) <= 1:
+                                                del faces_db[curr_pid]
+                                
                                 if not is_locked:
                                     np_is_registered = False
                                     np_is_known = False
@@ -2456,20 +2669,24 @@ def camera_thread(cs: CameraState):
                                             votes = cs.tid_face_votes.setdefault(tid, {})
                                             votes[np_pid] = votes.get(np_pid, 0.0) + conf
                                             
-                                            # Immediate lock on first match for known faces (0.35 threshold)
-                                            if votes[np_pid] >= 0.35:
+                                            # Harden Lock Thresholds: Require conf >= 0.52 for immediate lock,
+                                            # or votes[np_pid] >= 0.80 for accumulated weak matches
+                                            should_lock = (conf >= 0.52 or votes[np_pid] >= 0.80)
+                                            if should_lock:
                                                 cs.tid_identity_locked[tid] = True
-                                                cs.pid_confidences[np_pid] = conf
-                                                old = cs.track_to_pid.get(tid)
-                                                if old and old != np_pid:
-                                                    cs.present_pids.discard(old)
-                                                    with _fdb_lock:
-                                                        if old in faces_db:
-                                                            faces_db[old]["in_scene"] = False
-                                                            if not faces_db[old].get("known") and faces_db[old].get("visit_count", 0) <= 1:
-                                                                del faces_db[old]
-                                                cs.track_to_pid[tid] = np_pid
-                                                _ensure_pid(cs, np_pid, np_name)
+                                                app_log.info(f"[{cs.name}] [FACE LOCK] Locked tracking ID {tid} to {np_pid} (conf={conf:.3f}, votes={votes[np_pid]:.3f})")
+                                            
+                                            cs.pid_confidences[np_pid] = conf
+                                            old = cs.track_to_pid.get(tid)
+                                            if old and old != np_pid:
+                                                cs.present_pids.discard(old)
+                                                with _fdb_lock:
+                                                    if old in faces_db:
+                                                        faces_db[old]["in_scene"] = False
+                                                        if not faces_db[old].get("known") and faces_db[old].get("visit_count", 0) <= 1:
+                                                            del faces_db[old]
+                                            cs.track_to_pid[tid] = np_pid
+                                            _ensure_pid(cs, np_pid, np_name)
                                         else:
                                             # Do not lock track for auto-registered intruders.
                                             # Assign the intruder PID, but leave track unlocked to allow recheck on subsequent frames.
@@ -2497,21 +2714,22 @@ def camera_thread(cs: CameraState):
                             recovered_tid = None
                             now = time.time()
                             
-                            # Clean up old lost tracks
-                            stale_lost = [t for t, (_, _, t_lost) in cs.lost_tracks.items() if now - t_lost > 5.0]
-                            for t in stale_lost:
-                                cs.lost_tracks.pop(t, None)
+                            # Limit Spatial Recovery Candidate Pool:
+                            # Exclude PIDs that are currently active and visible in the scene from recovery candidate search
+                            currently_visible_pids = {cs.track_to_pid[t] for t in tid_seen if t in cs.track_to_pid}
                             
                             # Build candidates list
                             candidates = []
                             for l_tid, (l_pid, l_box, l_time) in cs.lost_tracks.items():
-                                candidates.append((l_tid, l_pid, l_box))
+                                if l_pid not in currently_visible_pids:
+                                    candidates.append((l_tid, l_pid, l_box))
                             for active_tid, active_pid in cs.track_to_pid.items():
                                 if active_tid not in tid_seen and active_tid in cs.last_track_boxes:
-                                    candidates.append((active_tid, active_pid, cs.last_track_boxes[active_tid]))
+                                    if active_pid not in currently_visible_pids:
+                                        candidates.append((active_tid, active_pid, cs.last_track_boxes[active_tid]))
                             
                             cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
-                            best_dist = 150.0  # max 150px
+                            best_dist = 80.0  # max 80px (reduced from 150px to prevent mismatching nearby targets)
                             for c_tid, c_pid, c_box in candidates:
                                 cx1, cy1, cx2, cy2 = c_box
                                 ccx, ccy = (cx1 + cx2) / 2.0, (cy1 + cy2) / 2.0
@@ -2524,8 +2742,16 @@ def camera_thread(cs: CameraState):
                             if recovered_pid:
                                 app_log.info(f"[{cs.name}] [TRACK RECOVERY] Recovered tracking ID {tid} as {recovered_pid} (previously {recovered_tid}) spatially (dist={best_dist:.1f}px)")
                                 cs.track_to_pid[tid] = recovered_pid
-                                cs.tid_identity_locked[tid] = True
-                                if recovered_tid in cs.track_to_pid:
+                                
+                                # Inherit Locks: Copy lock status from the recovered track rather than forcing True
+                                was_locked = cs.tid_identity_locked.get(recovered_tid, False) if recovered_tid is not None else False
+                                cs.tid_identity_locked[tid] = was_locked
+                                
+                                # Inherit votes if any
+                                if recovered_tid is not None and recovered_tid in cs.tid_face_votes:
+                                    cs.tid_face_votes[tid] = cs.tid_face_votes.pop(recovered_tid)
+                                
+                                if recovered_tid != tid and recovered_tid in cs.track_to_pid:
                                     cs.track_to_pid.pop(recovered_tid, None)
                                 cs.lost_tracks.pop(recovered_tid, None)
                             else:
@@ -2537,10 +2763,13 @@ def camera_thread(cs: CameraState):
                             name = "Unknown"
                             disp = "Unknown"
                         else:
-                            if pid not in faces_db:
+                            with _fdb_lock:
+                                exists = pid in faces_db
+                                if exists:
+                                    name = faces_db[pid].get("name", f"Intruder-{pid}")
+                            if not exists:
                                 del cs.track_to_pid[tid]
                                 continue
-                            name = faces_db.get(pid, {}).get("name", f"Intruder-{pid}")
                             disp = name.split("-")[0][:12]
 
                         # Schedule face recognition only if not locked
@@ -2593,6 +2822,12 @@ def camera_thread(cs: CameraState):
                 obj_dets_frame = [d for d in new_dets if d["label"] != "person"]
                 cs.ownership.update(person_dets_this_frame, obj_dets_frame)
 
+                # Clean up old lost tracks (M7 fix: runs every frame)
+                now_lt = time.time()
+                stale_lost = [t for t, (_, _, t_lost) in cs.lost_tracks.items() if now_lt - t_lost > 5.0]
+                for t in stale_lost:
+                    cs.lost_tracks.pop(t, None)
+
                 # Absent-person tracking
                 for tid_gone in list(cs.track_to_pid.keys()):
                     if tid_gone not in tid_seen:
@@ -2606,7 +2841,8 @@ def camera_thread(cs: CameraState):
                                     app_log.info(f"[{cs.name}] Tracker lost ID {tid_gone} ({pid_g}) after {pi_g.absent_cycles} cycles absent. Added to recovery buffer.")
                                 if pid_g in cs.present_pids:
                                     cs.present_pids.discard(pid_g)
-                                    name_g = faces_db.get(pid_g,{}).get("name","Unknown")
+                                    with _fdb_lock:
+                                        name_g = faces_db.get(pid_g, {}).get("name", "Unknown")
                                     on_person_left(cs, pid_g, name_g, frame)
                                 del cs.track_to_pid[tid_gone]
                                 cs.last_track_boxes.pop(tid_gone, None)
@@ -2674,8 +2910,7 @@ def camera_thread(cs: CameraState):
                     del results, small, boxes
                 except Exception:
                     pass
-                if yolo_ctr % 10 == 0:
-                    gc.collect(0)
+                # gc.collect(0) removed to prevent stutters
                 if yolo_ctr % 100 == 0 and Config.DEVICE == "cuda":
                     try:
                         import torch
@@ -2707,7 +2942,7 @@ def camera_thread(cs: CameraState):
             with cs.frame_lock: cs.latest_frame = frame
 
         gc_ctr += 1
-        if gc_ctr % Config.GC_GEN0_FRAMES == 0: gc.collect(0)
+        # gc.collect(0) removed to prevent stutters
 
         # ── Frame-rate throttle ───────────────────────────────────────────────
         # Cap the camera thread's loop rate to TARGET_FPS to prevent CPU spin.
@@ -2741,8 +2976,12 @@ _objs_added       = 0
 _objs_removed     = 0
 _alerts_generated = 0
 _sys_graph_lock   = threading.Lock()
+_net_sent_rate = 0.0
+_net_recv_rate = 0.0
+_last_net_bytes = (0, 0, 0.0)
 
 def _sys_monitor_thread_loop():
+    global _net_sent_rate, _net_recv_rate, _last_net_bytes
     if not PSUTIL_AVAILABLE: return
     try: psutil.cpu_percent(interval=None)
     except: pass
@@ -2757,7 +2996,15 @@ def _sys_monitor_thread_loop():
                 disk = 0.0
             try:
                 nc = psutil.net_io_counters()
-                net = min(100, (nc.bytes_sent + nc.bytes_recv) / 1e7)
+                now_t = time.time()
+                last_sent, last_recv, last_t = _last_net_bytes
+                if last_t > 0:
+                    dt = now_t - last_t
+                    if dt > 0:
+                        _net_sent_rate = max(0.0, (nc.bytes_sent - last_sent) / (1024 * dt))
+                        _net_recv_rate = max(0.0, (nc.bytes_recv - last_recv) / (1024 * dt))
+                _last_net_bytes = (nc.bytes_sent, nc.bytes_recv, now_t)
+                net = min(100.0, (_net_sent_rate + _net_recv_rate) / 20.0)
             except:
                 net = 0.0
                 
@@ -2770,13 +3017,50 @@ def _sys_monitor_thread_loop():
             app_log.debug(f"Sys monitor thread error: {e}")
         time.sleep(2.0)
 
+def _run_housekeeping():
+    now = time.time()
+    try:
+        with _person_notif_lock:
+            to_remove_pids = []
+            for pid, hist in list(_person_notif_history.items()):
+                to_remove_btypes = [btype for btype, t in list(hist.items()) if now - t > 3600.0]
+                for btype in to_remove_btypes:
+                    hist.pop(btype, None)
+                if not hist:
+                    to_remove_pids.append(pid)
+            for pid in to_remove_pids:
+                _person_notif_history.pop(pid, None)
+    except Exception as e:
+        app_log.debug(f"Housekeeping _person_notif_history error: {e}")
+
+    try:
+        dedup_secs = getattr(Config, "TG_MSG_HASH_DEDUP_SECS", 3600)
+        with notif_queue._lock:
+            to_remove_hashes = [h for h, t in list(notif_queue._hashes.items()) if now - t > dedup_secs]
+            for h in to_remove_hashes:
+                notif_queue._hashes.pop(h, None)
+    except Exception as e:
+        app_log.debug(f"Housekeeping notif_queue._hashes error: {e}")
+
 def _db_saver_thread_loop():
+    """Background DB saver: responds to dirty events within 2 seconds, plus periodic save."""
+    last_save = time.time()
     while True:
-        time.sleep(Config.DB_SAVE_SECS)
-        try:
-            _save_db_json()
-        except Exception as e:
-            app_log.error(f"DB saver thread error: {e}")
+        # Wait up to 2 seconds for a dirty signal, then check if periodic save is due
+        triggered = _db_dirty_event.wait(timeout=2.0)
+        now = time.time()
+        # Save if: dirty flag was set, OR periodic interval elapsed
+        if triggered or (now - last_save >= Config.DB_SAVE_SECS):
+            _db_dirty_event.clear()
+            try:
+                _save_db_json()
+                last_save = time.time()
+            except Exception as e:
+                app_log.error(f"DB saver thread error: {e}")
+            try:
+                _run_housekeeping()
+            except Exception as e:
+                app_log.error(f"Housekeeping task error: {e}")
 
 # ── Core rendering helpers ────────────────────────────────────────────────────
 def _clamp_rect(img, x1, y1, x2, y2):
@@ -2916,49 +3200,48 @@ def _draw_loading_tile(tile: np.ndarray, cam_name: str):
     _text_c(tile, f"AWAITING SECURE FEED{dots}", cx, cy + 70, 0.26, C_DIM)
     _text_c(tile, cam_name.upper(), cx, cy - 80, 0.32, C_TEXT, bold=True)
 
+_bg_cache = None
+_bg_cache_size = (0, 0)
+
+def get_background_cache(W, H):
+    global _bg_cache, _bg_cache_size
+    if _bg_cache is None or _bg_cache_size != (W, H):
+        # Pre-render the volumetric gradient background once!
+        cache = np.zeros((H, W, 3), dtype=np.uint8)
+        cache[:] = (5, 5, 5)
+        
+        # Warm radial glow from bottom center
+        glow_x = W // 2
+        glow_y = int(H * 1.15)
+        max_r = int(W * 0.85)
+        for r_idx in range(16, 0, -1):
+            r = int(max_r * (r_idx / 16))
+            alpha = 0.9 * 0.0025 * (17 - r_idx)
+            gc = (int(20 * alpha * 8), int(80 * alpha * 8), int(120 * alpha * 8))
+            cv2.circle(cache, (glow_x, glow_y), r, gc, -1, cv2.LINE_8)
+            
+        # Cool top-center radial glow
+        for r_idx in range(10, 0, -1):
+            r = int(W * 0.35 * (r_idx / 10))
+            alpha = 0.001 * (11 - r_idx)
+            gc = (int(60 * alpha * 10), int(30 * alpha * 10), int(15 * alpha * 10))
+            cv2.circle(cache, (W // 2, -int(H * 0.1)), r, gc, -1, cv2.LINE_8)
+            
+        # Static subtle scanline texture
+        for sy in range(0, H, 40):
+            alpha = 0.008
+            sc = (int(25 * alpha * 12), int(20 * alpha * 12), int(15 * alpha * 12))
+            cv2.line(cache, (0, sy), (W, sy), sc, 1, cv2.LINE_8)
+            
+        _bg_cache = cache
+        _bg_cache_size = (W, H)
+    return _bg_cache
+
 def draw_gradient_background(img):
-    """Cinematic volumetric dark atmospheric background — Iron Man / Tesla command center feel."""
+    """Applies the cached volumetric dark atmospheric background."""
     H, W = img.shape[:2]
-    # Base: Deep cinematic near-black
-    img[:] = (5, 5, 5)
-
-    # ── 1. Warm volumetric radial glow from bottom center (like stage lighting from below)
-    t = time.time()
-    glow_pulse = 0.85 + 0.15 * math.sin(t * 0.4)  # Very slow ambient breathing
-    glow_x = W // 2
-    glow_y = int(H * 1.15)  # Below screen, so light sweeps up from bottom
-    max_r = int(W * 0.85)
-    for r_idx in range(16, 0, -1):
-        r = int(max_r * (r_idx / 16))
-        alpha = glow_pulse * 0.0025 * (17 - r_idx)
-        # Warm gold glow: BGR = (20, 80, 120) range
-        gc = (int(20 * alpha * 8), int(80 * alpha * 8), int(120 * alpha * 8))
-        cv2.circle(img, (glow_x, glow_y), r, gc, -1, cv2.LINE_AA)
-
-    # ── 2. Secondary top-center subtle cool glow for depth layering
-    for r_idx in range(10, 0, -1):
-        r = int(W * 0.35 * (r_idx / 10))
-        alpha = 0.001 * (11 - r_idx)
-        gc = (int(60 * alpha * 10), int(30 * alpha * 10), int(15 * alpha * 10))
-        cv2.circle(img, (W // 2, -int(H * 0.1)), r, gc, -1, cv2.LINE_AA)
-
-    # ── 3. Subtle horizontal scan line texture (very faint, premium feel)
-    scan_speed = 18.0
-    scan_spacing = 40
-    scan_offset = int(t * scan_speed) % scan_spacing
-    for sy in range(scan_offset, H, scan_spacing):
-        alpha = 0.008 + 0.003 * math.sin(sy / 200.0 + t * 0.3)
-        sc = (int(25 * alpha * 12), int(20 * alpha * 12), int(15 * alpha * 12))
-        cv2.line(img, (0, sy), (W, sy), sc, 1, cv2.LINE_AA)
-
-    # ── 4. Animated golden diagonal energy streak (very faint)
-    streak_t = t * 0.12
-    for s in range(3):
-        sx_off = int((streak_t + s * 0.33) % 1.0 * W * 2) - W // 2
-        streak_alpha = 0.018 * math.sin(math.pi * ((streak_t + s * 0.33) % 1.0))
-        sc2 = (int(30 * streak_alpha * 12), int(100 * streak_alpha * 12), int(180 * streak_alpha * 12))
-        if streak_alpha > 0.001:
-            cv2.line(img, (sx_off, 0), (sx_off + W // 3, H), sc2, 2, cv2.LINE_AA)
+    bg = get_background_cache(W, H)
+    np.copyto(img, bg)
 
 def _aspect_crop_to_fill(feed, dets, target_w, target_h):
     """Crops the feed to match the exact aspect ratio of target_w / target_h and resizes it to fill, adjusting det boxes."""
@@ -3020,6 +3303,8 @@ def _aspect_crop_to_fill(feed, dets, target_w, target_h):
 def _draw_cam_hud(img, cs, tx1, ty1, tx2, ty2, c_border, large=False):
     """Draw camera HUD overlay: LIVE badge, cam name, time, FPS, subject count with high-end sci-fi layout."""
     s = 0.28 if not large else 0.34
+    font_size = max(12, int(s * 40))
+    font_name = "segoe_bold" if large else "segoe"
     
     # 1. LIVE / OFFLINE Badge with pulsing status dot
     pulse = _pulse(2.0)
@@ -3028,7 +3313,6 @@ def _draw_cam_hud(img, cs, tx1, ty1, tx2, ty2, c_border, large=False):
     # Holographic pill for status
     _panel(img, tx1 + 8, ty1 + 8, tx1 + 80, ty1 + 30, a=0.65, border_color=lc)
     _status_dot(img, tx1 + 20, ty1 + 19, 4, lc, animate=cs.online)
-    _text(img, "LIVE" if cs.online else "OFFLINE", tx1 + 32, ty1 + 22, s, lc, bold=cs.online)
 
     # 2. Camera ID & Name with glassy backdrop
     cam_lbl = f"CAM {cs.cam_id+1} : {cs.name.upper()}"
@@ -3041,7 +3325,6 @@ def _draw_cam_hud(img, cs, tx1, ty1, tx2, ty2, c_border, large=False):
         
     nx = tx1 + 88
     _panel(img, nx, ty1 + 8, nx + nw + 24, ty1 + 30, a=0.65, border_color=C_BORDER)
-    _text(img, cam_lbl, nx + 12, ty1 + 22, s, C_TEXT, bold=True)
 
     # 3. Dynamic Timestamp on top-right
     ts_str = datetime.now().strftime("%H:%M:%S")
@@ -3053,7 +3336,6 @@ def _draw_cam_hud(img, cs, tx1, ty1, tx2, ty2, c_border, large=False):
         tw2, _ = font_ts.getsize(ts_str)
         
     _panel(img, tx2 - tw2 - 24, ty1 + 8, tx2 - 8, ty1 + 30, a=0.65, border_color=C_BORDER)
-    _text(img, ts_str, tx2 - tw2 - 12, ty1 + 22, s, C_GOLD)
 
     # 4. Floating Bottom Bar: FPS + Subjects + Alerts
     p_cnt = len(cs.present_pids)
@@ -3062,17 +3344,59 @@ def _draw_cam_hud(img, cs, tx1, ty1, tx2, ty2, c_border, large=False):
     # Semi-transparent glass bottom panel
     _panel(img, tx1 + 8, ty2 - 32, tx2 - 8, ty2 - 8, a=0.6, border_color=C_BORDER)
     
-    # Tactical information segments
-    _text(img, f"📊  FPS: {cs.fps_inst:.1f}", tx1 + 20, ty2 - 16, 0.26, C_GOLD)
-    _text_c(img, f"👤  SUBJECTS: {p_cnt}", (tx1 + tx2) // 2, ty2 - 16, 0.26, C_TEXT, bold=True)
-    _text_r(img, f"🔍  DETECTION TARGETS: {det_cnt}", tx2 - 20, ty2 - 16, 0.26, C_DIM)
-    
     # Volumetric danger alarm warning overlay directly in center-bottom of feed
-    if cs.warning_msg and time.time() - cs.warning_time < 6.0:
+    warning_active = cs.warning_msg and time.time() - cs.warning_time < 6.0
+    if warning_active:
         pw = _pulse(3.0)
         wc = tuple(int(c * (0.3 + pw * 0.7)) for c in C_RED)
         _panel(img, tx1 + 16, ty2 - 58, tx2 - 16, ty2 - 38, a=0.75, border_color=wc)
-        _text_c(img, "🚨  " + cs.warning_msg[:45].upper(), (tx1 + tx2) // 2, ty2 - 45, 0.28, wc, bold=True)
+
+    # Batch all text draws
+    text_items = []
+    
+    # Status
+    text_items.append(("LIVE" if cs.online else "OFFLINE", tx1 + 32, ty1 + 22, lc, "segoe_bold" if cs.online else "segoe", font_size))
+    # Camera ID & Name
+    text_items.append((cam_lbl, nx + 12, ty1 + 22, C_TEXT, "segoe_bold", font_size))
+    # Timestamp
+    text_items.append((ts_str, tx2 - tw2 - 12, ty1 + 22, C_GOLD, "segoe", font_size))
+    
+    # Bottom Bar segments
+    # FPS (s=0.26 is size 10)
+    text_items.append((f"📊  FPS: {cs.fps_inst:.1f}", tx1 + 20, ty2 - 16, C_GOLD, "segoe", 10))
+    
+    # Subjects (centered)
+    subj_str = f"👤  SUBJECTS: {p_cnt}"
+    subj_font = get_pil_font("segoe_bold", 10)
+    try:
+        subj_bbox = subj_font.getbbox(subj_str)
+        subj_w = subj_bbox[2] - subj_bbox[0]
+    except AttributeError:
+        subj_w, _ = subj_font.getsize(subj_str)
+    text_items.append((subj_str, (tx1 + tx2) // 2 - subj_w // 2, ty2 - 16, C_TEXT, "segoe_bold", 10))
+    
+    # Detection targets (right-aligned)
+    det_str = f"🔍  DETECTION TARGETS: {det_cnt}"
+    det_font = get_pil_font("segoe", 10)
+    try:
+        det_bbox = det_font.getbbox(det_str)
+        det_w = det_bbox[2] - det_bbox[0]
+    except AttributeError:
+        det_w, _ = det_font.getsize(det_str)
+    text_items.append((det_str, tx2 - 20 - det_w, ty2 - 16, C_DIM, "segoe", 10))
+    
+    # Warning message
+    if warning_active:
+        warn_str = "🚨  " + cs.warning_msg[:45].upper()
+        warn_font = get_pil_font("segoe_bold", 11)
+        try:
+            warn_bbox = warn_font.getbbox(warn_str)
+            warn_w = warn_bbox[2] - warn_bbox[0]
+        except AttributeError:
+            warn_w, _ = warn_font.getsize(warn_str)
+        text_items.append((warn_str, (tx1 + tx2) // 2 - warn_w // 2, ty2 - 45, wc, "segoe_bold", 11))
+
+    _draw_text_batch_flexible(img, text_items)
 
 def _draw_detection_overlays(tile, dets, tile_w, tile_h):
     """Draw gold targeting brackets + labels for all detections with high-end holographic outline.
@@ -3083,6 +3407,17 @@ def _draw_detection_overlays(tile, dets, tile_w, tile_h):
         return
     sx_s = tile_w / max(1, Config.FRAME_W)
     sy_s = tile_h / max(1, Config.FRAME_H)
+
+    # H3: Snapshot known_pids once to avoid lock contention
+    known_pids = set()
+    with _fdb_lock:
+        for pid, d in faces_db.items():
+            if d.get("known"):
+                known_pids.add(pid)
+
+    # C4: Batch PIL text rendering pass preparation
+    text_batch = []
+    
     for det in dets:
         bx1, by1, bx2, by2 = det["box"]
         bx1 = int(bx1 * sx_s)
@@ -3090,9 +3425,8 @@ def _draw_detection_overlays(tile, dets, tile_w, tile_h):
         by1 = int(by1 * sy_s)
         by2 = int(by2 * sy_s)
         
-        with _fdb_lock:
-            is_known = faces_db.get(det.get("pid"), {}).get("known", False)
-            
+        is_known = det.get("pid") in known_pids
+
         if det["label"] == "person":
             d_col = C_GREEN if is_known else C_RED
         else:
@@ -3110,7 +3444,7 @@ def _draw_detection_overlays(tile, dets, tile_w, tile_h):
         # 2. Holographic target corner brackets
         _corner_brackets(tile, bx1, by1, bx2, by2, p_col, L=12, T=2)
         
-        # 3. Floating glass chip label
+        # 3. Floating glass chip label background
         pid_str = det.get('disp', '')[:12]
         conf_str = f"{det['conf']:.0%}"
         chip = f"🎯 {pid_str.upper()} ({conf_str})"
@@ -3119,15 +3453,19 @@ def _draw_detection_overlays(tile, dets, tile_w, tile_h):
         try:
             bbox = font.getbbox(chip)
             tw2 = bbox[2] - bbox[0]
-            th2 = bbox[3] - bbox[1]
         except AttributeError:
-            tw2, th2 = font.getsize(chip)
+            tw2, _ = font.getsize(chip)
             
         chy = max(4, by1 - 22)
         
         # Floating rounded glass label background
         _panel(tile, bx1, chy, bx1 + tw2 + 16, chy + 20, a=0.72, border_color=p_col)
-        _text(tile, chip, bx1 + 8, chy + 14, 0.26, p_col, bold=True)
+        
+        # Queue text for single batch draw
+        text_batch.append((chip, bx1 + 8, chy + 14, p_col, "segoe_bold", 10))
+
+    # C4: Draw all floating labels in a single PIL pass
+    _draw_text_batch_flexible(tile, text_batch)
 
 def _draw_hbar(img, x, y, w, h, pct, color):
     """Futuristic horizontal telemetry progress bar with soft glow and clean rounded track."""
@@ -3171,17 +3509,26 @@ def _fill_rounded_rect(img, x1, y1, x2, y2, r, color):
     cv2.ellipse(img, (x2 - r, y2 - r), (r, r), 0, 0, 90, color, -1, cv2.LINE_AA)
     cv2.ellipse(img, (x1 + r, y2 - r), (r, r), 90, 0, 90, color, -1, cv2.LINE_AA)
 
+_blur_cache: Dict[int, np.ndarray] = {}
+
+def clear_blur_cache():
+    _blur_cache.clear()
+
 def _panel(img, x1, y1, x2, y2, a=0.72, border=True, border_color=None):
     """Futuristic holographic glassmorphic panel: true backdrop blur + double ambient glowing gold rims."""
     x1, y1, x2, y2 = _clamp_rect(img, x1, y1, x2, y2)
     if x2 <= x1 or y2 <= y1: return
     r = 20  # AAA cinematic 20px rounded corners
     
+    # C5: Pre-blur full frame once per render
+    img_id = id(img)
+    if img_id not in _blur_cache:
+        _blur_cache[img_id] = cv2.blur(img, (21, 21))
+    
+    blurred = _blur_cache[img_id][y1:y2, x1:x2]
+    
     # 1. Extract background ROI
     roi = img[y1:y2, x1:x2].copy()
-    
-    # 2. Apply real-time backdrop blur (fluent glassmorphism)
-    blurred = cv2.blur(roi, (21, 21))
     
     # 3. Blend transparent surface overlay: BGR (20, 20, 20) with alpha a=0.72
     overlay = np.zeros_like(roi)
@@ -3220,31 +3567,63 @@ def _gold_line(img, x1, y, x2, alpha=0.7):
     gc = tuple(int(c * alpha) for c in C_GOLD)
     cv2.line(img, (x1,y), (x2,y), gc, 1, cv2.LINE_AA)
 
-def _pulse(hz=1.2): return (math.sin(time.time()*2*math.pi*hz)+1.0)/2.0
+_pulse_cache = {}
+_pulse_last_time = 0.0
 
-_font_cache = {}
+def _pulse(hz=1.2):
+    global _pulse_last_time
+    now = time.time()
+    if now != _pulse_last_time:
+        _pulse_cache.clear()
+        _pulse_last_time = now
+    if hz not in _pulse_cache:
+        _pulse_cache[hz] = (math.sin(now * 2 * math.pi * hz) + 1.0) / 2.0
+    return _pulse_cache[hz]
 
-def get_pil_font(font_name, size):
+import functools
+
+@functools.lru_cache(maxsize=64)
+def get_pil_font(font_name: str, size: int):
     from PIL import ImageFont
-    key = (font_name, size)
-    if key not in _font_cache:
-        # Standard fonts on Windows
-        font_path = "C:\\Windows\\Fonts\\segoeui.ttf"  # Default Segoe UI
-        if font_name == "segoe_bold":
-            font_path = "C:\\Windows\\Fonts\\seguisb.ttf"  # Segoe UI Semibold
-        elif font_name == "segoe_light":
-            font_path = "C:\\Windows\\Fonts\\segoeuil.ttf"  # Segoe UI Light
-        elif font_name == "consolas":
-            font_path = "C:\\Windows\\Fonts\\consola.ttf"  # Consolas for telemetry
-            
+    font_path = "C:\\Windows\\Fonts\\segoeui.ttf"  # Default Segoe UI
+    if font_name == "segoe_bold":
+        font_path = "C:\\Windows\\Fonts\\seguisb.ttf"  # Segoe UI Semibold
+    elif font_name == "segoe_light":
+        font_path = "C:\\Windows\\Fonts\\segoeuil.ttf"  # Segoe UI Light
+    elif font_name == "consolas":
+        font_path = "C:\\Windows\\Fonts\\consola.ttf"  # Consolas for telemetry
+        
+    try:
+        return ImageFont.truetype(font_path, size)
+    except Exception:
         try:
-            _font_cache[key] = ImageFont.truetype(font_path, size)
+            return ImageFont.truetype("C:\\Windows\\Fonts\\segoeui.ttf", size)
         except Exception:
-            try:
-                _font_cache[key] = ImageFont.truetype("C:\\Windows\\Fonts\\segoeui.ttf", size)
-            except Exception:
-                _font_cache[key] = ImageFont.load_default()
-    return _font_cache[key]
+            return ImageFont.load_default()
+
+def _draw_text_batch_flexible(img, items: List[Tuple[str, int, int, Tuple, str, int]]):
+    """Draw multiple text strings on a single PIL canvas with flexible fonts and sizes (C4: Batch text)."""
+    from PIL import Image, ImageDraw
+    if not items: return
+    rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    pil_img = Image.fromarray(rgb)
+    draw = ImageDraw.Draw(pil_img)
+    
+    for text, x, y, color, font_name, font_size in items:
+        s_str = str(text)
+        if not s_str: continue
+        font = get_pil_font(font_name, font_size)
+        try:
+            bbox = font.getbbox(s_str)
+            th = bbox[3] - bbox[1]
+        except AttributeError:
+            _, th = font.getsize(s_str)
+            
+        color_rgb = (color[2], color[1], color[0])
+        draw.text((x, y - th), s_str, font=font, fill=color_rgb)
+        
+    bgr = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+    np.copyto(img, bgr)
 
 def _text_pil(img, s, x, y, font_size=14, color=(245, 245, 245), font_name="segoe"):
     from PIL import Image, ImageDraw
@@ -3366,8 +3745,8 @@ def draw_header(img: np.ndarray, cameras):
     cap_w = 74; cap_h = 56; cap_y = pad + 12
     rx = W - pad - 6 * cap_w - 5 * 6  # start x of capsule row
 
-    cpu_pct = psutil.cpu_percent(interval=None) if PSUTIL_AVAILABLE else 0.0
-    ram_pct = psutil.virtual_memory().percent if PSUTIL_AVAILABLE else 0.0
+    cpu_pct = _cpu_spark[-1] if _cpu_spark else 0.0
+    ram_pct = _ram_spark[-1] if _ram_spark else 0.0
     cpu_col = C_RED if cpu_pct > 80 else (C_ORANGE if cpu_pct > 60 else C_GREEN)
     ram_col = C_RED if ram_pct > 85 else (C_ORANGE if ram_pct > 70 else C_TEXT)
     cuda_col = C_GREEN if CUDA_AVAILABLE else C_RED
@@ -3525,9 +3904,8 @@ def draw_side_panel(img: np.ndarray, cameras):
     y += 22
 
     total_det = sum(cs.persons_detected for cs in cameras)
-    with _fdb_lock:
-        known_p = sum(1 for d in faces_db.values() if d.get("known"))
-        unknown_p = sum(1 for d in faces_db.values() if not d.get("known"))
+    known_p = _known_count
+    unknown_p = _unknown_count
 
     summary_rows = [
         ("Total Detections",  total_det),
@@ -3635,15 +4013,9 @@ def draw_event_panel(img: np.ndarray):
     # Network bandwidth
     if y < y2 - 80:
         _text(img, "NETWORK BANDWIDTH", px1, y + 12, 0.30, C_DIM)
-        try:
-            nc = psutil.net_io_counters() if PSUTIL_AVAILABLE else None
-            if nc:
-                sent_kb = nc.bytes_sent / 1024
-                recv_kb = nc.bytes_recv / 1024
-                net_str = f"↑{sent_kb:.0f} KB/s  ↓{recv_kb:.0f} KB/s"
-            else:
-                net_str = "OFFLINE"
-        except:
+        if PSUTIL_AVAILABLE:
+            net_str = f"↑{_net_sent_rate:.0f} KB/s  ↓{_net_recv_rate:.0f} KB/s"
+        else:
             net_str = "OFFLINE"
         _text_r(img, net_str, px2, y + 12, 0.26, C_CYAN, bold=True)
         y += 20
@@ -4047,7 +4419,7 @@ def draw_footer_capsule(img: np.ndarray, cameras):
     # Smooth pixel-level scrolling
     char_px = 8
     total_px = len(ticker) * char_px
-    t_offset = int(time.time() * 55) % max(1, total_px)
+    t_offset = int(time.perf_counter() * 55) % max(1, total_px)
     gc = tuple(int(c * 0.85) for c in C_GOLD)
     _text(img, ticker, -t_offset + 10, fy + 20, 0.28, gc)
     if W - t_offset + total_px < W + 50:
@@ -4163,7 +4535,7 @@ def run_startup_sequence(win_name: str):
             gfade = max(0, int((0,215,255)[2]-tr*25))
             cv2.line(canvas,(rc_x,rc_y),(ex2,ey2),(0,gfade//3,gfade),1)
         cv2.imshow(win_name,canvas)
-        if cv2.waitKey(16) & 0xFF == ord('q'): break
+        if cv2.waitKey(16) & 0xFF != 0xFF: break
 
 # ══════════════════════════════════════════════════════════════════════════════
 # MOUSE CALLBACK
@@ -4173,9 +4545,10 @@ _auto_reg_pill_bounds = (-1, -1, -1, -1)  # Updated each frame by draw_side_pane
 _side_cam_bounds: list = []               # List of (x1,y1,x2,y2,cam_idx) for sidebar camera rows
 
 def on_mouse(event, x, y, flags, param):
-    global selected_cam_idx, _auto_reg_pill_bounds
+    global selected_cam_idx, _auto_reg_pill_bounds, ui_static_dirty
     if event != cv2.EVENT_LBUTTONDOWN:
         return
+    ui_static_dirty = True
 
     # ── 1. Auto-Register toggle pill (always on top priority) ──────────────
     ax1, ay1, ax2, ay2 = _auto_reg_pill_bounds
@@ -4207,7 +4580,7 @@ def on_mouse(event, x, y, flags, param):
 # MAIN
 # ══════════════════════════════════════════════════════════════════════════════
 def main():
-    global UI_LEFT_W, UI_RIGHT_W, UI_HDR_H, UI_NAV_H, UI_FOOT_H, hud_overlay_active, cam_area_pct
+    global UI_LEFT_W, UI_RIGHT_W, UI_HDR_H, UI_NAV_H, UI_FOOT_H, hud_overlay_active, cam_area_pct, ui_static_dirty
 
     _init_db()
     _init_yunet()
@@ -4255,6 +4628,9 @@ def main():
     run_startup_sequence(win_name)
 
     dashboard    = np.zeros((Config.WINDOW_H, Config.WINDOW_W, 3), dtype=np.uint8)
+    static_dashboard = np.zeros((Config.WINDOW_H, Config.WINDOW_W, 3), dtype=np.uint8)
+    ui_static_dirty = True
+    last_static_update = 0.0
     last_db_save = time.time()
     last_gc_time = time.time()
     last_threat_tick = time.time()
@@ -4267,6 +4643,7 @@ def main():
     app_log.info("OMS dashboard live.")
 
     while True:
+        clear_blur_cache()
         now = time.time()  # MUST be first — referenced throughout the loop
         loop_start = now
         adaptive.update()
@@ -4300,15 +4677,23 @@ def main():
         # Reallocate canvas on size change
         if dashboard.shape[1] != Config.WINDOW_W or dashboard.shape[0] != Config.WINDOW_H:
             dashboard = np.zeros((Config.WINDOW_H, Config.WINDOW_W, 3), dtype=np.uint8)
+            static_dashboard = np.zeros((Config.WINDOW_H, Config.WINDOW_W, 3), dtype=np.uint8)
+            ui_static_dirty = True
 
-        draw_gradient_background(dashboard)
+        # Update static UI panels at a throttled rate (5 times per second or when dirty) to save enormous CPU
+        if ui_static_dirty or (now - last_static_update > 0.2):
+            static_dashboard[:] = get_background_cache(Config.WINDOW_W, Config.WINDOW_H)
+            if not is_fs_state:
+                draw_header(static_dashboard, cameras)
+                draw_nav_tabs(static_dashboard)
+                draw_side_panel(static_dashboard, cameras)
+                draw_event_panel(static_dashboard)
+            ui_static_dirty = False
+            last_static_update = now
+
+        # Copy the pre-rendered static dashboard to the active canvas
+        np.copyto(dashboard, static_dashboard)
         
-        if not is_fs_state:
-            draw_header(dashboard, cameras)
-            draw_nav_tabs(dashboard)
-            draw_side_panel(dashboard, cameras)
-            draw_event_panel(dashboard)
-            
         info_area_y = draw_camera_grid(dashboard, cameras)
         
         if not is_fs_state:
