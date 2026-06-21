@@ -3,14 +3,14 @@ operator:
 detection:
   confidence: 0.5
   use_cuda: false
-  detect_people: false
+  detect_people: true
   detect_objects: true
   model:
     LOW: yolov8s.pt
     MEDIUM: yolov8s.pt
     HIGH: yolov8s.pt
 face_recognition:
-  detect_new_ids: false
+  detect_new_ids: true
   match_threshold: 0.4
 threat:
   tg_token: new_token
@@ -18,3 +18,10 @@ threat:
 display:
   particle_size: 2.5
   mesh_thickness: 1.5
+haae:
+  enabled: true
+  emotion_frame_interval: 8
+  emotion_alert_cooldown: 300
+  running_speed_threshold: 120.0
+  running_alert_cooldown: 60
+  attention_frontal_min_conf: 0.5

@@ -601,6 +601,59 @@ def create_app() -> "FastAPI":
             return JSONResponse(_get_summary())
         return JSONResponse({})
 
+    @app.get("/api/activity")
+    async def get_activity():
+        """HAAE — Real-time human activity & expression analysis for all tracked persons."""
+        try:
+            sv = _get_sv()
+            if not sv:
+                return JSONResponse({"persons": [], "error": "not initialized"})
+
+            cameras = getattr(sv, "cameras", [])
+            persons = []
+            seen_pids = set()
+
+            for cs in cameras:
+                if not getattr(cs, "online", False):
+                    continue
+                haae = getattr(cs, "haae", None)
+                if haae is None:
+                    continue
+                # Get face DB reference for name lookup
+                faces_db = getattr(sv, "faces_db", {})
+                fdb_lock  = getattr(sv, "_fdb_lock", None)
+
+                with cs.frame_lock:
+                    dets = list(cs.latest_dets)
+
+                for det in dets:
+                    if det.get("label") != "person":
+                        continue
+                    pid = det.get("pid", "")
+                    if not pid or pid in seen_pids:
+                        continue
+                    seen_pids.add(pid)
+
+                    snap = haae.get_record_snapshot(pid)
+                    if snap is None:
+                        continue
+
+                    # Name lookup
+                    name = "Unknown"
+                    if fdb_lock:
+                        with fdb_lock:
+                            name = faces_db.get(pid, {}).get("name", "Unknown")
+                    else:
+                        name = faces_db.get(pid, {}).get("name", "Unknown")
+
+                    snap["name"]   = name
+                    snap["camera"] = cs.name
+                    persons.append(snap)
+
+            return JSONResponse({"persons": persons})
+        except Exception as e:
+            return JSONResponse({"persons": [], "error": str(e)}, status_code=500)
+
     @app.get("/api/settings")
     async def get_settings():
         """Get current system configuration settings."""

@@ -130,6 +130,35 @@ if IS_WINDOWS:
 else:
     WINSOUND_AVAILABLE = False
 
+# ── HAAE Engine import (graceful — disabled if haae_engine.py missing) ─────────
+try:
+    from haae_engine import (
+        HumanActivityExpressionEngine, haae_pool,
+        configure_haae, _tg_running, _tg_emotion_alert
+    )
+    HAAE_AVAILABLE = True
+except Exception as _haae_err:
+    HAAE_AVAILABLE = False
+    haae_pool = None
+    import logging as _hlog
+    _hlog.getLogger("OMS").warning(f"[HAAE] Module not loaded: {_haae_err}")
+    # Stub so CameraState can always call cs.haae.* safely
+    class HumanActivityExpressionEngine:
+        def get(self, pid): return type('R', (), {'emotion_display': lambda s: '😐 Neutral 0%', 'activity_display': lambda s: '⚡ ACTIVE', 'attention_display': lambda s: '👁 ---', 'presence_duration_str': lambda s: '0s'})()
+        def update_activity(self, *a, **kw): pass
+        def submit_emotion(self, *a, **kw): pass
+        def collect_emotion(self, *a, **kw): return None
+        def update_attention(self, *a, **kw): pass
+        def get_display(self, pid): return ('😐 Neutral 0%', '⚡ ACTIVE', '👁 ---', '0s')
+        def get_all_for_telemetry(self): return []
+        def check_alerts(self, *a, **kw): return []
+        def soft_remove(self, pid): pass
+        def remove(self, pid): pass
+        def purge_expired_removals(self, *a): pass
+    def configure_haae(cfg): pass
+    def _tg_running(cam, pid, name, ts): return ''
+    def _tg_emotion_alert(cam, pid, name, emotion, score, ts): return ''
+
 # ══════════════════════════════════════════════════════════════════════════════
 # HARDWARE PROFILE
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1736,6 +1765,9 @@ def async_face(rgb_or_bgr: np.ndarray, is_bgr: bool = False):
 
 face_pool = ThreadPoolExecutor(max_workers=Config.FACE_POOL_WORKERS, thread_name_prefix="Face")
 
+# Apply HAAE configuration from config.yaml
+configure_haae(_CFG)
+
 def register_user_face(cameras, username: str = Config.USERNAME):
     global _enc_dirty
     if not FACE_RECOG_AVAILABLE and not YUNET_AVAILABLE:
@@ -2194,6 +2226,8 @@ class CameraState:
         self._input_mode   = False
         self.zone_intruder_alerted: Dict[str, float] = {}
         self._reconnect_attempts = 0
+        # HAAE — Human Activity & Expression Analysis Engine (per-camera instance)
+        self.haae = HumanActivityExpressionEngine()
 
     def connect(self) -> bool:
         if str(self.source).upper() == "NONE":
@@ -2354,6 +2388,7 @@ def on_person_left(cs: CameraState, pid: str, name: str, frame: np.ndarray):
     # not destroy the IDLE timer.  The record is permanently deleted only after
     # _BEHAVIOR_GRACE_SECS seconds if the person does not return.
     cs.behavior.soft_remove(pid)
+    cs.haae.soft_remove(pid)  # HAAE grace-period cleanup
     cs.warning_msg = f"DEPARTED: {name}"; cs.warning_time = time.time()
     if "Intruder" not in name and not is_transient: cs.threat_level = "GREEN"
     cs.tile_dirty = True
@@ -2825,6 +2860,45 @@ def camera_thread(cs: CameraState):
                         anomalies = cs.behavior.update(pid, cx_p, cy_p, zones_in)
                         for an in anomalies:
                             on_behavior_anomaly(cs, pid, name, an)
+
+                        # ── HAAE: Activity scoring (zero latency — pure kinematics) ──────
+                        behavior_rec = cs.behavior.get(pid)
+                        cs.haae.update_activity(pid, behavior_rec, cs.frame_cnt)
+
+                        # ── HAAE: Async emotion analysis (gated every 8 frames) ───────────
+                        _haae_crop = None
+                        if cs.frame_cnt % 8 == 0:
+                            x1f2,y1f2,x2f2,y2f2 = d["box"]
+                            _haae_crop = frame[max(0,y1f2):min(frame.shape[0],y2f2),
+                                               max(0,x1f2):min(frame.shape[1],x2f2)]
+                            if _haae_crop is not None and _haae_crop.size > 0:
+                                cs.haae.submit_emotion(pid, _haae_crop.copy(), cs.frame_cnt, haae_pool if haae_pool else face_pool)
+                                cs.haae.update_attention(pid, _haae_crop,
+                                                         face_conf=cs.pid_confidences.get(pid, 0.0))
+                        cs.haae.collect_emotion(pid)
+
+                        # ── HAAE: Check for new alerts (RUNNING, EMOTION) ────────────────
+                        haae_alerts = cs.haae.check_alerts(pid, name)
+                        for alert in haae_alerts:
+                            now_ha = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            if alert["type"] == "RUNNING":
+                                on_behavior_anomaly(cs, pid, name, "RUNNING")
+                                if _tg_running and callable(_tg_running):
+                                    notif_queue.send_message(
+                                        _tg_running(cs.name, pid, name, now_ha),
+                                        event_type="RUNNING", camera=cs.name, person=pid, priority=4
+                                    )
+                            elif alert["type"] == "EMOTION":
+                                emotion_txt = alert.get("emotion", "Unknown")
+                                emotion_sc  = alert.get("score", 0.0)
+                                log_event("EXPRESSION", camera=cs.name, person=name,
+                                          obj=emotion_txt,
+                                          detail=f"emotion={emotion_txt} score={emotion_sc:.2f}")
+                                if _tg_emotion_alert and callable(_tg_emotion_alert):
+                                    notif_queue.send_message(
+                                        _tg_emotion_alert(cs.name, pid, name, emotion_txt, emotion_sc, now_ha),
+                                        event_type="EXPRESSION", camera=cs.name, person=pid, priority=4
+                                    )
 
                     new_dets.append({"label":label,"conf":cv_val,"box":(x1,y1,x2,y2),"disp":disp,"pid":pid})
 
@@ -3408,10 +3482,11 @@ def _draw_cam_hud(img, cs, tx1, ty1, tx2, ty2, c_border, large=False):
 
     _draw_text_batch_flexible(img, text_items)
 
-def _draw_detection_overlays(tile, dets, tile_w, tile_h):
+def _draw_detection_overlays(tile, dets, tile_w, tile_h, cs=None):
     """Draw gold targeting brackets + labels for all detections with high-end holographic outline.
     tile_w, tile_h are the pixel dimensions of the tile being drawn into.
     Bounding boxes in dets are in Config.FRAME_W x Config.FRAME_H coordinate space.
+    cs: optional CameraState — when provided, HAAE emotion/activity chip is drawn.
     """
     if not dets:
         return
@@ -3454,7 +3529,7 @@ def _draw_detection_overlays(tile, dets, tile_w, tile_h):
         # 2. Holographic target corner brackets
         _corner_brackets(tile, bx1, by1, bx2, by2, p_col, L=12, T=2)
         
-        # 3. Floating glass chip label background
+        # 3. Floating glass chip label background — Identity chip
         pid_str = det.get('disp', '')[:12]
         conf_str = f"{det['conf']:.0%}"
         chip = f"🎯 {pid_str.upper()} ({conf_str})"
@@ -3473,6 +3548,32 @@ def _draw_detection_overlays(tile, dets, tile_w, tile_h):
         
         # Queue text for single batch draw
         text_batch.append((chip, bx1 + 8, chy + 14, p_col, "segoe_bold", 10))
+
+        # 4. HAAE chip — Emotion + Activity (persons only, when cs is available)
+        det_pid = det.get("pid", "")
+        if det["label"] == "person" and cs is not None and det_pid:
+            try:
+                emotion_s, activity_s, _attn_s, _dur_s = cs.haae.get_display(det_pid)
+                haae_chip = f"{emotion_s}  {activity_s}"
+                font2 = get_pil_font("segoe", 9)
+                try:
+                    bbox2 = font2.getbbox(haae_chip)
+                    tw3 = bbox2[2] - bbox2[0]
+                except AttributeError:
+                    tw3, _ = font2.getsize(haae_chip)
+                chy2 = max(4, chy - 20)
+                # Activity-based chip color: RUNNING=orange, ACTIVE=gold, IDLE=cyan
+                act_lower = activity_s.lower()
+                if "running" in act_lower:
+                    h_col = C_ORANGE
+                elif "active" in act_lower:
+                    h_col = C_GOLD
+                else:
+                    h_col = C_CYAN
+                _panel(tile, bx1, chy2, bx1 + tw3 + 16, chy2 + 18, a=0.65, border_color=h_col)
+                text_batch.append((haae_chip, bx1 + 8, chy2 + 13, h_col, "segoe", 9))
+            except Exception:
+                pass  # HAAE chip never crashes rendering
 
     # C4: Draw all floating labels in a single PIL pass
     _draw_text_batch_flexible(tile, text_batch)
@@ -4202,7 +4303,7 @@ def draw_camera_grid(img: np.ndarray, cameras):
             img[feed_y1:feed_y2, feed_x1:feed_x2] = tile_full
         else:
             tile_full, new_dets = _aspect_crop_to_fill(feed, dets, fw_w, fw_h)
-            _draw_detection_overlays(tile_full, new_dets, fw_w, fw_h)
+            _draw_detection_overlays(tile_full, new_dets, fw_w, fw_h, cs=cs)
 
             # Animated scanning reticle on active/selected cam
             if cs.online and (is_large or is_sel):

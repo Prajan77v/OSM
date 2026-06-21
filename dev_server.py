@@ -23,6 +23,18 @@ class MockCamera:
         self.frame_lock   = threading.Lock()
         self.uptime_str   = "00:15:32"
         self.threat_level = "GREEN"
+        
+        # Initialize mock HAAE engine
+        from haae_engine import HumanActivityExpressionEngine
+        self.haae = HumanActivityExpressionEngine()
+        if online and cam_id == 0:
+            self.latest_dets = [{"label": "person", "pid": "P1"}]
+            rec = self.haae.get("P1")
+            rec.emotion = "Happy"
+            rec.emotion_score = 0.92
+            rec.activity_score = 0.65
+            rec.activity_label = "ACTIVE"
+            rec.attention_level = "HIGH"
 
 cameras = [
     MockCamera(0, "LOCAL CAM",      "Main Entrance Sector", True),

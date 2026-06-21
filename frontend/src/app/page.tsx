@@ -23,6 +23,19 @@ interface CameraInfo {
   persons: number; detections: number; threat_level: string; uptime: string;
   active_subjects?: any[]; detections_list?: any[];
 }
+interface HAEAPerson {
+  pid: string;
+  name: string;
+  camera: string;
+  emotion: string;
+  emotion_score: number;
+  activity_label: string;
+  activity_score: number;
+  attention: string;
+  duration_secs: number;
+  duration_str: string;
+}
+
 interface Telemetry {
   cpu: number; ram: number; disk: number; net_kb: number;
   gpu: number; gpu_name: string; cuda: boolean; hw_profile: string;
@@ -55,6 +68,7 @@ const NAV = [
   { id: "overview",    icon: LayoutDashboard, label: "OVERVIEW" },
   { id: "cameras",     icon: Video,           label: "CAMERAS" },
   { id: "detection",   icon: Crosshair,       label: "DETECTION" },
+  { id: "activity",    icon: Activity,        label: "ACTIVITY INTEL" },
   { id: "tactical",    icon: Radar,           label: "TACTICAL" },
   { id: "analytics",   icon: BarChart3,       label: "ANALYTICS" },
   { id: "events",      icon: AlertTriangle,   label: "EVENTS" },
@@ -68,6 +82,7 @@ const EVENT_COLORS: Record<string, string> = {
   PERSON_LEFT: "#B8B8B8", INTRUDER: "#FFD700",
   OBJ_ADDED: "#00E5FF", OBJ_REMOVED: "#00FFA3",
   ZONE_INTRUSION: "#D4AF37", BEHAVIOR: "#FFD700",
+  EXPRESSION: "#FF8C00", RUNNING: "#FF6B35",
   SYSTEM_START: "#B8B8B8", BASELINE: "#B8B8B8",
 };
 
@@ -386,6 +401,7 @@ export default function Dashboard() {
   const [telemetry, setTelemetry] = useState<Telemetry | null>(null);
   const [events, setEvents] = useState<Event[]>([]);
   const [summary, setSummary] = useState<Summary | null>(null);
+  const [activityData, setActivityData] = useState<HAEAPerson[]>([]);
   const [time, setTime] = useState(new Date());
 
   // Dynamic Sparkline state
@@ -591,6 +607,7 @@ export default function Dashboard() {
         safeFetch(`${API}/api/events`),
         safeFetch(`${API}/api/summary`),
         safeFetch(`${API}/api/faces`),
+        safeFetch(`${API}/api/activity`),
       ]);
 
       const camRes = results[0].status === 'fulfilled' ? results[0].value : null;
@@ -598,6 +615,7 @@ export default function Dashboard() {
       const evtRes = results[2].status === 'fulfilled' ? results[2].value : null;
       const sumRes = results[3].status === 'fulfilled' ? results[3].value : null;
       const facRes = results[4].status === 'fulfilled' ? results[4].value : null;
+      const actRes = results[5].status === 'fulfilled' ? results[5].value : null;
 
       if (camRes) {
         setCameras(camRes);
@@ -650,6 +668,10 @@ export default function Dashboard() {
 
       if (facRes && Array.isArray(facRes) && facRes.length > 0) {
         setKnownUsers(facRes);
+      }
+
+      if (actRes && Array.isArray(actRes.persons)) {
+        setActivityData(actRes.persons);
       }
     } catch (e: any) {
       if (e.name === 'AbortError') {
@@ -1754,6 +1776,156 @@ export default function Dashboard() {
                     </div>
                   </div>
                 </div>
+              </motion.div>
+            )}
+
+            {/* ACTIVITY INTELLIGENCE PANEL — HAAE Module */}
+            {activeNav === "activity" && (
+              <motion.div
+                initial={{ opacity: 0, scale: 0.98 }}
+                animate={{ opacity: 1, scale: 1 }}
+                className="glass-premium flex-1 p-6 flex flex-col min-h-0 h-full overflow-hidden"
+              >
+                {/* Header */}
+                <div className="flex items-center justify-between border-b border-white/5 pb-4 mb-5 flex-shrink-0">
+                  <div className="flex items-center gap-3">
+                    <Activity className="text-gold-accent animate-pulse" size={20} />
+                    <h2 className="font-orbitron text-base font-black text-gold-accent tracking-widest uppercase">
+                      ACTIVITY INTELLIGENCE ENGINE
+                    </h2>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className="font-orbitron text-[10px] font-bold text-sec bg-white/5 px-3 py-1 rounded tracking-widest">
+                      {activityData.length} SUBJECT{activityData.length !== 1 ? "S" : ""} TRACKED
+                    </span>
+                    <span className="font-orbitron text-[10px] font-bold text-green-oms bg-green-oms/10 border border-green-oms/20 px-3 py-1 rounded tracking-widest animate-pulse">
+                      LIVE
+                    </span>
+                  </div>
+                </div>
+
+                {/* Persons Grid */}
+                {activityData.length === 0 ? (
+                  <div className="flex-1 flex flex-col items-center justify-center gap-4 text-sec">
+                    <Activity size={36} className="text-gold-dim/30 animate-pulse" />
+                    <span className="font-orbitron text-[10px] tracking-widest">NO SUBJECTS CURRENTLY IN FRAME</span>
+                    <span className="text-[9px] text-sec/60">Activity analysis activates when persons are detected</span>
+                  </div>
+                ) : (
+                  <div className="flex-1 overflow-y-auto pr-1 grid grid-cols-1 gap-4 content-start">
+                    {activityData.map((person) => {
+                      const actScore = Math.round(person.activity_score * 100);
+                      const emoScore = Math.round(person.emotion_score * 100);
+                      const isRunning = person.activity_label === "RUNNING";
+                      const isIdle    = person.activity_label === "IDLE";
+                      const actColor  = isRunning ? "text-orange-400" : isIdle ? "text-cyan-400" : "text-gold-accent";
+                      const actBg     = isRunning ? "bg-orange-500" : isIdle ? "bg-cyan-500" : "bg-gold-accent";
+                      const attColor  = person.attention === "HIGH" ? "text-green-oms" : person.attention === "LOW" ? "text-red-400" : "text-amber-400";
+
+                      const emotionEmoji: Record<string, string> = {
+                        happy: "😊", neutral: "😐", sad: "😢", angry: "😠",
+                        surprise: "😲", fear: "😨", disgusted: "🤢", disgust: "🤢"
+                      };
+                      const emoEmoji = emotionEmoji[person.emotion.toLowerCase()] || "🤔";
+
+                      return (
+                        <div
+                          key={person.pid}
+                          className="glass-premium bg-black/30 p-4 flex flex-col gap-3 border border-white/5 hover:border-gold-dim/20 transition-all"
+                          style={{ borderRadius: 14 }}
+                        >
+                          {/* Row 1: Identity + Camera badge */}
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-3">
+                              <div className="w-10 h-10 rounded-lg bg-black border border-white/10 overflow-hidden flex-shrink-0">
+                                <img
+                                  src={`${process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8000"}/api/crop/${person.pid}`}
+                                  alt={person.name}
+                                  className="w-full h-full object-cover"
+                                  onError={(e) => {
+                                    (e.target as HTMLImageElement).src = `https://api.dicebear.com/7.x/bottts/svg?seed=${person.pid}`;
+                                  }}
+                                />
+                              </div>
+                              <div>
+                                <span className="font-orbitron text-xs font-black text-gold-accent tracking-wider block">{person.name}</span>
+                                <span className="font-mono text-[9px] text-sec">{person.pid} • ⏱ {person.duration_str}</span>
+                              </div>
+                            </div>
+                            <span className="glass-premium px-2 py-1 text-[9px] font-orbitron font-bold text-sec tracking-widest border border-white/5">
+                              📷 {person.camera}
+                            </span>
+                          </div>
+
+                          {/* Row 2: Emotion + Attention */}
+                          <div className="grid grid-cols-2 gap-3">
+                            {/* Emotion */}
+                            <div className="glass-premium bg-black/40 p-3 rounded-xl flex flex-col gap-2">
+                              <span className="font-orbitron text-[8.5px] font-bold text-sec tracking-widest">EXPRESSION</span>
+                              <div className="flex items-center gap-2">
+                                <span className="text-lg">{emoEmoji}</span>
+                                <div className="flex-1">
+                                  <span className="font-orbitron text-[10px] font-black text-gold-accent block">{person.emotion.toUpperCase()}</span>
+                                  <div className="w-full h-1 bg-white/10 rounded-full mt-1">
+                                    <div
+                                      className="h-full bg-gold-accent rounded-full transition-all duration-500"
+                                      style={{ width: `${emoScore}%` }}
+                                    />
+                                  </div>
+                                  <span className="font-mono text-[8px] text-sec mt-0.5 block">{emoScore}% confidence</span>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Attention */}
+                            <div className="glass-premium bg-black/40 p-3 rounded-xl flex flex-col gap-2">
+                              <span className="font-orbitron text-[8.5px] font-bold text-sec tracking-widest">ATTENTION LEVEL</span>
+                              <div className="flex items-center gap-2 mt-1">
+                                <Eye size={18} className={attColor} />
+                                <span className={`font-orbitron text-xs font-black tracking-wider ${attColor}`}>
+                                  {person.attention}
+                                </span>
+                              </div>
+                              <div className="flex gap-1 mt-1">
+                                {["HIGH", "MEDIUM", "LOW"].map((lvl) => (
+                                  <div
+                                    key={lvl}
+                                    className={`flex-1 h-1.5 rounded-full transition-all ${
+                                      person.attention === lvl
+                                        ? lvl === "HIGH" ? "bg-green-oms" : lvl === "MEDIUM" ? "bg-amber-400" : "bg-red-500"
+                                        : "bg-white/10"
+                                    }`}
+                                  />
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Row 3: Activity Score Bar */}
+                          <div className="glass-premium bg-black/40 p-3 rounded-xl">
+                            <div className="flex items-center justify-between mb-2">
+                              <span className="font-orbitron text-[8.5px] font-bold text-sec tracking-widest">ACTIVITY STATE</span>
+                              <span className={`font-orbitron text-[10px] font-black tracking-wider ${actColor}`}>
+                                {isRunning ? "🏃" : isIdle ? "🧍" : "⚡"} {person.activity_label}
+                              </span>
+                            </div>
+                            <div className="w-full h-2 bg-white/10 rounded-full overflow-hidden">
+                              <div
+                                className={`h-full rounded-full transition-all duration-700 ${actBg}`}
+                                style={{ width: `${actScore}%` }}
+                              />
+                            </div>
+                            <div className="flex justify-between mt-1">
+                              <span className="font-mono text-[8px] text-sec">IDLE</span>
+                              <span className={`font-mono text-[8px] font-bold ${actColor}`}>{actScore}%</span>
+                              <span className="font-mono text-[8px] text-sec">RUNNING</span>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </motion.div>
             )}
 
