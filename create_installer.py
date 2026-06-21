@@ -215,6 +215,7 @@ class OMSInstaller:
         # Locate files in bundle
         base_path = Path(getattr(sys, '_MEIPASS', Path(__file__).parent.resolve()))
         main_src = base_path / "main.py"
+        haae_src = base_path / "haae_engine.py"
         ws_src = base_path / "web_server.py"
         wi_src = base_path / "web_integration.py"
         req_src = base_path / "requirements.txt"
@@ -225,6 +226,7 @@ class OMSInstaller:
         # Fallback to local files if run directly in dev env
         if not main_src.exists():
             main_src = Path(__file__).parent / "main.py"
+            haae_src = Path(__file__).parent / "haae_engine.py"
             ws_src = Path(__file__).parent / "web_server.py"
             wi_src = Path(__file__).parent / "web_integration.py"
             req_src = Path(__file__).parent / "requirements.txt"
@@ -238,6 +240,8 @@ class OMSInstaller:
         # Copy source files
         self.update_progress("Extracting source files...", 15)
         shutil.copy2(main_src, target / "main.py")
+        if haae_src.exists():
+            shutil.copy2(haae_src, target / "haae_engine.py")
         shutil.copy2(ws_src, target / "web_server.py")
         shutil.copy2(wi_src, target / "web_integration.py")
         shutil.copy2(req_src, target / "requirements.txt")

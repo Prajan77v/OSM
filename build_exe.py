@@ -29,7 +29,7 @@ BUILD = ROOT / "build"
 def run(cmd, cwd=None, check=True):
     """Run a shell command and stream output."""
     print("\n>>> " + " ".join(str(c) for c in cmd))
-    result = subprocess.run(cmd, cwd=str(cwd or ROOT), check=check, env=os.environ)
+    result = subprocess.run(cmd, cwd=str(cwd or ROOT), check=check, env=os.environ, shell=(os.name == 'nt'))
     return result
 
 
@@ -202,6 +202,7 @@ try:
         "--noconsole",
         "--name=OMS_Sentinel_Installer",
         "--add-data=main.py;.",
+        "--add-data=haae_engine.py;.",
         "--add-data=web_server.py;.",
         "--add-data=web_integration.py;.",
         "--add-data=requirements.txt;.",
