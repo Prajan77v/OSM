@@ -1,5 +1,5 @@
 operator:
-  username: TestOperator
+  username: Prajan
 detection:
   confidence: 0.5
   use_cuda: false
@@ -13,7 +13,7 @@ face_recognition:
   detect_new_ids: true
   match_threshold: 0.4
 threat:
-  tg_token: new_token
+  tg_token: '********oken'
   tg_chat_id: '99999'
 display:
   particle_size: 2.5
