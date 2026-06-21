@@ -861,7 +861,7 @@ def _format_log_cols(ev, person_name, obj, detail):
     elif ev == "BEHAVIOR":
         event_col = "BEHAVIOR"
         id_col = person_name if person_name else "—"
-        name_obj_col = obj if obj else "—"
+        name_obj_col = "ACTIVE" if obj in ("PACING", "RUNNING", "ACTIVE") else "—"
         details_col = detail
         
     return event_col, id_col, name_obj_col, details_col
