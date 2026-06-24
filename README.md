@@ -52,30 +52,7 @@ Standard video surveillance setups suffer from critical vulnerabilities that pla
 
 ---
 
-## 🚀 CORE CAPABILITIES // KEY FEATURES
-
-OMS is organized into four main functional matrices:
-
-### 📹 Live Feed Ingestion
-* **Multi-Source Pipeline:** Seamlessly hook into standard USB Webcams, Local Video Directories, or Network CCTV feeds via RTSP / IP streams.
-* **Concurrent Decoders:** High-performance, multithreaded frame capturing via OpenCV to maintain 24/7 stream consistency.
-
-### 🧠 Vision Intelligence
-* **Real-Time Classification:** YOLO-driven object detection classifying humans, luggage, tools, vehicles, and custom classes.
-* **Face Verification:** Integrated deep face model mapping facial crops to a 128-dimensional vector database for instant identification of authorized personnel.
-* **Dynamic Centroid Tracker:** Assigns persistent IDs to individuals, tracking motion vectors across frame successions to eliminate duplicate counts.
-
-### 📊 Event Registry
-* **Automated Log Entries:** Generates instant records detailing class labels, timestamps, confidence parameters, and tracking IDs.
-* **Query-Ready Schema:** Organized logs structured for rapid filtering, export, or audit-trail verification.
-
-### 🖥️ Operator Command Console
-* **HUD PyQt6 UI:** A high-speed, hardware-accelerated desktop dashboard rendering real-time bounding boxes and operational tables.
-* **Overlay Overrides:** Toggle camera bounding boxes, tracking trails, and face scan parameters on the fly.
-
----
-
-## ⚡ PIPELINE FLOW // HOW OMS WORKS
+## ⚙️ SYSTEM PIPELINE // HOW OMS WORKS
 
 The life of a video frame inside the OMS engine moves through the following stages:
 
@@ -95,24 +72,45 @@ The life of a video frame inside the OMS engine moves through the following stag
 [ Face Rec / Track ] ─────► Extracts Embedding Vector & Associates Tracking ID
        │
        ▼
-[ Event Logging ] ────────► Commits Timestamped Alert Metadata to Disk Registry
+[ Event Logging ] ────────► Commits Alert Metadata to Disk Database
        │
        ▼
 [ Live UI Dashboard ] ────► Updates PyQt6 Screen Buffer and Active Log Grid
 ```
 
+### Process Step Details
+1. **Ingestion & Capture:** The system uses a multi-threaded OpenCV buffer stream to decode input sources (USB cameras, RTSP streams, or local files) asynchronously, preventing frame-drop and latency lag.
+2. **Frame Preprocessing:** Video frames are resized and converted to standard input matrices matching the YOLO neural network layers.
+3. **Object Detection:** The YOLO (You Only Look Once) engine executes forward inference to locate boundary coordinates and confidence scores for targets (e.g., people, backpacks, objects).
+4. **Face Identification & Tracking:**
+   * **Face Match:** Detected facial crops are translated into 128-dimensional embedding vectors using deep networks and compared against registered templates.
+   * **Centroid Tracking:** Calculates Euclidean distance shifts of target centroids across sequential frames to assign persistent IDs and trace trajectories.
+5. **Log Persistence:** Significant event transitions are logged asynchronously to local CSV/SQLite registries, recording timestamps, IDs, and classifications.
+6. **Dashboard Output:** Bounding boxes, logs, and metadata parameters are overlaid onto the PyQt6 display buffer for the operator terminal.
+
 ---
 
-## 🏗️ ARCHITECTURAL SCHEMATIC // SYSTEM ARCHITECTURE
+## 🚀 CORE CAPABILITIES // KEY FEATURES
 
-OMS uses a clean, decoupled layer architecture to separate UI threads, heavy AI inference tasks, and system logs:
+* **Multi-Source compatibility:** Supports direct integration with USB Webcams, Local Video Directories, and RTSP / IP CCTV streams.
+* **Real-time Detection:** High-speed, hardware-accelerated YOLO classification model.
+* **Face Verification:** Integrated facial embedding database to identify registered personnel vs unknown visitors.
+* **Continuous Trajectory Tracking:** Track coordinate histories across frames to avoid double-logging active subjects.
+* **Automated Log Registers:** Logs timestamps, tracking IDs, labels, and match confidence parameters directly.
+* **PyQt6 HUD Console:** Elegant, responsive control dashboard with switches to toggle frame overlays (boundaries, trails, face marks).
+
+---
+
+## 🏗️ SYSTEM ARCHITECTURE // SCHEMATIC
+
+OMS uses a clean, decoupled layer architecture:
 
 1. **Input Interface Layer:** Decodes video sources into raw numpy frame matrices.
-2. **Preprocessing Pipeline Layer:** Sanitizes and resizes frames to match YOLO neural input shapes without aspect distortion.
-3. **Core Deep Learning Layer:** Executes parallel inference threads. Passes bounding frames to YOLO and facial crops to embedding models.
-4. **Context Tracking Layer:** Evaluates frame-to-frame coordinate distances to persist tracking IDs.
-5. **Database Registry Layer:** Handshakes log threads to dump metadata into CSV or database records without blocking frames.
-6. **Presentation HUD Layer:** A PyQt6-based dashboard rendering the visual bounding box overlays and updating log lists.
+2. **Preprocessing Layer:** Sanitizes and scales frames to match neural input shapes.
+3. **Core Deep Learning Layer:** Executes parallel inference threads for YOLO detection and facial embeddings.
+4. **Context Tracking Layer:** Evaluates centroid shifts to persist target tracking IDs.
+5. **Database Registry Layer:** Asynchronously logs alert updates to files.
+6. **Presentation HUD Layer:** A PyQt6-based dashboard rendering the visual bounding box overlays and logs.
 
 ---
 
@@ -255,11 +253,27 @@ python app/main.py
 
 ## 🔮 UPCOMING TRANSMISSIONS // FUTURE ROADMAP
 
-- [ ] **Anomaly Detection Layer:** Automatically trigger warning overlays for loitering, falls, or physical violence.
-- [ ] **Instant Security Alerts:** Connect Telegram bot integrations to forward snapshots of intruders directly to mobile devices.
-- [ ] **Multi-Stream Node Layout:** Scale the GUI layout to monitor 4 distinct camera RTSP streams simultaneously.
-- [ ] **Cloud Logs Syncer:** Export SQLite surveillance database records directly to remote Web panels.
-- [ ] **Hardware Acceleration:** Complete integration of TensorRT/ONNX Runtime for faster edge device processing.
+* **Behavior Anomaly Flags:** Automatically trigger warning overlays for loitering, falls, or physical violence.
+* **Instant Security Alerts:** Connect Telegram bot integrations to forward snapshots of intruders directly to mobile devices.
+* **Multi-Stream Node Layout:** Scale the GUI layout to monitor 4 distinct camera RTSP streams simultaneously.
+* **Cloud Logs Syncer:** Export SQLite surveillance database records directly to remote Web panels.
+* **Hardware Acceleration:** Complete integration of TensorRT/ONNX Runtime for faster edge device processing.
+
+---
+
+## 📡 SYSTEM VIVA FAQ // Troubleshooting
+
+#### Q1: What is OMS, and why is it useful?
+* **A:** OMS is an AI-powered surveillance program. It overlays intelligent computer vision on top of normal webcam or IP camera streams to automate security logging, reducing manual monitoring fatigue.
+
+#### Q2: Why did you choose YOLO for object detection?
+* **A:** YOLO (You Only Look Once) provides the optimal speed-to-accuracy balance for real-time video processing (20+ FPS) on standard edge devices.
+
+#### Q3: How is tracking different from detection?
+* **A:** Detection identifies objects in a single frame. Tracking traces target trajectories across sequential frames and assigns unique IDs (e.g. `Person #05`) to prevent duplicate logs.
+
+#### Q4: How is face recognition processed?
+* **A:** Facial zones are localized, cropped, and passed to a deep network (such as FaceNet) to generate 128-D vector embeddings, which are compared against stored databases.
 
 ---
 
