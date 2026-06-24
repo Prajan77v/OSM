@@ -1,0 +1,486 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OMS - Object Monitoring System Presentation</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Orbitron:wght@500;700;900&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- Cyberpunk Background Effects -->
+  <div class="grid-background"></div>
+  <div class="scanlines"></div>
+  <div class="laser-line"></div>
+
+  <!-- Main Presentation Container -->
+  <div class="presentation-container">
+    <!-- Top HUD Bar -->
+    <header class="hud-header">
+      <div class="hud-logo">
+        <span class="pulse-dot"></span>
+        OMS // AI SURVEILLANCE
+      </div>
+      <div class="hud-status">SYSTEM_STATUS: <span class="status-active">ACTIVE</span></div>
+      <div class="hud-time" id="clock">00:00:00</div>
+    </header>
+
+    <!-- Slides Wrapper -->
+    <main class="slides-wrapper">
+      
+      <!-- SLIDE 1: Title & Overview -->
+      <section class="slide active" id="slide-1" data-notes="Good morning/afternoon teachers and examiners. I am presenting my project, OMS - Object Monitoring System. OMS is designed to modernize existing CCTV setups by adding real-time computer vision capabilities, including object detection, tracking, and facial recognition, all consolidated into a clean desktop dashboard.">
+        <div class="slide-content title-slide-layout">
+          <div class="title-hud-box">
+            <div class="corner-bracket top-left"></div>
+            <div class="corner-bracket top-right"></div>
+            <div class="corner-bracket bottom-left"></div>
+            <div class="corner-bracket bottom-right"></div>
+            
+            <div class="hud-badge">PROJECT PRESENTATION</div>
+            <h1 class="glow-text">OMS</h1>
+            <h2 class="sub-glow-text">Object Monitoring System</h2>
+            <p class="tagline">AI-Powered Smart Surveillance & Real-Time Monitoring Platform</p>
+          </div>
+
+          <div class="title-details-grid">
+            <div class="info-card">
+              <div class="info-label">DEVELOPER</div>
+              <div class="info-value">Student Name</div>
+              <div class="info-label">DEPARTMENT</div>
+              <div class="info-value">Computer Science & Engineering</div>
+            </div>
+            
+            <div class="info-card">
+              <div class="info-label">ACADEMIC YEAR</div>
+              <div class="info-value">2025 - 2026</div>
+              <div class="info-label">REPOSITORY</div>
+              <div class="info-value text-cyan">github.com/yourprofile/oms</div>
+            </div>
+          </div>
+
+          <div class="overview-box">
+            <span class="label-accent">[OVERVIEW]</span>
+            <p>OMS is an AI-based surveillance system that monitors live camera feeds, detects people and objects in real time, supports tracking and face recognition, and provides a smart dashboard for monitoring.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- SLIDE 2: Problem Statement -->
+      <section class="slide" id="slide-2" data-notes="Standard CCTV networks only record footage and require humans to watch them constantly. Humans get tired and miss events. Our system, OMS, addresses this gap by adding automated, continuous analysis to detect, track, and log events immediately.">
+        <div class="slide-content">
+          <h2 class="slide-title"><span class="title-number">01</span> PROBLEM STATEMENT</h2>
+          
+          <div class="problem-grid">
+            <div class="problem-card border-red">
+              <div class="card-icon text-red">⚠️</div>
+              <h3>Manual Fatigue</h3>
+              <p>Traditional CCTV systems require continuous, passive human monitoring, leading to exhaustion.</p>
+            </div>
+            <div class="problem-card border-red">
+              <div class="card-icon text-red">📉</div>
+              <h3>Human Error</h3>
+              <p>Operators frequently miss critical, sudden, or fast-moving security events.</p>
+            </div>
+            <div class="problem-card border-red">
+              <div class="card-icon text-red">🖥️</div>
+              <h3>Multi-Feed Overhead</h3>
+              <p>Actively monitoring multiple feeds simultaneously is highly inefficient and expensive.</p>
+            </div>
+            <div class="problem-card border-red">
+              <div class="card-icon text-red">🔒</div>
+              <h3>No Scene Analysis</h3>
+              <p>Standard surveillance networks cannot automatically classify objects or detect intrusions.</p>
+            </div>
+          </div>
+
+          <div class="vs-container">
+            <div class="vs-column red-bg">
+              <strong>TRADITIONAL CCTV</strong>
+              <span>Passive Recording & Manual Review Only</span>
+            </div>
+            <div class="vs-divider">VS</div>
+            <div class="vs-column cyan-bg">
+              <strong>OMS SMART SURVEILLANCE</strong>
+              <span>Automated Real-Time AI Scene Analysis</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- SLIDE 3: Objectives of OMS -->
+      <section class="slide" id="slide-3" data-notes="Our primary goals are to automate detection, support facial recognition, track movements, and log everything in a central dashboard. This eliminates the need for manual monitoring and provides structured analytical data.">
+        <div class="slide-content">
+          <h2 class="slide-title"><span class="title-number">02</span> OBJECTIVES OF OMS</h2>
+          
+          <div class="objectives-layout">
+            <div class="objectives-list">
+              <div class="objective-item">
+                <div class="obj-dot"></div>
+                <div class="obj-text">
+                  <strong>Real-time Surveillance</strong>
+                  <p>Process and analyze video frames from live sources on-the-fly.</p>
+                </div>
+              </div>
+              <div class="objective-item">
+                <div class="obj-dot"></div>
+                <div class="obj-text">
+                  <strong>Object Detection (YOLO)</strong>
+                  <p>Detect and classify multiple classes (people, bags, vehicles) instantly.</p>
+                </div>
+              </div>
+              <div class="objective-item">
+                <div class="obj-dot"></div>
+                <div class="obj-text">
+                  <strong>Facial Recognition</strong>
+                  <p>Identify known individuals for access logs and security verification.</p>
+                </div>
+              </div>
+              <div class="objective-item">
+                <div class="obj-dot"></div>
+                <div class="obj-text">
+                  <strong>Movement Tracking</strong>
+                  <p>Assign unique IDs and track coordinate trajectories across frames.</p>
+                </div>
+              </div>
+              <div class="objective-item">
+                <div class="obj-dot"></div>
+                <div class="obj-text">
+                  <strong>Automated Logging</strong>
+                  <p>Log timestamps, object labels, and confidence metrics automatically.</p>
+                </div>
+              </div>
+              <div class="objective-item">
+                <div class="obj-dot"></div>
+                <div class="obj-text">
+                  <strong>Live UI Dashboard</strong>
+                  <p>Provide a clean desktop console for operators to monitor detections and logs.</p>
+                </div>
+              </div>
+            </div>
+
+            <div class="objectives-visual">
+              <div class="hud-radar">
+                <div class="radar-sweep"></div>
+                <div class="radar-blip blip-1"></div>
+                <div class="radar-blip blip-2"></div>
+                <div class="radar-circle"></div>
+                <div class="radar-circle-inner"></div>
+                <span class="radar-label">TARGETS TRACKED: OK</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- SLIDE 4: System Architecture -->
+      <section class="slide" id="slide-4" data-notes="Here is the architectural overview. We ingest frames via OpenCV, pass them to YOLO for object detection, apply tracking algorithms and facial recognition, and route the outcomes to both the log files and our desktop dashboard.">
+        <div class="slide-content">
+          <h2 class="slide-title"><span class="title-number">03</span> SYSTEM ARCHITECTURE</h2>
+          
+          <div class="architecture-grid">
+            <div class="arch-card">
+              <div class="arch-badge">INPUT</div>
+              <h4>Camera Stream</h4>
+              <p>Webcam / CCTV / IP Feed</p>
+            </div>
+            
+            <div class="arch-arrow">➔</div>
+
+            <div class="arch-card">
+              <div class="arch-badge">PRE-PROCESS</div>
+              <h4>Frame Capture</h4>
+              <p>OpenCV Reading & Resize</p>
+            </div>
+
+            <div class="arch-arrow">➔</div>
+
+            <div class="arch-card glow-cyan-border">
+              <div class="arch-badge badge-cyan">AI ENGINE</div>
+              <h4>YOLO Detector</h4>
+              <p>Object Localization</p>
+            </div>
+
+            <div class="arch-arrow">➔</div>
+
+            <div class="arch-card glow-magenta-border">
+              <div class="arch-badge badge-magenta">ANALYSIS</div>
+              <h4>Tracking & Face Rec</h4>
+              <p>Embedding & Trajectories</p>
+            </div>
+
+            <div class="arch-arrow">➔</div>
+
+            <div class="arch-card">
+              <div class="arch-badge">STORAGE</div>
+              <h4>Event Logging</h4>
+              <p>SQLite / CSV Outputs</p>
+            </div>
+
+            <div class="arch-arrow">➔</div>
+
+            <div class="arch-card glow-gold-border">
+              <div class="arch-badge badge-gold">DISPLAY</div>
+              <h4>OMS Dashboard</h4>
+              <p>PyQt6 Live Console</p>
+            </div>
+          </div>
+
+          <div class="architecture-flow-desc">
+            <span class="label-accent">[PIPELINE FLOW]</span>
+            <p>OMS receives video from a camera source, processes each frame, detects people/objects, performs recognition and tracking where needed, logs important events, and displays the results in the dashboard.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- SLIDE 5: Working & Main Modules -->
+      <section class="slide" id="slide-5" data-notes="OMS is highly modular. The system is split into input, detection, facial recognition, tracking, logging, and UI display modules. This modular structure makes it easy to upgrade individual algorithms, like moving from YOLOv8 to future versions.">
+        <div class="slide-content">
+          <h2 class="slide-title"><span class="title-number">04</span> WORKING & MAIN MODULES</h2>
+          
+          <div class="modules-split">
+            <!-- Left Side: Modules list -->
+            <div class="modules-list-container">
+              <h3 class="split-section-title">Core Modules</h3>
+              <div class="module-box-card">
+                <strong>1. Camera Input Module</strong>
+                <p>Decodes RTSP / USB video streams concurrently using OpenCV thread pool.</p>
+              </div>
+              <div class="module-box-card">
+                <strong>2. Object Detection Module</strong>
+                <p>Passes images to YOLO for bounding box coordinates and object confidence.</p>
+              </div>
+              <div class="module-box-card">
+                <strong>3. Face Recognition Module</strong>
+                <p>Matches localized facial embeddings with registered models.</p>
+              </div>
+              <div class="module-box-card">
+                <strong>4. Tracking & Logging Modules</strong>
+                <p>Tracks movement trajectories and logs metadata to files.</p>
+              </div>
+            </div>
+
+            <!-- Right Side: Workflow steps -->
+            <div class="workflow-steps-container">
+              <h3 class="split-section-title">Active Workflow Loop</h3>
+              <ul class="workflow-bullets">
+                <li>
+                  <span class="step-num">01</span>
+                  <div>
+                    <strong>Stream Capture:</strong>
+                    <p>Continuously fetch raw video frames.</p>
+                  </div>
+                </li>
+                <li>
+                  <span class="step-num">02</span>
+                  <div>
+                    <strong>AI Analysis:</strong>
+                    <p>Identify object boundaries and faces.</p>
+                  </div>
+                </li>
+                <li>
+                  <span class="step-num">03</span>
+                  <div>
+                    <strong>Track Target:</strong>
+                    <p>Assign IDs and match faces across frames.</p>
+                  </div>
+                </li>
+                <li>
+                  <span class="step-num">04</span>
+                  <div>
+                    <strong>Log Event:</strong>
+                    <p>Persist records if status changes.</p>
+                  </div>
+                </li>
+                <li>
+                  <span class="step-num">05</span>
+                  <div>
+                    <strong>Update UI:</strong>
+                    <p>Refresh dashboard output frames instantly.</p>
+                  </div>
+                </li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- SLIDE 6: Key Features & Technologies -->
+      <section class="slide" id="slide-6" data-notes="This slide covers our tech stack. We chose Python for its rich AI ecosystem. OpenCV processes video frames, YOLO handles the object detection, NumPy accelerates frame matrices, and PyQt6 provides a robust, fast-rendering desktop interface.">
+        <div class="slide-content">
+          <h2 class="slide-title"><span class="title-number">05</span> FEATURES & TECHNOLOGIES</h2>
+          
+          <div class="tech-split">
+            <!-- Features list -->
+            <div class="tech-features">
+              <h3 class="split-section-title">Key Features</h3>
+              <ul class="cyber-bullets">
+                <li>Multi-source processing (Webcam, IP CCTV streams)</li>
+                <li>Real-time object categorization (YOLO framework)</li>
+                <li>Face verification with custom embedding comparison</li>
+                <li>Spatial motion tracking with duplicate event filtering</li>
+                <li>Automated event logging with detailed CSV exports</li>
+                <li>High performance GUI responsive desktop console</li>
+              </ul>
+            </div>
+
+            <!-- Technologies table -->
+            <div class="tech-table-container">
+              <h3 class="split-section-title">Technology Stack</h3>
+              <table class="cyber-table">
+                <thead>
+                  <tr>
+                    <th>Technology</th>
+                    <th>Purpose / Usage</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td><strong>Python</strong></td>
+                    <td>Core system programming</td>
+                  </tr>
+                  <tr>
+                    <td><strong>OpenCV</strong></td>
+                    <td>Frame capture & image preprocessing</td>
+                  </tr>
+                  <tr>
+                    <td><strong>YOLO</strong></td>
+                    <td>Deep learning object detection</td>
+                  </tr>
+                  <tr>
+                    <td><strong>PyQt6</strong></td>
+                    <td>Desktop UI Dashboard console</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Face Recognition</strong></td>
+                    <td>Identity detection & matching</td>
+                  </tr>
+                  <tr>
+                    <td><strong>NumPy</strong></td>
+                    <td>High speed image matrix operations</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- SLIDE 7: Applications & Future Scope -->
+      <section class="slide" id="slide-7" data-notes="OMS is highly adaptable. It can be deployed in colleges, offices, and restricted zones. In the future, we plan to implement behavior analysis for anomaly detection and configure mobile integrations for instant security alerts.">
+        <div class="slide-content">
+          <h2 class="slide-title"><span class="title-number">06</span> APPLICATIONS & FUTURE SCOPE</h2>
+          
+          <!-- Applications Cards -->
+          <div class="apps-section">
+            <h3 class="split-section-title">Target Environments</h3>
+            <div class="apps-grid">
+              <div class="app-card-item">
+                <span class="app-tag">CS LABS</span>
+                <p>Monitor high-value hardware access logs automatically.</p>
+              </div>
+              <div class="app-card-item">
+                <span class="app-tag">COLLEGE CAMPUS</span>
+                <p>Perimeter surveillance and security monitoring.</p>
+              </div>
+              <div class="app-card-item">
+                <span class="app-tag">OFFICES</span>
+                <p>Track employee entry times using facial recognition.</p>
+              </div>
+              <div class="app-card-item">
+                <span class="app-tag">RESTRICTED AREAS</span>
+                <p>Generate instant security alerts during intrusions.</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Future Roadmap -->
+          <div class="roadmap-section">
+            <h3 class="split-section-title">Future Expansion Roadmap</h3>
+            <div class="roadmap-timeline">
+              <div class="roadmap-point">
+                <div class="point-dot"></div>
+                <strong>Anomaly Detection</strong>
+                <p>Detect loitering & fights</p>
+              </div>
+              <div class="roadmap-point">
+                <div class="point-dot"></div>
+                <strong>Telegram Alerts</strong>
+                <p>Instant mobile screenshots</p>
+              </div>
+              <div class="roadmap-point">
+                <div class="point-dot"></div>
+                <strong>Multi-Cam Node</strong>
+                <p>Central server distribution</p>
+              </div>
+              <div class="roadmap-point">
+                <div class="point-dot"></div>
+                <strong>Cloud Analytics</strong>
+                <p>Browser logs dashboard</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- SLIDE 8: Conclusion & Github Links -->
+      <section class="slide" id="slide-8" data-notes="To conclude, OMS successfully modernizes traditional CCTV systems with cost-effective AI. You can review the complete code, module implementations, and installation guides on our GitHub repository. Thank you, and I am open to any questions.">
+        <div class="slide-content conclusion-slide-layout">
+          <div class="conclusion-box">
+            <div class="corner-bracket top-left"></div>
+            <div class="corner-bracket top-right"></div>
+            <div class="corner-bracket bottom-left"></div>
+            <div class="corner-bracket bottom-right"></div>
+            
+            <h2>SUMMARY & CONCLUSION</h2>
+            <p>OMS is an AI-powered smart surveillance system that improves traditional CCTV monitoring by adding real-time object detection, tracking, recognition, and event logging. It helps reduce manual monitoring effort and provides a more intelligent and efficient security monitoring solution.</p>
+          </div>
+
+          <div class="github-card">
+            <div class="gh-logo-glow">📁</div>
+            <div class="gh-details">
+              <strong>OMS GITHUB REPOSITORY</strong>
+              <p>Contains complete Python modules, PyQt6 setup files, model weights, and quick-start docs.</p>
+              <span class="gh-link">github.com/yourprofile/oms</span>
+            </div>
+          </div>
+
+          <div class="thank-you-container">
+            <h1 class="glow-text thank-you-text">THANK YOU</h1>
+            <p>Q & A SESSION // QUESTIONS WELCOME</p>
+          </div>
+        </div>
+      </section>
+
+    </main>
+
+    <!-- Bottom Controls Bar -->
+    <footer class="hud-footer">
+      <div class="slide-navigation">
+        <button id="prev-btn" class="nav-btn">◀ PREV</button>
+        <span class="slide-counter" id="slide-index">01 / 08</span>
+        <button id="next-btn" class="nav-btn">NEXT ▶</button>
+      </div>
+      <div class="control-actions">
+        <button id="notes-btn" class="hud-action-btn">🗎 SHOW NOTES</button>
+        <button id="fullscreen-btn" class="hud-action-btn">⛶ FULLSCREEN</button>
+      </div>
+    </footer>
+  </div>
+
+  <!-- Presenter Notes Sidebar Panel -->
+  <aside class="presenter-notes-panel" id="notes-panel">
+    <div class="notes-header">
+      <h3>PRESENTER NOTES</h3>
+      <button id="close-notes-btn">✖</button>
+    </div>
+    <div class="notes-body" id="notes-content">
+      Introduce yourself and the project. Briefly explain what OMS is and mention that it is a smart surveillance system using AI.
+    </div>
+  </aside>
+
+  <script src="script.js"></script>
+</body>
+</html>
