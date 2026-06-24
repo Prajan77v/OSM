@@ -25,36 +25,85 @@
 ========================================================================
 ```
 
-**OMS (Object Monitoring System)** is a next-generation, AI-driven surveillance and real-time monitoring console. By integrating advanced deep learning models and high-frequency computer vision pipelines directly with live camera feeds, OMS elevates standard, passive CCTV hardware into an active, intelligent monitoring dashboard.
-
-Whether analyzing RTSP streams, IP cameras, or standard USB webcams, OMS detects subjects, tracks spatial movement, identifies known personnel, logs security events, and presents a responsive HUD-style PyQt6 desktop controller interface.
+**OMS (Object Monitoring System)** is an AI-powered smart surveillance and monitoring platform. By running advanced computer vision models directly on live camera feeds, OMS turns standard, passive security cameras into active, intelligent monitoring stations.
 
 ---
 
-## 👁️ SYSTEM PREVIEW // OVERVIEW
+## 👁️ OMS AT A GLANCE // WHAT IS OMS?
 
-In traditional security environments, human operators are forced to sit through hours of stagnant footage, suffering from cognitive fatigue and missing key security indicators. 
+In simple terms, OMS is a desktop software application that connects to standard video cameras (like webcams or CCTV streams) and uses AI to continuously watch the feed. 
 
-**OMS bridges this gap** by injecting automation and machine intelligence straight into the loop. It continuously watches the scene, identifies target classes, registers known/unknown face profiles, maps movement trajectories, and maintains a structured, queryable event log.
-
----
-
-## ⚠️ THE SURVEILLANCE GAP // PROBLEM STATEMENT
-
-Standard video surveillance setups suffer from critical vulnerabilities that place property and security at risk:
-
-* **The Fatigue Bottleneck:** Guards monitoring multiple feeds miss up to 95% of security incidents after just 20 minutes of continuous viewing.
-* **Passive Post-Event Review:** Traditional systems serve only as digital tape recorders, helping you review *how* a break-in occurred, but doing nothing to *prevent* it in real time.
-* **Stream Overload:** Managing, viewing, and making sense of dozens of cameras simultaneously is beyond human capacity.
-* **Absence of Scene Context:** Traditional CCTV cameras cannot differentiate between a blowing branch, a stray dog, or a trespasser moving through a restricted zone.
-
-**OMS turns surveillance from a passive archive tool into a proactive, intelligent agent.**
+Instead of requiring a human operator to constantly stare at a screen, OMS automatically identifies who and what is in the video, tracks movements, registers names, and logs important events in real time.
 
 ---
 
-## ⚙️ SYSTEM PIPELINE // HOW OMS WORKS
+## 🚀 CORE CAPABILITIES // WHAT OMS CAN DO
 
-The life of a video frame inside the OMS engine moves through the following stages:
+OMS is designed with simple, powerful features to automate surveillance:
+
+* **📹 Live Camera Monitoring**
+  Inject and monitor video feeds in real time from USB webcams, pre-recorded video files, or network IP cameras (using RTSP streams).
+* **🔍 Object & Person Detection**
+  Automatically detect and classify people and objects (such as backpacks, luggage, or tools) in the video frames using the YOLO model.
+* **🆔 Face Recognition**
+  Identify registered faces (such as employees, students, or family members) in the stream and match them against a database.
+* **📍 Movement Tracking**
+  Follow the movement of people and objects across consecutive video frames, assigning a unique tracking ID to each subject to prevent double-counting.
+* **📊 Event Logging**
+  Save important detections, timestamps, tracking IDs, and classifications automatically to a local log database for later review.
+* **🖥️ Live Dashboard Display**
+  View the live camera stream with active bounding boxes, tracking trails, and log tables on a clean, interactive operator dashboard.
+
+---
+
+## 🎮 USING OMS IN PRACTICE // HOW IT IS USED
+
+Operating OMS is simple and does not require technical expertise:
+
+1. **Launch the App:** Open a terminal and start the application console:
+   ```bash
+   python app/main.py
+   ```
+2. **Select Feed Source:** Use the source dropdown menu on the dashboard to select your camera stream (e.g., standard `Webcam`, or input a network `RTSP URL`).
+3. **Initialize Surveillance:** Click the **INITIALIZE SYSTEM** button. The dashboard will load the live camera feed and start overlaying AI bounding boxes in real time.
+4. **Register Face Templates:** Navigate to the database configuration tab to register names and photos for face recognition matching.
+5. **Read Live Logs:** Detections, labels, and timestamps will automatically populate the active event grid on the dashboard for real-time tracking.
+
+---
+
+## 🛰️ TARGET DEPLOYMENTS // WHERE OMS CAN BE APPLIED
+
+* **🏫 Colleges & Campuses:** Automated perimeter surveillance and entrance logs.
+* **🏢 Offices & Workspaces:** Track employee attendance and restricted area entries.
+* **🔬 Computer Labs:** Monitor access logging of high-value equipment racks.
+* **🛒 Retail & Shops:** Track customer entry patterns and count visits.
+* **🔒 Restricted Zones:** Trigger alerts when unauthorized personnel enter specified coordinates.
+* **🏡 Home Surveillance:** Secure entrance monitoring with detailed activity records.
+
+---
+
+## 📸 COMMAND CONTROL // SHOWCASE & DEMOS
+
+<div align="center">
+
+### OMS Dashboard UI Console
+*Desktop dashboard built with PyQt6 displaying video stream overlays, active track cards, and live log tables.*
+![OMS Dashboard UI](assets/dashboard_preview.png)
+
+<br>
+
+### Real-Time Detections Gallery
+*YOLOv8 boundaries identifying person classifications, bags, and tools simultaneously.*
+![Detections Showcase](assets/yolo_detection.gif)
+![Face Verification Scan](assets/facerec_scanner.png)
+
+</div>
+
+---
+
+## ⚡ PIPELINE FLOW // HOW OMS WORKS
+
+Here is how a video frame moves through the system from capture to output:
 
 ```
 [ Camera Feed ] ──────────► Ingests Raw Streams (Webcam, CCTV, RTSP)
@@ -78,39 +127,18 @@ The life of a video frame inside the OMS engine moves through the following stag
 [ Live UI Dashboard ] ────► Updates PyQt6 Screen Buffer and Active Log Grid
 ```
 
-### Process Step Details
-1. **Ingestion & Capture:** The system uses a multi-threaded OpenCV buffer stream to decode input sources (USB cameras, RTSP streams, or local files) asynchronously, preventing frame-drop and latency lag.
-2. **Frame Preprocessing:** Video frames are resized and converted to standard input matrices matching the YOLO neural network layers.
-3. **Object Detection:** The YOLO (You Only Look Once) engine executes forward inference to locate boundary coordinates and confidence scores for targets (e.g., people, backpacks, objects).
-4. **Face Identification & Tracking:**
-   * **Face Match:** Detected facial crops are translated into 128-dimensional embedding vectors using deep networks and compared against registered templates.
-   * **Centroid Tracking:** Calculates Euclidean distance shifts of target centroids across sequential frames to assign persistent IDs and trace trajectories.
-5. **Log Persistence:** Significant event transitions are logged asynchronously to local CSV/SQLite registries, recording timestamps, IDs, and classifications.
-6. **Dashboard Output:** Bounding boxes, logs, and metadata parameters are overlaid onto the PyQt6 display buffer for the operator terminal.
-
 ---
 
-## 🚀 CORE CAPABILITIES // KEY FEATURES
+## 🏗️ ARCHITECTURAL SCHEMATIC // SYSTEM ARCHITECTURE
 
-* **Multi-Source compatibility:** Supports direct integration with USB Webcams, Local Video Directories, and RTSP / IP CCTV streams.
-* **Real-time Detection:** High-speed, hardware-accelerated YOLO classification model.
-* **Face Verification:** Integrated facial embedding database to identify registered personnel vs unknown visitors.
-* **Continuous Trajectory Tracking:** Track coordinate histories across frames to avoid double-logging active subjects.
-* **Automated Log Registers:** Logs timestamps, tracking IDs, labels, and match confidence parameters directly.
-* **PyQt6 HUD Console:** Elegant, responsive control dashboard with switches to toggle frame overlays (boundaries, trails, face marks).
+OMS is structured into separate layers to ensure clean performance and fast processing:
 
----
-
-## 🏗️ SYSTEM ARCHITECTURE // SCHEMATIC
-
-OMS uses a clean, decoupled layer architecture:
-
-1. **Input Interface Layer:** Decodes video sources into raw numpy frame matrices.
-2. **Preprocessing Layer:** Sanitizes and scales frames to match neural input shapes.
-3. **Core Deep Learning Layer:** Executes parallel inference threads for YOLO detection and facial embeddings.
-4. **Context Tracking Layer:** Evaluates centroid shifts to persist target tracking IDs.
+1. **Input Interface Layer:** Decodes video sources into raw frame matrices.
+2. **Preprocessing Layer:** Sanitizes and resizes frames to match model input sizes.
+3. **Core Deep Learning Layer:** Runs parallel inference threads for YOLO detection and facial embeddings.
+4. **Context Tracking Layer:** Tracks coordinate movements across frames to persist tracking IDs.
 5. **Database Registry Layer:** Asynchronously logs alert updates to files.
-6. **Presentation HUD Layer:** A PyQt6-based dashboard rendering the visual bounding box overlays and logs.
+6. **Presentation Layer:** A PyQt6-based dashboard rendering the visual bounding box overlays and logs.
 
 ---
 
@@ -132,12 +160,44 @@ OMS uses a clean, decoupled layer architecture:
 
 | Technology | Purpose / Application |
 | :--- | :--- |
-| **Python** | System core, processing logic, and library gluing |
-| **OpenCV** | Direct video ingestion, RTSP decoding, and drawing overlays |
-| **YOLO Engine** | Deep learning model architecture for object detection |
-| **PyQt6** | Desktop GUI layout, hardware rendering, and state buttons |
-| **NumPy** | High-performance matrix operations on video frame buffers |
+| **Python** | Core programming language |
+| **OpenCV** | Video frame capture, scaling, and overlay drawing |
+| **YOLO Engine** | Deep learning model for multi-object detection |
+| **PyQt6** | Desktop GUI layout, buttons, and dashboard frame rendering |
+| **NumPy** | High-performance matrix calculations on frame buffers |
 | **Face Recognition** | Facial crop embedding generation and similarity math |
+
+---
+
+## ⚙️ INITIALIZATION // INSTALLATION
+
+### 1. Clone the Registry
+```bash
+git clone https://github.com/Prajan77v/OSM.git
+cd osm
+```
+
+### 2. Configure Virtual Environment
+```bash
+# Create environment
+python -m venv venv
+
+# Activate on Windows
+venv\Scripts\activate
+
+# Activate on macOS / Linux
+source venv/bin/activate
+```
+
+### 3. Load Dependencies
+```bash
+pip install -r requirements.txt
+```
+
+### 5. Launch the Application
+```bash
+python app/main.py
+```
 
 ---
 
@@ -182,75 +242,6 @@ oms/
 
 ---
 
-## ⚙️ INITIALIZATION // INSTALLATION
-
-### 1. Clone the Registry
-```bash
-git clone https://github.com/Prajan77v/OSM.git
-cd osm
-```
-
-### 2. Configure Virtual Environment
-```bash
-# Create environment
-python -m venv venv
-
-# Activate on Windows
-venv\Scripts\activate
-
-# Activate on macOS / Linux
-source venv/bin/activate
-```
-
-### 3. Load Dependencies
-```bash
-pip install -r requirements.txt
-```
-
-### 4. Fetch AI Models
-Download the YOLO weights and FaceNet model files, placing them inside the `models/` directory:
-```bash
-# Example command or setup script
-python core/download_models.py
-```
-
----
-
-## 📊 OPERATION GUIDE // USAGE
-
-Launch the monitoring console:
-```bash
-python app/main.py
-```
-
-### Operational Steps:
-1. **Choose Feed Source:** Select `Webcam`, `IP Camera (RTSP URL)`, or a `Local Video file` from the UI source dropdown.
-2. **Start Scanner:** Click **INITIALIZE SYSTEM**. The live camera feed will load with bounding box overlays.
-3. **Face Registration:** Navigate to the database config menu to register names and photos for face recognition.
-4. **Read Logs:** The operational log grid on the right updates instantly as new subjects enter or leave the camera scene.
-5. **System Export:** Event histories can be exported to CSV files inside the `logs/` directory for analytical reports.
-
----
-
-## 📸 COMMAND CONTROL // SHOWCASE & DEMOS
-
-<div align="center">
-
-### OMS Dashboard UI Console
-*Desktop dashboard built with PyQt6 displaying video stream overlays, active track cards, and live log tables.*
-![OMS Dashboard UI](assets/dashboard_preview.png)
-
-<br>
-
-### Real-Time Detections Gallery
-*YOLOv8 boundaries identifying person classifications, bags, and tools simultaneously.*
-![Detections Showcase](assets/yolo_detection.gif)
-![Face Verification Scan](assets/facerec_scanner.png)
-
-</div>
-
----
-
 ## 🔮 UPCOMING TRANSMISSIONS // FUTURE ROADMAP
 
 * **Behavior Anomaly Flags:** Automatically trigger warning overlays for loitering, falls, or physical violence.
@@ -258,22 +249,6 @@ python app/main.py
 * **Multi-Stream Node Layout:** Scale the GUI layout to monitor 4 distinct camera RTSP streams simultaneously.
 * **Cloud Logs Syncer:** Export SQLite surveillance database records directly to remote Web panels.
 * **Hardware Acceleration:** Complete integration of TensorRT/ONNX Runtime for faster edge device processing.
-
----
-
-## 📡 SYSTEM VIVA FAQ // Troubleshooting
-
-#### Q1: What is OMS, and why is it useful?
-* **A:** OMS is an AI-powered surveillance program. It overlays intelligent computer vision on top of normal webcam or IP camera streams to automate security logging, reducing manual monitoring fatigue.
-
-#### Q2: Why did you choose YOLO for object detection?
-* **A:** YOLO (You Only Look Once) provides the optimal speed-to-accuracy balance for real-time video processing (20+ FPS) on standard edge devices.
-
-#### Q3: How is tracking different from detection?
-* **A:** Detection identifies objects in a single frame. Tracking traces target trajectories across sequential frames and assigns unique IDs (e.g. `Person #05`) to prevent duplicate logs.
-
-#### Q4: How is face recognition processed?
-* **A:** Facial zones are localized, cropped, and passed to a deep network (such as FaceNet) to generate 128-D vector embeddings, which are compared against stored databases.
 
 ---
 
