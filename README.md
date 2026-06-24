@@ -94,7 +94,7 @@ Operating OMS is simple and does not require technical expertise:
 
 ### Real-Time Detections Gallery
 *YOLOv8 boundaries identifying person classifications, bags, and tools simultaneously.*
-![Detections Showcase](assets/yolo_detection.gif)
+![Detections Showcase](assets/yolo_detection.png)
 ![Face Verification Scan](assets/facerec_scanner.png)
 
 </div>
