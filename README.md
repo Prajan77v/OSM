@@ -1,325 +1,275 @@
-# 🌌 OMS (Object Monitoring System)
+# 🛰️ OMS — OBJECT MONITORING SYSTEM
+
+### ⚡ AI-Powered Smart Surveillance & Real-Time Monitoring Platform
 
 <div align="center">
 
-<!-- Hero Banner / Logo -->
-<img src="https://raw.githubusercontent.com/Prajan77v/OSM/main/docs/assets/oms-logo.png" alt="OMS Sentinel Banner" width="100%" style="border-radius: 8px; margin-bottom: 20px;" onerror="this.src='https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=1200&q=80'" />
-
-### 🛰️ Next-Generation AI Monitoring & Analytics Platform
-*A unified computer vision command center for real-time object tracking, non-blocking face locks, human activity analytics, and automated security orchestration.*
-
----
-
-[![Python Version](https://img.shields.io/badge/Python-3.10%20%7C%203.11-gold?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
-[![Next.js Version](https://img.shields.io/badge/Next.js-16%2B-gold?style=for-the-badge&logo=nextdotjs&logoColor=white)](https://nextjs.org/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-Modern--API-gold?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-gold?style=for-the-badge)](https://opensource.org/licenses/MIT)
-[![Build Status](https://img.shields.io/badge/Build-Success-gold?style=for-the-badge&logo=github-actions&logoColor=white)](https://github.com/Prajan77v/OSM)
-
-[✨ Live Demo](#-quick-start--deployment) • [📊 System Architecture](#-architecture--data-flows) • [🛠️ Setup Guide](#%EF%B8%8F-quick-start--deployment) • [🚀 Future Roadmap](#-future-roadmap)
+[![Python](https://img.shields.io/badge/Python-3.9%20%7C%203.10%20%7C%203.11-00f0ff?style=for-the-badge&logo=python&logoColor=050814)](https://www.python.org/)
+[![OpenCV](https://img.shields.io/badge/OpenCV-4.x-ff007f?style=for-the-badge&logo=opencv&logoColor=white)](https://opencv.org/)
+[![YOLO](https://img.shields.io/badge/YOLO-v8-ffaa00?style=for-the-badge&logo=ultralytics&logoColor=050814)](https://github.com/ultralytics/ultralytics)
+[![PyQt6](https://img.shields.io/badge/PyQt6-GUI-00ff66?style=for-the-badge&logo=qt&logoColor=white)](https://www.riverbankcomputing.com/software/pyqt/)
+[![System Status](https://img.shields.io/badge/SYSTEM_STATUS-ONLINE%20%2F%20SCANNING-00ff66?style=for-the-badge&labelColor=050814)](https://github.com/Prajan77v/OSM)
+[![License](https://img.shields.io/badge/LICENSE-MIT-94a3b8?style=for-the-badge)](https://choosealicense.com/licenses/mit/)
 
 </div>
 
 ---
 
-## 📖 Table of Contents
-1. [Project Overview](#-project-overview)
-2. [Why OMS Exists](#-why-oms-exists)
-3. [Core Feature Matrix](#-core-feature-matrix)
-4. [Architecture & Data Flows](#-architecture--data-flows)
-   - [System Topology](#system-topology)
-   - [Detection & Recognition Pipeline](#detection--recognition-pipeline)
-   - [Async Notification Engine](#async-notification-engine)
-5. [HAAE (Human Activity & Expression Analysis)](#-haae-human-activity--expression-analysis)
-6. [Engineering Challenges & Solutions](#-engineering-challenges--solutions)
-7. [Performance & Telemetry Benchmarks](#-performance--telemetry-benchmarks)
-8. [Folder Organization](#-folder-organization)
-9. [Quick Start & Deployment](#%EF%B8%8F-quick-start--deployment)
-10. [API Documentation](#-api-documentation)
-11. [Future Roadmap](#-future-roadmap)
-12. [License](#-license)
+```
+========================================================================
+[OMS SYSTEM TERMINAL BOOTUP]
+>> INITIALIZING AI ENGINE... OK
+>> LINKING CAMERA FEED PORTS... OK
+>> LOADING OBJECT DETECTION DATASET... YOLOv8 ACTIVE
+>> SECURITY PROTOCOLS... OPERATIONAL
+========================================================================
+```
+
+**OMS (Object Monitoring System)** is a next-generation, AI-driven surveillance and real-time monitoring console. By integrating advanced deep learning models and high-frequency computer vision pipelines directly with live camera feeds, OMS elevates standard, passive CCTV hardware into an active, intelligent monitoring dashboard.
+
+Whether analyzing RTSP streams, IP cameras, or standard USB webcams, OMS detects subjects, tracks spatial movement, identifies known personnel, logs security events, and presents a responsive HUD-style PyQt6 desktop controller interface.
 
 ---
 
-## 🔍 Project Overview
+## 👁️ SYSTEM PREVIEW // OVERVIEW
 
-**OMS (Object Monitoring System)** is an enterprise-grade AI-powered smart surveillance ecosystem. By combining Python’s real-time computer vision capabilities with an interactive Next.js web dashboard, OMS delivers live video telemetry, non-blocking face recognition, and motion kinematics wrapped in a premium **Black & Gold OLED** interface.
+In traditional security environments, human operators are forced to sit through hours of stagnant footage, suffering from cognitive fatigue and missing key security indicators. 
 
-The platform allows security operators to orchestrate camera feeds, register personnel via guided enrollment wizards, monitor human attention and emotions, and broadcast automated intrusion alerts via secure Telegram protocols without impacting high-frequency camera processing loops.
-
----
-
-## 💡 Why OMS Exists
-
-Standard NVRs (Network Video Recorders) and IP camera grids are passive; they record footage but rely on human operators to review frames post-incident. Commercial smart surveillance systems exist but suffer from:
-* **Heavy Compute Locks**: Running deep face recognition alongside YOLO detection in a single thread freezes camera feeds.
-* **Complex Compilation Setups**: Libraries like `dlib` require heavy C++ compilation environments (e.g. Visual Studio CMake) making local installations on Windows/macOS highly failure-prone.
-* **Notification Floods**: Basic motion-detection triggers send hundreds of spam alerts for minor lighting changes, bugs, or normal movements.
-
-**OMS solves these challenges** by delivering a modular, event-driven python-fastapi core. It utilizes a **YuNet/SFace ONNX fallback** that bypasses CMake compilation entirely, distributes inference loads across isolated thread executors, and gates notification streams behind anti-spam cooldown state machines.
+**OMS bridges this gap** by injecting automation and machine intelligence straight into the loop. It continuously watches the scene, identifies target classes, registers known/unknown face profiles, maps movement trajectories, and maintains a structured, queryable event log.
 
 ---
 
-## 🌟 Core Feature Matrix
+## ⚠️ THE SURVEILLANCE GAP // PROBLEM STATEMENT
 
-| Feature Module | Technology Stack | Enterprise Capability |
-| :--- | :--- | :--- |
-| **High-FPS Object Engine** | Ultralytics YOLOv8 | Detects, paths, and logs personnel and secure object boundaries in real-time. |
-| **No-CMake Face Engine** | OpenCV YuNet + SFace | Scans, aligns, and locks face credentials from crops without heavy C++ dependencies. |
-| **HAAE Kinematics** | Pure Python Math | Converts velocity and direction change vectors into active loitering/pacing scores. |
-| **Dynamic Orchestrator** | FastAPI Router | Add, remove, rename, and connect camera streams on-the-fly without service restarts. |
-| **Luxury OLED Console** | Next.js 16 + Tailwind | A high-fidelity dark-mode interface with glassmorphism layout, real-time charts, and HUD overlays. |
-| **Anti-Spam Alert Agent** | NotificationQueue + Telegram | Broadcasts high-priority alerts with auto-throttled cooldown schedules. |
-| **Async Analytics Hub** | ThreadPoolExecutor + SQLite | Non-blocking telemetry ingestion utilizing dirty-flag flushes to prevent disk-write lag. |
+Standard video surveillance setups suffer from critical vulnerabilities that place property and security at risk:
+
+* **The Fatigue Bottleneck:** Guards monitoring multiple feeds miss up to 95% of security incidents after just 20 minutes of continuous viewing.
+* **Passive Post-Event Review:** Traditional systems serve only as digital tape recorders, helping you review *how* a break-in occurred, but doing nothing to *prevent* it in real time.
+* **Stream Overload:** Managing, viewing, and making sense of dozens of cameras simultaneously is beyond human capacity.
+* **Absence of Scene Context:** Traditional CCTV cameras cannot differentiate between a blowing branch, a stray dog, or a trespasser moving through a restricted zone.
+
+**OMS turns surveillance from a passive archive tool into a proactive, intelligent agent.**
 
 ---
 
-## 📊 Architecture & Data Flows
+## 🚀 CORE CAPABILITIES // KEY FEATURES
 
-### System Topology
-The platform separates high-performance C++ OpenCV captures and PyTorch deep learning threads from the FastAPI backend and Next.js web application:
+OMS is organized into four main functional matrices:
 
-```mermaid
-graph TD
-    %% Styling
-    classDef main fill:#161A22,stroke:#D4AF37,stroke-width:2px,color:#FFF;
-    classDef sub fill:#0D0F12,stroke:#8E9AA8,stroke-width:1px,color:#B8B8B8;
-    classDef highlight fill:#1E2330,stroke:#D4AF37,stroke-width:2px,color:#D4AF37;
+### 📹 Live Feed Ingestion
+* **Multi-Source Pipeline:** Seamlessly hook into standard USB Webcams, Local Video Directories, or Network CCTV feeds via RTSP / IP streams.
+* **Concurrent Decoders:** High-performance, multithreaded frame capturing via OpenCV to maintain 24/7 stream consistency.
 
-    %% Nodes
-    A[CCTV Stream / RTSP / Webcams] ::: sub
-    B[Camera Thread Capture Loop] ::: main
-    C[YOLOv8 Detector Thread] ::: main
-    D[YuNet Face Aligner] ::: main
-    E[Async ThreadPool face_pool] ::: highlight
-    F[HAAE Kinematic Engine] ::: main
-    G[FastAPI Core Server] ::: main
-    H[SQLite Analytics DB] ::: sub
-    I[Telegram API Gateway] ::: sub
-    J[Next.js Web Interface] ::: highlight
+### 🧠 Vision Intelligence
+* **Real-Time Classification:** YOLO-driven object detection classifying humans, luggage, tools, vehicles, and custom classes.
+* **Face Verification:** Integrated deep face model mapping facial crops to a 128-dimensional vector database for instant identification of authorized personnel.
+* **Dynamic Centroid Tracker:** Assigns persistent IDs to individuals, tracking motion vectors across frame successions to eliminate duplicate counts.
 
-    %% Links
-    A -->|BGR Frame Buffer| B
-    B --> C
-    C -->|Person detected| D
-    D -->|Face Crop| E
-    C -->|Centroid Tracking| F
-    F -->|Telemetry Sync| G
-    E -->|Identity Match| G
-    G -->|Commit logs| H
-    G -->|Broadcast alert| I
-    G <-->|WebSockets / REST API| J
+### 📊 Event Registry
+* **Automated Log Entries:** Generates instant records detailing class labels, timestamps, confidence parameters, and tracking IDs.
+* **Query-Ready Schema:** Organized logs structured for rapid filtering, export, or audit-trail verification.
+
+### 🖥️ Operator Command Console
+* **HUD PyQt6 UI:** A high-speed, hardware-accelerated desktop dashboard rendering real-time bounding boxes and operational tables.
+* **Overlay Overrides:** Toggle camera bounding boxes, tracking trails, and face scan parameters on the fly.
+
+---
+
+## ⚡ PIPELINE FLOW // HOW OMS WORKS
+
+The life of a video frame inside the OMS engine moves through the following stages:
+
+```
+[ Camera Feed ] ──────────► Ingests Raw Streams (Webcam, CCTV, RTSP)
+       │
+       ▼
+[ Frame Capture ] ────────► Decodes and Buffers Video Packets (OpenCV)
+       │
+       ▼
+[ Preprocessing ] ────────► Normalizes Frame Layout, Scales, and Color Space
+       │
+       ▼
+[ Object Detection ] ─────► YOLO Inference Maps Boundaries and Classes
+       │
+       ▼
+[ Face Rec / Track ] ─────► Extracts Embedding Vector & Associates Tracking ID
+       │
+       ▼
+[ Event Logging ] ────────► Commits Timestamped Alert Metadata to Disk Registry
+       │
+       ▼
+[ Live UI Dashboard ] ────► Updates PyQt6 Screen Buffer and Active Log Grid
 ```
 
 ---
 
-### Detection & Recognition Pipeline
-Facial recognition utilizes an asynchronous thread executor (`face_pool`) to prevent deep learning matching from blocking the real-time camera processing loop:
+## 🏗️ ARCHITECTURAL SCHEMATIC // SYSTEM ARCHITECTURE
 
-```mermaid
-sequenceDiagram
-    autonumber
-    participant Cam as Camera Thread
-    participant Pool as face_pool (ThreadPool)
-    participant SFace as SFace Engine
-    participant DB as SQLite DB
+OMS uses a clean, decoupled layer architecture to separate UI threads, heavy AI inference tasks, and system logs:
 
-    Cam->>Cam: Capture BGR Frame (30 FPS)
-    Cam->>Cam: Run YOLOv8 Object Detection
-    Note over Cam: Person detected?
-    Cam->>Cam: Extract Face Crop using YuNet Aligner
-    Cam->>Pool: Submit Async match request (Face Crop)
-    Note over Cam: Camera loop continues running at 30 FPS
-    Pool->>SFace: Generate 128-D Feature Embedding
-    SFace->>SFace: Calculate Cosine Similarity with Registered Database
-    alt Match found above threshold
-        SFace-->>Cam: Return Identity (e.g. Prajan)
-    else No Match
-        SFace-->>Cam: Return "Unknown-XYZ"
-    end
-    Pool->>DB: Log event to database async
+1. **Input Interface Layer:** Decodes video sources into raw numpy frame matrices.
+2. **Preprocessing Pipeline Layer:** Sanitizes and resizes frames to match YOLO neural input shapes without aspect distortion.
+3. **Core Deep Learning Layer:** Executes parallel inference threads. Passes bounding frames to YOLO and facial crops to embedding models.
+4. **Context Tracking Layer:** Evaluates frame-to-frame coordinate distances to persist tracking IDs.
+5. **Database Registry Layer:** Handshakes log threads to dump metadata into CSV or database records without blocking frames.
+6. **Presentation HUD Layer:** A PyQt6-based dashboard rendering the visual bounding box overlays and updating log lists.
+
+---
+
+## 🧩 MODULE BREAKDOWN // FUNCTIONAL SCHEMATIC
+
+```
+ OMS PLATFORM
+ ├── Camera Input Module    ── Ingests feeds, scales resolution, drops dead frames.
+ ├── Detection Module       ── Runs YOLO model, extracts boundary boxes & conf.
+ ├── Face Rec Module        ── Isolates faces, runs embedding comparisons.
+ ├── Tracking Module        ── Persists IDs across frame coordinates over time.
+ ├── Event Logger Module    ── Asynchronously commits event tables to disk.
+ └── PyQt6 Dashboard UI     ── Manages screen layouts, overlay switches, lists.
 ```
 
 ---
 
-### Async Notification Engine
-Alert broadcasts use an event queue with throttling variables to avoid spamming the operator's messaging channels:
+## 💻 TECH STACK // POWERING THE SYSTEM
 
-```mermaid
-graph LR
-    %% Styling
-    classDef box fill:#161A22,stroke:#D4AF37,stroke-width:1px,color:#FFF;
-    classDef status fill:#0D0F12,stroke:#8E9AA8,stroke-width:1px,color:#B8B8B8;
+| Technology | Purpose / Application |
+| :--- | :--- |
+| **Python** | System core, processing logic, and library gluing |
+| **OpenCV** | Direct video ingestion, RTSP decoding, and drawing overlays |
+| **YOLO Engine** | Deep learning model architecture for object detection |
+| **PyQt6** | Desktop GUI layout, hardware rendering, and state buttons |
+| **NumPy** | High-performance matrix operations on video frame buffers |
+| **Face Recognition** | Facial crop embedding generation and similarity math |
 
-    A(Intrusion / Behavior / Threat) ::: status
-    B[Notification Queue] ::: box
-    C{Is Alert on Cooldown?} ::: box
-    D[Format Template Markdown] ::: box
-    E[Submit POST Request] ::: box
-    F[Telegram Bot Broadcast] ::: status
-    G[Drop Event / Ignore] ::: status
+---
 
-    A --> B
-    B --> C
-    C -- No --> D
-    C -- Yes --> G
-    D --> E
-    E --> F
+## 📁 SYSTEM LAYOUT // PROJECT STRUCTURE
+
+Below is the repository directory tree for the Object Monitoring System:
+
+```
+oms/
+├── app/
+│   ├── __init__.py
+│   └── main.py                     # App bootstrap and main thread loop
+├── core/
+│   ├── __init__.py
+│   ├── camera.py                   # Camera stream thread pool manager
+│   ├── engine.py                   # Master processing loop orchestrator
+│   └── logger.py                   # Event writer thread (CSV/SQLite)
+├── detection/
+│   ├── __init__.py
+│   ├── yolo_detector.py            # YOLO model interface and boundaries extractor
+│   └── classes.txt                 # Target label classes configuration
+├── recognition/
+│   ├── __init__.py
+│   ├── face_rec.py                 # Embedding generator and database matcher
+│   └── database/                   # Storage of registered personnel faces
+├── tracking/
+│   ├── __init__.py
+│   └── tracker.py                  # Centroid-based tracking algorithm
+├── ui/
+│   ├── __init__.py
+│   ├── dashboard.py                # PyQt6 window layouts and controllers
+│   ├── resources/                  # UI icons, stylesheets, and assets
+│   └── stylesheet.qss              # Custom cyberpunk dark-mode styles
+├── models/
+│   ├── yolov8n.pt                  # YOLO model weight assets (auto-downloaded)
+│   └── facenet.onnx                # Face embedding model file
+├── logs/
+│   └── event_logs.csv              # Output log files for surveillance telemetry
+├── requirements.txt                # System dependency configuration
+└── README.md                       # Documentation index
 ```
 
 ---
 
-## ⚡ HAAE (Human Activity & Expression Analysis)
+## ⚙️ INITIALIZATION // INSTALLATION
 
-The new **HAAE Module** introduces multi-dimensional human state intelligence to the tracking pipeline:
+### 1. Clone the Registry
+```bash
+git clone https://github.com/Prajan77v/OSM.git
+cd osm
+```
 
-* **Kinematic Activity Assessment**: Leverages real-time centroid tracking to analyze acceleration. Categorizes subject behavior as `RUNNING` (velocity exceeding `120px/s`), `ACTIVE` (normal walking/moving), or `IDLE` (stationary loitering).
-* **Attention Gaze Estimation**: Calculates aspect-ratio stability, alignment, and facial crop dimensions to proxy the subject's attention level (`HIGH`, `MEDIUM`, `LOW`).
-* **Micro-Expression Recognition**: Leverages non-blocking thread analysis to identify dominant facial emotions (`Happy`, `Neutral`, `Sad`, `Angry`, `Surprised`, `Fearful`, `Disgusted`).
-* **Presence Duration Tracking**: Computes exposure timers from first detection frames, updating metrics via `/api/activity`.
+### 2. Configure Virtual Environment
+```bash
+# Create environment
+python -m venv venv
 
----
+# Activate on Windows
+venv\Scripts\activate
 
-## 🛠️ Engineering Challenges & Solutions
+# Activate on macOS / Linux
+source venv/bin/activate
+```
 
-### 1. Frame Lag & Low FPS
-* **Challenge**: Sequential execution of YOLOv8 and face recognition blocks the frame grabber, dropping camera capture framerates down to <5 FPS.
-* **Solution**: Implemented an async worker-pool architecture. Frames are pulled in dedicated thread loops and processed using OpenCV lock guards. Face matching is offloaded to a separate `ThreadPoolExecutor` while the main camera thread continues rendering at 30 FPS.
+### 3. Load Dependencies
+```bash
+pip install -r requirements.txt
+```
 
-### 2. High Disk Latency on Event Commits
-* **Challenge**: Writing logs to SQLite on every frame block causes GUI stutter and stalls.
-* **Solution**: Developed a dirty-flag database model. Security logs and telemetry updates are pushed to a thread-safe deque queue and flushed to disk in batch segments every 2 seconds by an asynchronous scheduler.
-
-### 3. OpenCV Camera Stream Disconnects
-* **Challenge**: IP cameras drop streams due to network jitter, locking the `cv2.VideoCapture` read process and causing the app to freeze.
-* **Solution**: Built an autonomous watchdog re-connection layer. If a stream fails to fetch frames for 3 consecutive seconds, the thread releases the resource, flags the camera status to `OFFLINE` on the dashboard, and enters a non-blocking exponential reconnect cycle.
-
----
-
-## 📊 Performance & Telemetry Benchmarks
-
-| Metric | Target Value | Measured Value | Engine / Hardware |
-| :--- | :--- | :--- | :--- |
-| **Object Detection Speed** | >25 FPS | **32.4 FPS** | YOLOv8s (CPU Intel i7 / CUDA RT) |
-| **Face Recognition Latency** | <300ms | **180ms** | YuNet + SFace ONNX |
-| **HAAE Kinematic Update** | <1ms | **0.12ms** | Pure Kinematic Math |
-| **Database Flush Time** | <50ms | **8ms** | Non-blocking Batch SQLite Commit |
-| **Alert Delivery Speed** | <1.5s | **0.8s** | Telegram Bot API Gateway |
-| **Supported Cameras** | Unlimited | **16+ Channels** | Multithreaded Capture Pools |
-
----
-
-## 📂 Folder Organization
-
-OMS utilizes a modular folder layout designed for scaling enterprise deployments:
-
-```directory
-OSM/
-├── .github/                     # GitHub workflow pipelines & issue templates
-├── configs/                     # System configs and environment profiles
-├── docs/                        # Technical documentation & API references
-│   ├── architecture/            # Mermaid charts & design specifications
-│   └── screenshots/             # Visual dashboard mockups
-├── frontend/                    # Next.js visual dashboard
-│   ├── public/                  # Static web assets & icons
-│   └── src/app/                 # Dashboard components, pages & styles
-├── backend/                     # Python microservices and core logic
-│   ├── api/                     # FastAPI endpoint definitions
-│   ├── core/                    # Thread handlers & camera loops
-│   ├── database/                # SQLite setup & batch flusher
-│   └── notifications/           # Telegram alert broker
-├── ai/                          # Machine learning components
-│   ├── models/                  # ONNX files (YuNet / SFace)
-│   └── inference/               # YOLO model wrapper classes
-├── faces/                       # User enrollment profiles (Git-ignored)
-├── logs/                        # Database logs & text telemetry (Git-ignored)
-├── tests/                       # Unit & integration testing suites
-├── build_exe.py                 # PyInstaller standalone compilation script
-├── create_installer.py          # Setup wizard installer compiler
-└── main.py                      # Main entrypoint executable
+### 4. Fetch AI Models
+Download the YOLO weights and FaceNet model files, placing them inside the `models/` directory:
+```bash
+# Example command or setup script
+python core/download_models.py
 ```
 
 ---
 
-## 🛠️ Quick Start & Deployment
+## 📊 OPERATION GUIDE // USAGE
 
-### 1. Prerequisites
-* **Python**: `3.10` or `3.11`
-* **Node.js**: `v18+` (npm package manager)
-
-### 2. Manual Source Installation
-
-1. **Clone the Repo**
-   ```bash
-   git clone https://github.com/Prajan77v/OSM.git
-   cd OSM
-   ```
-
-2. **Configure Python Virtual Environment & Deps**
-   ```bash
-   python -m venv venv
-   call venv/Scripts/activate   # On Linux/macOS use: source venv/bin/activate
-   pip install -r requirements.txt
-   ```
-
-3. **Install Dashboard Dependencies**
-   ```bash
-   cd frontend
-   npm install
-   cd ..
-   ```
-
-4. **Launch Command Center**
-   * **Surveillance Engine**:
-     ```bash
-     python main.py
-     ```
-   * **Dashboard Server**:
-     ```bash
-     cd frontend
-     npm run dev
-     ```
-     Once active, open [http://localhost:3000](http://localhost:3000) to view the luxury command center!
-
-### 3. One-Click Compiler (Windows Standalone EXE)
-To compile a packaged `.exe` with the Next.js frontend bundled inside:
-```powershell
-python build_exe.py
+Launch the monitoring console:
+```bash
+python app/main.py
 ```
-This generates `dist/OMS_Sentinel_Installer.exe` (Standalone setup GUI wizard) and `dist/OMS_Sentinel_Portable.zip` (portable folder structure).
+
+### Operational Steps:
+1. **Choose Feed Source:** Select `Webcam`, `IP Camera (RTSP URL)`, or a `Local Video file` from the UI source dropdown.
+2. **Start Scanner:** Click **INITIALIZE SYSTEM**. The live camera feed will load with bounding box overlays.
+3. **Face Registration:** Navigate to the database config menu to register names and photos for face recognition.
+4. **Read Logs:** The operational log grid on the right updates instantly as new subjects enter or leave the camera scene.
+5. **System Export:** Event histories can be exported to CSV files inside the `logs/` directory for analytical reports.
 
 ---
 
-## 🔌 API Documentation
+## 📸 COMMAND CONTROL // SHOWCASE & DEMOS
 
-| Endpoint | Method | Response | Description |
-| :--- | :--- | :--- | :--- |
-| `/api/cameras` | `GET` | `Array<Camera>` | Get status, FPS, active users & locations of all camera nodes. |
-| `/api/telemetry` | `GET` | `Telemetry` | Real-time hardware load (CPU, RAM, GPU) and engine connectivity states. |
-| `/api/activity` | `GET` | `HAAEData` | Live human tracking, activity categories, attention values, and duration metrics. |
-| `/api/events` | `GET` | `Array<Event>` | Recent security events (e.g. unauthorized intrusion, behavior anomalies). |
-| `/api/settings` | `GET` | `ConfigDict` | Fetch active YAML configurations. |
-| `/api/camera/add` | `POST` | `StatusMsg` | Register a new CCTV stream dynamically onto the thread orchestrator. |
+<div align="center">
 
----
+### OMS Dashboard UI Console
+*Desktop dashboard built with PyQt6 displaying video stream overlays, active track cards, and live log tables.*
+![OMS Dashboard UI](assets/dashboard_preview.png)
 
-## 🚀 Future Roadmap
+<br>
 
-```
-Phase 1: YOLO Object Engine ─────── [✓] Done
-Phase 2: YuNet Face Recognizer ──── [✓] Done
-Phase 3: Multi-Camera Grid ──────── [✓] Done
-Phase 4: HAAE Kinematics Module ─── [✓] Done
-Phase 5: Telegram Alert Gateway ─── [✓] Done
-Phase 6: Black & Gold Dashboard ─── [✓] Done
-Phase 7: Gaze Attention Mesh ────── [ ] Planned (Q3 2026)
-Phase 8: Edge-AI Hardware Deployment ── [ ] Planned (Q4 2026)
-Phase 9: Multi-node Cloud Cluster ─ [ ] Planned (Q1 2027)
-Phase 10: Enterprise Central Control  [ ] Planned (Q2 2027)
-```
+### Real-Time Detections Gallery
+*YOLOv8 boundaries identifying person classifications, bags, and tools simultaneously.*
+![Detections Showcase](assets/yolo_detection.gif)
+![Face Verification Scan](assets/facerec_scanner.png)
+
+</div>
 
 ---
 
-## 📄 License
+## 🔮 UPCOMING TRANSMISSIONS // FUTURE ROADMAP
 
-Distributed under the MIT License. See [LICENSE](file:///C:/Users/Prajan/.gemini/antigravity/scratch/smart_surveillance/LICENSE) for more details.
+- [ ] **Anomaly Detection Layer:** Automatically trigger warning overlays for loitering, falls, or physical violence.
+- [ ] **Instant Security Alerts:** Connect Telegram bot integrations to forward snapshots of intruders directly to mobile devices.
+- [ ] **Multi-Stream Node Layout:** Scale the GUI layout to monitor 4 distinct camera RTSP streams simultaneously.
+- [ ] **Cloud Logs Syncer:** Export SQLite surveillance database records directly to remote Web panels.
+- [ ] **Hardware Acceleration:** Complete integration of TensorRT/ONNX Runtime for faster edge device processing.
+
+---
+
+## 📡 SYSTEM TERMINAL // CONCLUSION
+
+OMS demonstrates how lightweight modern deep learning models can be bundled into standard computer hardware to build active, intelligent home or facility security applications. 
+
+Explore the source code, play around with the modules, and help us improve the monitoring engine!
+
+* **Maintained by:** Prajan77v
+* **Project Status:** Active/Operational
+* **Contributions:** PRs are welcome. Please read contribution guidelines before submitting edits.
+* **License:** This project is licensed under the MIT License.
