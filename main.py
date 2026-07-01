@@ -247,6 +247,7 @@ class Config:
     ABSENT_CYCLES_THRESH = _cfg("detection","absent_cycles_thresh", default=50)
 
     FACE_MATCH_THRESH   = _cfg("face_recognition","match_threshold", default=0.36)
+    OBJECT_MATCH_THRESH = _cfg("object_recognition","match_threshold", default=0.55)
     DETECT_NEW_IDS      = _cfg("face_recognition","detect_new_ids", default=True)
     FACE_DETECT_MODEL   = "cnn" if (CUDA_AVAILABLE and USE_CUDA) else "hog"
     FACE_POOL_WORKERS   = _cfg("face_recognition","pool_workers",HW_PROFILE, default={"LOW":1,"MEDIUM":2,"HIGH":3}[HW_PROFILE])
@@ -2933,7 +2934,7 @@ def camera_thread(cs: CameraState):
                                         if curr_pid:
                                             cs.pid_confidences[curr_pid] = conf
 
-                        if tid not in cs.track_to_pid:
+                        if is_person and tid not in cs.track_to_pid:
                             # Spatial tracking recovery fallback
                             recovered_pid = None
                             recovered_tid = None
