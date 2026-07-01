@@ -45,6 +45,12 @@ else:
     WORKING_DIR = Path(__file__).parent.resolve()
     BUNDLE_DIR = Path(__file__).parent.resolve()
 
+# Add directories to sys.path so embedded/portable python can import local modules
+if str(WORKING_DIR) not in sys.path:
+    sys.path.insert(0, str(WORKING_DIR))
+if str(BUNDLE_DIR) not in sys.path:
+    sys.path.insert(0, str(BUNDLE_DIR))
+
 # ── Load .env secrets before anything else ────────────────────────────────────
 def _load_env(path: str = str(WORKING_DIR / ".env")):
     try:
@@ -603,11 +609,22 @@ def db_log_threat(ts, level, reason, camera):
         except Exception as e: app_log.debug(f"DB threat: {e}")
 
 # ══════════════════════════════════════════════════════════════════════════════
-# YUNET / SFACE — Deep Learning Face Recognition Fallback (no dlib!)
+# FACE & OBJECT RECOGNITION ENGINES
+# 1. Face Recognition: YuNet face detection + SFace feature encoding (128-dim)
+# 2. Object Recognition: MobileNetV2 CNN (1280-dim) / ORB+Histogram (608-dim)
 # ══════════════════════════════════════════════════════════════════════════════
-YUNET_AVAILABLE = False
-_yunet_detector  = None
-_sface_recognizer= None
+YUNET_AVAILABLE         = False
+_yunet_detector         = None
+_sface_recognizer       = None
+_yunet_enc_cache: Dict[str, any] = {}  # pid -> face embedding list
+
+OBJECT_ENGINE_AVAILABLE = False
+_obj_model              = None    # MobileNetV2 model
+_obj_transform          = None    # torchvision transform pipeline
+_obj_enc_cache: Dict[str, any] = {}  # pid -> object embedding list
+
+_yunet_lock             = threading.Lock()
+_obj_lock               = _yunet_lock
 
 def _download_model(url: str, path: str):
     Path(path).parent.mkdir(parents=True, exist_ok=True)
@@ -623,28 +640,70 @@ def _download_model(url: str, path: str):
         return False
 
 def _init_yunet():
+    """Initialize both Face engine (YuNet+SFace) and Object engine (MobileNetV2)."""
     global YUNET_AVAILABLE, _yunet_detector, _sface_recognizer
-    if FACE_RECOG_AVAILABLE:
-        return  # dlib version available, prefer it
+    global OBJECT_ENGINE_AVAILABLE, _obj_model, _obj_transform
+
+    # ── 1. Initialize Face Engine ──────────────────────────────────────────────
     try:
         yu_ok = _download_model(Config.YUNET_MODEL_URL, Config.YUNET_MODEL_PATH)
         sf_ok = _download_model(Config.SFACE_MODEL_URL, Config.SFACE_MODEL_PATH)
-        if not (yu_ok and sf_ok): return
-        # Set score_threshold=0.45 to dramatically improve real-world face detection success rate
-        _yunet_detector   = cv2.FaceDetectorYN.create(Config.YUNET_MODEL_PATH, "", (320, 320), 0.45)
-        _sface_recognizer = cv2.FaceRecognizerSF.create(Config.SFACE_MODEL_PATH, "")
-        YUNET_AVAILABLE   = True
-        print("[OMS] ✔ YuNet + SFace Neural Face Engine ONLINE — No dlib required!")
-        app_log.info("[YUNET] DL Face Recognition ONLINE")
+        if yu_ok and sf_ok:
+            _yunet_detector   = cv2.FaceDetectorYN.create(Config.YUNET_MODEL_PATH, "", (320, 320), 0.45)
+            _sface_recognizer = cv2.FaceRecognizerSF.create(Config.SFACE_MODEL_PATH, "")
+            YUNET_AVAILABLE   = True
+            print("[OMS] ✔ Face Recognition Engine ONLINE (YuNet+SFace)")
+            app_log.info("[FACE] YuNet+SFace Neural Face Engine ONLINE")
     except Exception as e:
-        app_log.error(f"[YUNET] Init failed: {e}")
+        app_log.error(f"[FACE] Init failed: {e}")
 
-# ── YuNet face encoding cache for known persons ───────────────────────────────
-_yunet_enc_cache:  Dict[str, np.ndarray] = {}  # pid -> feature vector
-_yunet_lock = threading.Lock()
+    # ── 2. Initialize Object Engine ────────────────────────────────────────────
+    try:
+        import torch
+        import torchvision.models as models
+        import torchvision.transforms as transforms
+
+        try:
+            weights = models.MobileNet_V2_Weights.IMAGENET1K_V1
+            model = models.mobilenet_v2(weights=weights)
+        except AttributeError:
+            model = models.mobilenet_v2(pretrained=True)
+
+        model.classifier = torch.nn.Identity()
+        model.eval()
+        device = "cuda" if (CUDA_AVAILABLE and Config.USE_CUDA) else "cpu"
+        model = model.to(device)
+        _obj_model = model
+
+        try:
+            _obj_transform = transforms.Compose([
+                transforms.ToTensor(),
+                transforms.Resize((224, 224), antialias=True),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                     std=[0.229, 0.224, 0.225])
+            ])
+        except TypeError:
+            _obj_transform = transforms.Compose([
+                transforms.ToTensor(),
+                transforms.Resize((224, 224)),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                     std=[0.229, 0.224, 0.225])
+            ])
+
+        OBJECT_ENGINE_AVAILABLE = True
+        print("[OMS] ✔ Object Recognition Engine ONLINE (MobileNetV2 CNN)")
+        app_log.info("[OBJ] MobileNetV2 CNN Object Recognition ONLINE")
+        return
+    except Exception as e:
+        app_log.warning(f"[OBJ] MobileNetV2 not available ({e}). Using ORB+Histogram fallback.")
+
+    OBJECT_ENGINE_AVAILABLE = True
+    print("[OMS] ~ Object Recognition Engine ONLINE (ORB+Histogram fallback)")
+    app_log.info("[OBJ] ORB+Histogram Object Recognition ONLINE (fallback mode)")
+
 
 def _preprocess_lighting(img_bgr: np.ndarray) -> np.ndarray:
-    """Apply CLAHE to normalize lighting (low-light and shadows) on the face crop."""
+    """CLAHE lighting normalization."""
     try:
         ycrcb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2YCrCb)
         channels = list(cv2.split(ycrcb))
@@ -655,83 +714,138 @@ def _preprocess_lighting(img_bgr: np.ndarray) -> np.ndarray:
     except Exception:
         return img_bgr
 
-def _yunet_encode(img_bgr: np.ndarray) -> Optional[np.ndarray]:
-    if not YUNET_AVAILABLE: return None
+
+def _object_encode_cnn(img_bgr: np.ndarray) -> Optional[np.ndarray]:
+    """Extract 1280-dim MobileNetV2 feature vector (L2-normalised)."""
+    if _obj_model is None or _obj_transform is None:
+        return None
     try:
+        import torch
         h, w = img_bgr.shape[:2]
-        if w < 30 or h < 30: return None
-        
-        # Normalize lighting (low-light improvement)
-        img_bgr = _preprocess_lighting(img_bgr)
-        
-        # Dynamic Resolution Upgrade: If the crop is small, upscale it using Lanczos
-        # and apply a sharpening filter to enhance features for distant recognition
-        if w < 112 or h < 112:
-            img_bgr = cv2.resize(img_bgr, (128, 128), interpolation=cv2.INTER_LANCZOS4)
-            # Unsharp mask / Sharpening filter
-            kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]], dtype=np.float32)
-            img_bgr = cv2.filter2D(img_bgr, -1, kernel)
-            h, w = 128, 128
-            
-        with _yunet_lock:
-            _yunet_detector.setInputSize((w, h))
-            _, faces = _yunet_detector.detect(img_bgr)
-        
-        # Smart Padding Fallback: If no face is detected on a tight crop,
-        # pad the image with black borders on all sides to give YuNet convolutional layers context!
-        if faces is None or len(faces) == 0:
-            pad_h, pad_w = h // 2, w // 2
-            padded = cv2.copyMakeBorder(img_bgr, pad_h, pad_h, pad_w, pad_w, cv2.BORDER_CONSTANT, value=[0, 0, 0])
-            ph, pw = padded.shape[:2]
-            with _yunet_lock:
-                _yunet_detector.setInputSize((pw, ph))
-                _, faces = _yunet_detector.detect(padded)
-            if faces is not None and len(faces) > 0:
-                face = faces[0]
-                with _yunet_lock:
-                    aligned = _sface_recognizer.alignCrop(padded, face)
-                    feat    = _sface_recognizer.feature(aligned)
-                return feat[0] if feat is not None else None
+        if w < 20 or h < 20:
             return None
-        
-        face = faces[0]
-        with _yunet_lock:
-            aligned = _sface_recognizer.alignCrop(img_bgr, face)
-            feat    = _sface_recognizer.feature(aligned)
-        return feat[0] if feat is not None else None
+        img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+        tensor  = _obj_transform(img_rgb)
+        device  = next(_obj_model.parameters()).device
+        tensor  = tensor.unsqueeze(0).to(device)
+        with torch.no_grad():
+            feat = _obj_model(tensor)
+        vec  = feat.squeeze().cpu().numpy().astype(np.float32)
+        norm = np.linalg.norm(vec)
+        if norm > 1e-9:
+            vec = vec / norm
+        return vec
     except Exception as e:
-        app_log.error(f"[YUNET] Encode exception: {e}")
+        app_log.debug(f"[OBJ] CNN encode: {e}")
         return None
 
-def _yunet_match(enc: np.ndarray, face_size: Optional[int] = None) -> Tuple[Optional[str], Optional[str], bool, float]:
-    """Compare enc against all cached known encodings. Returns (pid, name, is_new, score).
-    Supports both single-embedding and multi-embedding (Advanced Enrollment) profiles.
-    Includes adaptive thresholding based on face size.
-    """
+
+def _object_encode_orb(img_bgr: np.ndarray) -> Optional[np.ndarray]:
+    """ORB descriptors + HSV histogram + HOG."""
+    try:
+        h, w = img_bgr.shape[:2]
+        if w < 20 or h < 20:
+            return None
+        img_resized = cv2.resize(img_bgr, (128, 128), interpolation=cv2.INTER_LINEAR)
+        gray = cv2.cvtColor(img_resized, cv2.COLOR_BGR2GRAY)
+
+        orb  = cv2.ORB_create(nfeatures=500)
+        _, desc = orb.detectAndCompute(gray, None)
+        orb_feat = np.zeros(32, dtype=np.float32)
+        if desc is not None and len(desc) > 0:
+            orb_feat = desc.astype(np.float32).mean(axis=0)
+
+        hsv  = cv2.cvtColor(img_resized, cv2.COLOR_BGR2HSV)
+        hist = cv2.calcHist([hsv], [0, 1, 2], None, [8, 8, 8],
+                            [0, 180, 0, 256, 0, 256]).flatten().astype(np.float32)
+        n = hist.sum()
+        hist = hist / n if n > 0 else hist
+
+        hog      = cv2.HOGDescriptor((64, 64), (16, 16), (8, 8), (8, 8), 9)
+        img64    = cv2.resize(gray, (64, 64))
+        hog_feat = hog.compute(img64).flatten()[:64]
+
+        combined = np.concatenate([orb_feat, hist, hog_feat])
+        norm = np.linalg.norm(combined)
+        if norm > 1e-9:
+            combined = combined / norm
+        return combined.astype(np.float32)
+    except Exception as e:
+        app_log.debug(f"[OBJ] ORB encode: {e}")
+        return None
+
+
+def _object_encode(img_bgr: np.ndarray) -> Optional[np.ndarray]:
+    """Extract an object embedding. Uses CNN if available, ORB fallback otherwise."""
+    if not OBJECT_ENGINE_AVAILABLE:
+        return None
+    img_bgr = _preprocess_lighting(img_bgr)
+    if _obj_model is not None:
+        enc = _object_encode_cnn(img_bgr)
+        if enc is not None:
+            return enc
+    return _object_encode_orb(img_bgr)
+
+# Backward-compat alias used by legacy code paths
+_yunet_encode = _object_encode
+
+
+def _object_match(enc: np.ndarray, face_size: Optional[int] = None) -> Tuple[Optional[str], Optional[str], bool, float]:
+    """Cosine similarity match against all enrolled object embeddings."""
+    best_score, best_pid = -1.0, None
+    with _obj_lock:
+        for pid, cached in _obj_enc_cache.items():
+            try:
+                candidates = cached if isinstance(cached, list) else [cached]
+                for c_enc in candidates:
+                    if c_enc.shape != enc.shape:
+                        continue
+                    score = float(np.dot(enc, c_enc))
+                    if score > best_score:
+                        best_score = score
+                        best_pid   = pid
+            except Exception:
+                pass
+
+    thresh = Config.OBJECT_MATCH_THRESH
+    with _fdb_lock:
+        is_known = faces_db.get(best_pid, {}).get("known", False) if best_pid else False
+    if not is_known:
+        thresh = min(thresh, max(0.65, thresh - 0.10))
+
+    if best_pid and best_score >= thresh:
+        with _fdb_lock:
+            name = faces_db.get(best_pid, {}).get("name", "Unknown")
+        return best_pid, name, False, best_score
+    return None, None, True, 0.0
+
+# Backward-compat alias
+_yunet_match = _object_match
+
+
+def _yunet_match_face(enc: np.ndarray, face_size: Optional[int] = None) -> Tuple[Optional[str], Optional[str], bool, float]:
+    """Compare enc against all cached face embeddings."""
     best_score, best_pid = -1.0, None
     with _yunet_lock:
         for pid, cached in _yunet_enc_cache.items():
             try:
-                if isinstance(cached, list):
-                    candidates = cached
-                else:
-                    candidates = [cached]
+                candidates = cached if isinstance(cached, list) else [cached]
                 for cached_enc in candidates:
+                    if cached_enc.shape != enc.shape:
+                        continue
                     score = float(_sface_recognizer.match(
                         enc.reshape(1,-1), cached_enc.reshape(1,-1), cv2.FaceRecognizerSF_FR_COSINE))
                     if score > best_score:
-                        best_score = score; best_pid = pid
+                        best_score = score
+                        best_pid   = pid
             except Exception:
                 pass
-    # SFace Cosine matching standard threshold is e.g. 0.36
     thresh = Config.FACE_MATCH_THRESH
-    # If matching against an intruder profile, we can be slightly more lenient to merge duplicates (0.35)
     with _fdb_lock:
         is_known = faces_db.get(best_pid, {}).get("known", False) if best_pid else False
     if not is_known:
         thresh = min(thresh, 0.35)
 
-    # Adaptive threshold: if the face is very small (distant), make threshold stricter to prevent false positives
     if face_size is not None and face_size < 50:
         thresh += 0.03
         
@@ -742,19 +856,21 @@ def _yunet_match(enc: np.ndarray, face_size: Optional[int] = None) -> Tuple[Opti
     return None, None, True, 0.0
 
 
-def _yunet_detect_faces(frame: np.ndarray) -> List[Tuple[int,int,int,int]]:
+def _yunet_detect_faces(frame: np.ndarray) -> List[Tuple[int, int, int, int]]:
     """Return list of (x1,y1,x2,y2) face boxes found in frame."""
-    if not YUNET_AVAILABLE: return []
+    if not YUNET_AVAILABLE:
+        return []
     with _yunet_lock:
         try:
             h, w = frame.shape[:2]
             _yunet_detector.setInputSize((w, h))
             _, faces = _yunet_detector.detect(frame)
-            if faces is None: return []
+            if faces is None:
+                return []
             boxes = []
             for f in faces:
-                x,y,fw,fh = int(f[0]),int(f[1]),int(f[2]),int(f[3])
-                boxes.append((max(0,x), max(0,y), min(w-1,x+fw), min(h-1,y+fh)))
+                x, y, fw, fh = int(f[0]), int(f[1]), int(f[2]), int(f[3])
+                boxes.append((max(0, x), max(0, y), min(w-1, x+fw), min(h-1, y+fh)))
             return boxes
         except Exception:
             return []
@@ -1726,10 +1842,24 @@ def _register_face_yunet(enc):
     _mark_db_dirty()  # async — avoids blocking the camera detection thread
     return pid, name, True
 
-def async_face(rgb_or_bgr: np.ndarray, is_bgr: bool = False):
-    """Returns (pid, name, conf) or (None, None, 0.0) for one face from a crop."""
+def async_face(rgb_or_bgr: np.ndarray, is_bgr: bool = False, is_person: bool = True):
+    """Returns (pid, name, conf) or (None, None, 0.0) for one face or object from a crop."""
     h_crop, w_crop = rgb_or_bgr.shape[:2]
     face_size = min(h_crop, w_crop)
+    
+    if not is_person:
+        if OBJECT_ENGINE_AVAILABLE:
+            try:
+                bgr = rgb_or_bgr if is_bgr else cv2.cvtColor(rgb_or_bgr, cv2.COLOR_RGB2BGR)
+                enc = _object_encode(bgr)
+                if enc is None: return None, None, 0.0
+                pid, name, _, score = _object_match(enc)
+                if pid:
+                    return pid, name, score
+            except Exception as e:
+                app_log.debug(f"object match async error: {e}")
+        return None, None, 0.0
+
     if FACE_RECOG_AVAILABLE:
         try:
             import face_recognition as _fr
@@ -1748,9 +1878,8 @@ def async_face(rgb_or_bgr: np.ndarray, is_bgr: bool = False):
             bgr = rgb_or_bgr if is_bgr else cv2.cvtColor(rgb_or_bgr, cv2.COLOR_RGB2BGR)
             enc = _yunet_encode(bgr)
             if enc is None: return None, None, 0.0
-            pid, name, is_new, score = _yunet_match(enc, face_size=face_size)
+            pid, name, is_new, score = _yunet_match_face(enc, face_size=face_size)
             if is_new:
-                # Only register new unknown faces if the setting allows it, and the crop size is clear enough (>= 75px)
                 if Config.DETECT_NEW_IDS:
                     if face_size is not None and face_size >= 75:
                         pid, name, _ = _register_face_yunet(enc)
@@ -2661,7 +2790,8 @@ def camera_thread(cs: CameraState):
                     x1,y1,x2,y2 = d["box"]; tid = d["tid"]
                     cur_objs.append(label); pid = None; disp = label.upper()
 
-                    if label == "person" and tid is not None:
+                    if tid is not None:
+                        is_person = (label == "person")
                         tid_seen.add(tid)
                         cs.last_track_boxes[tid] = (x1, y1, x2, y2)
                         fut = cs.pending_futures.get(tid)
@@ -2675,7 +2805,7 @@ def camera_thread(cs: CameraState):
                                 else:
                                     np_pid, np_name, conf = None, None, 0.0
                             except Exception as e:
-                                app_log.warning(f"Error fetching face future: {e}")
+                                app_log.warning(f"Error fetching recognition future: {e}")
                                 np_pid, np_name, conf = None, None, 0.0
                             del cs.pending_futures[tid]
 
@@ -2684,9 +2814,6 @@ def camera_thread(cs: CameraState):
                                 curr_conf = cs.pid_confidences.get(curr_pid, 0.0) if curr_pid else 0.0
                                 is_locked = cs.tid_identity_locked.get(tid, False)
                                 
-                                # Lock Override on Strong Match: If currently locked but prediction shows a different known PID
-                                # with strong confidence (>= 0.58), and the current lock confidence is weak (< 0.45),
-                                # override the lock to perform a correction.
                                 if is_locked and curr_pid and np_pid != curr_pid and conf >= 0.58 and curr_conf < 0.45:
                                     app_log.info(f"[{cs.name}] [LOCK OVERRIDE] Correcting track {tid} from {curr_pid} (conf={curr_conf:.3f}) to {np_pid} (conf={conf:.3f}) due to strong match")
                                     is_locked = False
@@ -2714,12 +2841,10 @@ def camera_thread(cs: CameraState):
                                             votes = cs.tid_face_votes.setdefault(tid, {})
                                             votes[np_pid] = votes.get(np_pid, 0.0) + conf
                                             
-                                            # Harden Lock Thresholds: Require conf >= 0.52 for immediate lock,
-                                            # or votes[np_pid] >= 0.80 for accumulated weak matches
                                             should_lock = (conf >= 0.52 or votes[np_pid] >= 0.80)
                                             if should_lock:
                                                 cs.tid_identity_locked[tid] = True
-                                                app_log.info(f"[{cs.name}] [FACE LOCK] Locked tracking ID {tid} to {np_pid} (conf={conf:.3f}, votes={votes[np_pid]:.3f})")
+                                                app_log.info(f"[{cs.name}] [LOCK] Locked tracking ID {tid} to {np_pid} (conf={conf:.3f}, votes={votes[np_pid]:.3f})")
                                             
                                             cs.pid_confidences[np_pid] = conf
                                             old = cs.track_to_pid.get(tid)
@@ -2733,8 +2858,7 @@ def camera_thread(cs: CameraState):
                                             cs.track_to_pid[tid] = np_pid
                                             _ensure_pid(cs, np_pid, np_name)
                                         else:
-                                            # Do not lock track for auto-registered intruders.
-                                            # Assign the intruder PID, but leave track unlocked to allow recheck on subsequent frames.
+                                            # Intruder logic (only for person)
                                             cs.pid_confidences[np_pid] = conf
                                             old = cs.track_to_pid.get(tid)
                                             if old and old != np_pid:
@@ -2746,7 +2870,6 @@ def camera_thread(cs: CameraState):
                                                             del faces_db[old]
                                             cs.track_to_pid[tid] = np_pid
                                             _ensure_pid(cs, np_pid, np_name)
-                                            # Cooldown for intruder recheck (about 2 seconds)
                                             cs.tid_face_cd[tid] = 60
                                     else:
                                         curr_pid = cs.track_to_pid.get(tid)
@@ -2757,13 +2880,7 @@ def camera_thread(cs: CameraState):
                             # Spatial tracking recovery fallback
                             recovered_pid = None
                             recovered_tid = None
-                            now = time.time()
-                            
-                            # Limit Spatial Recovery Candidate Pool:
-                            # Exclude PIDs that are currently active and visible in the scene from recovery candidate search
                             currently_visible_pids = {cs.track_to_pid[t] for t in tid_seen if t in cs.track_to_pid}
-                            
-                            # Build candidates list
                             candidates = []
                             for l_tid, (l_pid, l_box, l_time) in cs.lost_tracks.items():
                                 if l_pid not in currently_visible_pids:
@@ -2774,7 +2891,7 @@ def camera_thread(cs: CameraState):
                                         candidates.append((active_tid, active_pid, cs.last_track_boxes[active_tid]))
                             
                             cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
-                            best_dist = 80.0  # max 80px (reduced from 150px to prevent mismatching nearby targets)
+                            best_dist = 80.0
                             for c_tid, c_pid, c_box in candidates:
                                 cx1, cy1, cx2, cy2 = c_box
                                 ccx, ccy = (cx1 + cx2) / 2.0, (cy1 + cy2) / 2.0
@@ -2787,118 +2904,124 @@ def camera_thread(cs: CameraState):
                             if recovered_pid:
                                 app_log.info(f"[{cs.name}] [TRACK RECOVERY] Recovered tracking ID {tid} as {recovered_pid} (previously {recovered_tid}) spatially (dist={best_dist:.1f}px)")
                                 cs.track_to_pid[tid] = recovered_pid
-                                
-                                # Inherit Locks: Copy lock status from the recovered track rather than forcing True
                                 was_locked = cs.tid_identity_locked.get(recovered_tid, False) if recovered_tid is not None else False
                                 cs.tid_identity_locked[tid] = was_locked
-                                
-                                # Inherit votes if any
                                 if recovered_tid is not None and recovered_tid in cs.tid_face_votes:
                                     cs.tid_face_votes[tid] = cs.tid_face_votes.pop(recovered_tid)
-                                
                                 if recovered_tid != tid and recovered_tid in cs.track_to_pid:
                                     cs.track_to_pid.pop(recovered_tid, None)
                                 cs.lost_tracks.pop(recovered_tid, None)
                             else:
-                                new_p = f"Unknown-{tid}"
-                                cs.track_to_pid[tid] = new_p
+                                if is_person:
+                                    new_p = f"Unknown-{tid}"
+                                    cs.track_to_pid[tid] = new_p
 
-                        pid = cs.track_to_pid[tid]
-                        if pid.startswith("Unknown-"):
-                            name = "Unknown"
-                            disp = "Unknown"
-                        else:
-                            with _fdb_lock:
-                                exists = pid in faces_db
-                                if exists:
-                                    name = faces_db[pid].get("name", f"Intruder-{pid}")
-                            if not exists:
-                                del cs.track_to_pid[tid]
-                                continue
-                            disp = name.split("-")[0][:12]
+                        pid = cs.track_to_pid.get(tid)
+                        if pid:
+                            if pid.startswith("Unknown-"):
+                                name = "Unknown"
+                                disp = "Unknown"
+                            else:
+                                with _fdb_lock:
+                                    exists = pid in faces_db
+                                    if exists:
+                                        name = faces_db[pid].get("name", f"Intruder-{pid}")
+                                if not exists:
+                                    del cs.track_to_pid[tid]
+                                    continue
+                                disp = name.split("-")[0][:12]
 
-                        # Schedule face recognition only if not locked
+                        # Schedule recognition only if not locked
                         is_locked = cs.tid_identity_locked.get(tid, False)
                         if not is_locked:
                             fr_cd = cs.tid_face_cd.get(tid, 0)
                             if fr_cd <= 0 and tid not in cs.pending_futures:
-                                x1f,y1f,x2f,y2f = d["box"]
-                                fh_tot = y2f - y1f
-                                fw_tot = x2f - x1f
-                                head_y1 = y1f
-                                head_y2 = y1f + fh_tot // 2
-                                pad_y = int(fh_tot * 0.1)
-                                pad_x = int(fw_tot * 0.2)
+                                x1f, y1f, x2f, y2f = d["box"]
                                 h_img, w_img = frame.shape[:2]
-                                crop_y1 = max(0, head_y1 - pad_y)
-                                crop_y2 = min(h_img, head_y2 + pad_y)
-                                crop_x1 = max(0, x1f - pad_x)
-                                crop_x2 = min(w_img, x2f + pad_x)
+                                if is_person:
+                                    # Crop top half of person for YuNet face detector context
+                                    head_y1 = y1f
+                                    head_y2 = y1f + (y2f - y1f) // 2
+                                    pad_y = int((y2f - y1f) * 0.1)
+                                    pad_x = int((x2f - x1f) * 0.2)
+                                    crop_y1 = max(0, head_y1 - pad_y)
+                                    crop_y2 = min(h_img, head_y2 + pad_y)
+                                    crop_x1 = max(0, x1f - pad_x)
+                                    crop_x2 = min(w_img, x2f + pad_x)
+                                else:
+                                    # Use the FULL bounding box for object recognition
+                                    pad_y = int((y2f - y1f) * 0.05)
+                                    pad_x = int((x2f - x1f) * 0.05)
+                                    crop_y1 = max(0, y1f - pad_y)
+                                    crop_y2 = min(h_img, y2f + pad_y)
+                                    crop_x1 = max(0, x1f - pad_x)
+                                    crop_x2 = min(w_img, x2f + pad_x)
+
                                 crop = frame[crop_y1:crop_y2, crop_x1:crop_x2]
                                 if crop.size > 0:
-                                    cs.pending_futures[tid] = face_pool.submit(async_face, crop.copy(), True)
-                                # Speed up frequency when not locked for faster recognition
+                                    cs.pending_futures[tid] = face_pool.submit(async_face, crop.copy(), True, is_person)
                                 cs.tid_face_cd[tid] = 10
                             else:
                                 cs.tid_face_cd[tid] = max(0, fr_cd - 1)
 
-                        # Person arrival
-                        if pid not in cs.present_pids:
-                            cs.present_pids.add(pid)
-                            if not pid.startswith("Unknown-"):
-                                on_person_arrived(cs, pid, name, frame, d["box"], cv_val)
+                        if is_person and pid:
+                            # Person arrival
+                            if pid not in cs.present_pids:
+                                cs.present_pids.add(pid)
+                                if not pid.startswith("Unknown-"):
+                                    on_person_arrived(cs, pid, name, frame, d["box"], cv_val)
 
-                        pi = _ensure_pid(cs, pid, name)
-                        person_dets_this_frame.append({"pid": pid, "box": d["box"]})
+                            pi = _ensure_pid(cs, pid, name)
+                            person_dets_this_frame.append({"pid": pid, "box": d["box"]})
 
-                        # Zone check
-                        cx_p = (x1+x2)//2; cy_p = (y1+y2)//2
-                        zones_in = [z.name for z in ZONES if z.contains(cx_p, cy_p, Config.FRAME_W, Config.FRAME_H)]
-                        for z in ZONES:
-                            if z.name in zones_in and z.threat_level not in ("GREEN",):
-                                on_zone_intrusion(cs, pid, name, z.name, z.threat_level)
-                        anomalies = cs.behavior.update(pid, cx_p, cy_p, zones_in)
-                        for an in anomalies:
-                            on_behavior_anomaly(cs, pid, name, an)
+                            # Zone check
+                            cx_p = (x1+x2)//2; cy_p = (y1+y2)//2
+                            zones_in = [z.name for z in ZONES if z.contains(cx_p, cy_p, Config.FRAME_W, Config.FRAME_H)]
+                            for z in ZONES:
+                                if z.name in zones_in and z.threat_level not in ("GREEN",):
+                                    on_zone_intrusion(cs, pid, name, z.name, z.threat_level)
+                            anomalies = cs.behavior.update(pid, cx_p, cy_p, zones_in)
+                            for an in anomalies:
+                                on_behavior_anomaly(cs, pid, name, an)
 
-                        # ── HAAE: Activity scoring (zero latency — pure kinematics) ──────
-                        behavior_rec = cs.behavior.get(pid)
-                        cs.haae.update_activity(pid, behavior_rec, cs.frame_cnt)
+                            # ── HAAE: Activity scoring
+                            behavior_rec = cs.behavior.get(pid)
+                            cs.haae.update_activity(pid, behavior_rec, cs.frame_cnt)
 
-                        # ── HAAE: Async emotion analysis (gated every 8 frames) ───────────
-                        _haae_crop = None
-                        if cs.frame_cnt % 8 == 0:
-                            x1f2,y1f2,x2f2,y2f2 = d["box"]
-                            _haae_crop = frame[max(0,y1f2):min(frame.shape[0],y2f2),
-                                               max(0,x1f2):min(frame.shape[1],x2f2)]
-                            if _haae_crop is not None and _haae_crop.size > 0:
-                                cs.haae.submit_emotion(pid, _haae_crop.copy(), cs.frame_cnt, haae_pool if haae_pool else face_pool)
-                                cs.haae.update_attention(pid, _haae_crop,
-                                                         face_conf=cs.pid_confidences.get(pid, 0.0))
-                        cs.haae.collect_emotion(pid)
+                            # ── HAAE: Async emotion analysis
+                            _haae_crop = None
+                            if cs.frame_cnt % 8 == 0:
+                                x1f2,y1f2,x2f2,y2f2 = d["box"]
+                                _haae_crop = frame[max(0,y1f2):min(frame.shape[0],y2f2),
+                                                   max(0,x1f2):min(frame.shape[1],x2f2)]
+                                if _haae_crop is not None and _haae_crop.size > 0:
+                                    cs.haae.submit_emotion(pid, _haae_crop.copy(), cs.frame_cnt, haae_pool if haae_pool else face_pool)
+                                    cs.haae.update_attention(pid, _haae_crop,
+                                                             face_conf=cs.pid_confidences.get(pid, 0.0))
+                            cs.haae.collect_emotion(pid)
 
-                        # ── HAAE: Check for new alerts (RUNNING, EMOTION) ────────────────
-                        haae_alerts = cs.haae.check_alerts(pid, name)
-                        for alert in haae_alerts:
-                            now_ha = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                            if alert["type"] == "RUNNING":
-                                on_behavior_anomaly(cs, pid, name, "RUNNING")
-                                if _tg_running and callable(_tg_running):
-                                    notif_queue.send_message(
-                                        _tg_running(cs.name, pid, name, now_ha),
-                                        event_type="RUNNING", camera=cs.name, person=pid, priority=4
-                                    )
-                            elif alert["type"] == "EMOTION":
-                                emotion_txt = alert.get("emotion", "Unknown")
-                                emotion_sc  = alert.get("score", 0.0)
-                                log_event("EXPRESSION", camera=cs.name, person=name,
-                                          obj=emotion_txt,
-                                          detail=f"emotion={emotion_txt} score={emotion_sc:.2f}")
-                                if _tg_emotion_alert and callable(_tg_emotion_alert):
-                                    notif_queue.send_message(
-                                        _tg_emotion_alert(cs.name, pid, name, emotion_txt, emotion_sc, now_ha),
-                                        event_type="EXPRESSION", camera=cs.name, person=pid, priority=4
-                                    )
+                            # ── HAAE: Check for new alerts
+                            haae_alerts = cs.haae.check_alerts(pid, name)
+                            for alert in haae_alerts:
+                                now_ha = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                if alert["type"] == "RUNNING":
+                                    on_behavior_anomaly(cs, pid, name, "RUNNING")
+                                    if _tg_running and callable(_tg_running):
+                                        notif_queue.send_message(
+                                            _tg_running(cs.name, pid, name, now_ha),
+                                            event_type="RUNNING", camera=cs.name, person=pid, priority=4
+                                        )
+                                elif alert["type"] == "EMOTION":
+                                    emotion_txt = alert.get("emotion", "Unknown")
+                                    emotion_sc  = alert.get("score", 0.0)
+                                    log_event("EXPRESSION", camera=cs.name, person=name,
+                                              obj=emotion_txt,
+                                              detail=f"emotion={emotion_txt} score={emotion_sc:.2f}")
+                                    if _tg_emotion_alert and callable(_tg_emotion_alert):
+                                        notif_queue.send_message(
+                                            _tg_emotion_alert(cs.name, pid, name, emotion_txt, emotion_sc, now_ha),
+                                            event_type="EXPRESSION", camera=cs.name, person=pid, priority=4
+                                        )
 
                     new_dets.append({"label":label,"conf":cv_val,"box":(x1,y1,x2,y2),"disp":disp,"pid":pid})
 

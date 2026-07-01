@@ -222,6 +222,8 @@ class OMSInstaller:
         cfg_src = base_path / "config.yaml"
         faces_src = base_path / "faces"
         frontend_src = base_path / "frontend" / "out"
+        models_src = base_path / "models"
+        yolo_src = base_path / "yolov8s.pt"
 
         # Fallback to local files if run directly in dev env
         if not main_src.exists():
@@ -233,6 +235,8 @@ class OMSInstaller:
             cfg_src = Path(__file__).parent / "config.yaml"
             faces_src = Path(__file__).parent / "faces"
             frontend_src = Path(__file__).parent / "frontend" / "out"
+            models_src = Path(__file__).parent / "models"
+            yolo_src = Path(__file__).parent / "yolov8s.pt"
 
         if not main_src.exists():
             raise FileNotFoundError("Source engine code 'main.py' not found in bundle.")
@@ -247,6 +251,15 @@ class OMSInstaller:
         shutil.copy2(req_src, target / "requirements.txt")
         if cfg_src.exists():
             shutil.copy2(cfg_src, target / "config.yaml")
+        if yolo_src.exists():
+            shutil.copy2(yolo_src, target / "yolov8s.pt")
+            
+        # Copy models directory
+        if models_src.exists():
+            dst_models = target / "models"
+            if dst_models.exists():
+                shutil.rmtree(dst_models)
+            shutil.copytree(models_src, dst_models)
 
         # Create env example
         with open(target / ".env", "w", encoding="utf-8") as f:

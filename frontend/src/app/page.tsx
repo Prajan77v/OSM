@@ -7,7 +7,7 @@ import {
   AlertTriangle, MessageSquare, Settings, LogOut, ChevronRight,
   Shield, Activity, Cpu, HardDrive, Wifi, Send, Bell, Eye,
   UserCheck, Package, MapPin, Clock, Zap, TrendingUp,
-  Database, Bot, Download, Volume2, RefreshCw, Maximize2, Minimize2,
+  Database, Bot, Download, Upload, Volume2, RefreshCw, Maximize2, Minimize2,
   Mic, Play, Pause, Square, CheckCircle, Info, XCircle,
   UserPlus, Award, Check, Save, ToggleLeft, ToggleRight,
   Sliders, SlidersHorizontal, SlidersVertical, Edit2, X, Trash, Plus
@@ -501,7 +501,7 @@ export default function Dashboard() {
 
   // Advanced Face Enrollment States
   const [enrolledPeople, setEnrolledPeople] = useState<any[]>([]);
-  const [enrollTab, setEnrollTab] = useState<"directory" | "guided" | "folder" | "import_json">("directory");
+  const [enrollTab, setEnrollTab] = useState<"directory" | "guided" | "folder" | "upload" | "import_json">("directory");
   const [guidedName, setGuidedName] = useState("");
   const [guidedPid, setGuidedPid] = useState("");
   const [guidedProgress, setGuidedProgress] = useState<Record<string, boolean>>({});
@@ -510,6 +510,10 @@ export default function Dashboard() {
   const [importName, setImportName] = useState("");
   const [importFolder, setImportFolder] = useState("");
   const [importLog, setImportLog] = useState<string[]>([]);
+  const [uploadName, setUploadName] = useState("");
+  const [uploadFiles, setUploadFiles] = useState<FileList | null>(null);
+  const [uploadLoading, setUploadLoading] = useState(false);
+  const [uploadLog, setUploadLog] = useState<string[]>([]);
   const [settingsEnrollName, setSettingsEnrollName] = useState("");
   const [settingsEnrollFolder, setSettingsEnrollFolder] = useState("");
   const [settingsEnrollLoading, setSettingsEnrollLoading] = useState(false);
@@ -1010,8 +1014,8 @@ export default function Dashboard() {
     }
   };
 
-  // Advanced Face Enrollment functions & effects
-  const POSES = ["front", "left", "right", "slight_left", "slight_right", "up", "down", "neutral", "smiling", "glasses", "no_glasses"];
+  // Advanced Object Enrollment functions & effects
+  const POSES = ["front", "back", "left", "right", "top", "bottom", "left_45", "right_45"];
 
   const loadEnrolledPeople = useCallback(async () => {
     try {
@@ -1140,6 +1144,59 @@ export default function Dashboard() {
       setImportLog(prev => [...prev, `✗ Network error during import: ${err.message}`]);
     } finally {
       setImportLoading(false);
+    }
+  };
+
+  const fileToBase64 = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = error => reject(error);
+    });
+  };
+
+  const handleFileUpload = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!uploadName.trim() || !uploadFiles || uploadFiles.length === 0) return;
+    setUploadLoading(true);
+    setUploadLog([`Converting images and uploading...`]);
+    try {
+      const base64Images = await Promise.all(
+        Array.from(uploadFiles).map(file => fileToBase64(file))
+      );
+      setUploadLog(prev => [...prev, `Uploading and enrolling ${base64Images.length} image files...`]);
+      
+      const res = await fetch(`${API}/api/enroll/upload`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: uploadName, images: base64Images })
+      });
+      const data = await res.json();
+      if (res.ok && data.status === "ok") {
+        setUploadLog(prev => [
+          ...prev,
+          `✓ Successfully uploaded and enrolled ${data.name} (ID: ${data.pid})`,
+          `✓ Accepted ${data.accepted_count} images:`,
+          ...data.accepted_files.map((f: string) => `- Enrolled: ${f}`)
+        ]);
+        if (data.rejected_reasons && data.rejected_reasons.length > 0) {
+          setUploadLog(prev => [...prev, ...data.rejected_reasons.map((r: string) => `- Skipped: ${r}`)]);
+        }
+        alert(`Object Enrollment successful!\nSubject: ${data.name}\nAccepted: ${data.accepted_count} images.`);
+        setUploadName("");
+        setUploadFiles(null);
+        if (fileInputRef.current) fileInputRef.current.value = "";
+        loadEnrolledPeople();
+      } else {
+        setUploadLog(prev => [...prev, `✗ Upload failed: ${data.message}`]);
+        alert("Upload failed: " + data.message);
+      }
+    } catch (err: any) {
+      setUploadLog(prev => [...prev, `✗ Network error during upload: ${err.message}`]);
+      alert("Network error: " + err.message);
+    } finally {
+      setUploadLoading(false);
     }
   };
 
@@ -2068,7 +2125,7 @@ export default function Dashboard() {
                   <div className="flex items-center gap-3">
                     <UserPlus className="text-gold-accent animate-pulse" size={20} />
                     <h2 className="font-orbitron text-base font-black text-gold-accent tracking-widest uppercase">
-                      OMS ADVANCED FACE ENROLLMENT PROTOCOLS
+                      OMS ADVANCED OBJECT ENROLLMENT PROTOCOLS
                     </h2>
                   </div>
                   <div className="flex gap-2">
@@ -2076,6 +2133,7 @@ export default function Dashboard() {
                       { id: "directory", label: "ENROLLED DIRECTORY" },
                       { id: "guided", label: "GUIDED CAPTURE" },
                       { id: "folder", label: "FOLDER IMPORT" },
+                      { id: "upload", label: "IMAGE UPLOAD" },
                       { id: "import_json", label: "PROFILE IMPORT" }
                     ].map(tab => (
                       <button
@@ -2191,8 +2249,8 @@ export default function Dashboard() {
                         ) : (
                           <div className="flex-1 flex flex-col items-center justify-center text-center gap-3 text-muted py-12">
                             <Database size={32} className="text-muted/40 animate-pulse" />
-                            <span className="font-orbitron text-xs tracking-widest uppercase">No advanced face profiles registered in system</span>
-                            <span className="font-inter text-[10px] text-sec max-w-md">Initialize guided pose enrollment or import local directories to create highly accurate multi-angle identity records.</span>
+                            <span className="font-orbitron text-xs tracking-widest uppercase">No advanced object profiles registered in system</span>
+                            <span className="font-inter text-[10px] text-sec max-w-md">Initialize guided pose enrollment or import local directories to create highly accurate multi-angle object profiles.</span>
                           </div>
                         )}
                       </div>
@@ -2215,12 +2273,12 @@ export default function Dashboard() {
                           >
                             <h4 className="font-orbitron text-xs font-black text-gold-accent tracking-widest text-center uppercase">INITIALIZE SESSION</h4>
                             <div className="flex flex-col gap-1.5">
-                              <label className="font-orbitron text-[9px] text-sec font-bold tracking-wider">TARGET NAME</label>
+                              <label className="font-orbitron text-[9px] text-sec font-bold tracking-wider">OBJECT NAME</label>
                               <input
                                 name="guidedNameInput"
                                 type="text"
                                 required
-                                placeholder="e.g. John Doe"
+                                placeholder="e.g. Mouse A"
                                 className="glass-premium bg-black/60 border border-white/10 text-white font-mono text-sm px-4 py-3 rounded-xl outline-none focus:border-gold-accent transition-colors"
                               />
                             </div>
@@ -2260,17 +2318,14 @@ export default function Dashboard() {
                                   {POSES[guidedActivePoseIdx] ? POSES[guidedActivePoseIdx].replace("_", " ") : "ALL POSES CAPTURED"}
                                 </h3>
                                 <p className="font-inter text-[9.5px] text-sec max-w-xs mt-1">
-                                  {POSES[guidedActivePoseIdx] === "front" && "Look straight into the camera lens with a neutral face."}
-                                  {POSES[guidedActivePoseIdx] === "left" && "Turn your head to look directly towards your left side."}
-                                  {POSES[guidedActivePoseIdx] === "right" && "Turn your head to look directly towards your right side."}
-                                  {POSES[guidedActivePoseIdx] === "slight_left" && "Rotate head slightly towards the left angle."}
-                                  {POSES[guidedActivePoseIdx] === "slight_right" && "Rotate head slightly towards the right angle."}
-                                  {POSES[guidedActivePoseIdx] === "up" && "Tilt your face slightly upwards towards the ceiling."}
-                                  {POSES[guidedActivePoseIdx] === "down" && "Tilt your face slightly downwards towards the floor."}
-                                  {POSES[guidedActivePoseIdx] === "neutral" && "Hold a natural, relaxed neutral expression."}
-                                  {POSES[guidedActivePoseIdx] === "smiling" && "Give a clear smiling expression showing teeth if natural."}
-                                  {POSES[guidedActivePoseIdx] === "glasses" && "Wear glasses if you wear them, otherwise hold expression."}
-                                  {POSES[guidedActivePoseIdx] === "no_glasses" && "Remove glasses if wearing, otherwise hold expression."}
+                                  {POSES[guidedActivePoseIdx] === "front" && "Position the object facing directly towards the camera."}
+                                  {POSES[guidedActivePoseIdx] === "back" && "Turn the object to show its back side to the camera."}
+                                  {POSES[guidedActivePoseIdx] === "left" && "Turn the object 90 degrees to show its left side."}
+                                  {POSES[guidedActivePoseIdx] === "right" && "Turn the object 90 degrees to show its right side."}
+                                  {POSES[guidedActivePoseIdx] === "top" && "Tilt the object to show its top side."}
+                                  {POSES[guidedActivePoseIdx] === "bottom" && "Tilt the object to show its bottom side."}
+                                  {POSES[guidedActivePoseIdx] === "left_45" && "Turn the object 45 degrees towards the left."}
+                                  {POSES[guidedActivePoseIdx] === "right_45" && "Turn the object 45 degrees towards the right."}
                                 </p>
                               </div>
 
@@ -2383,13 +2438,13 @@ export default function Dashboard() {
                         <h4 className="font-orbitron text-xs font-black text-gold-accent tracking-widest uppercase text-center mb-2">FOLDER SCAN SPECIFICATION</h4>
                         
                         <div className="flex flex-col gap-1.5">
-                          <label className="font-orbitron text-[9px] text-sec font-bold tracking-wider">TARGET PERSON NAME</label>
+                          <label className="font-orbitron text-[9px] text-sec font-bold tracking-wider">TARGET OBJECT NAME</label>
                           <input
                             type="text"
                             required
                             value={importName}
                             onChange={(e) => setImportName(e.target.value)}
-                            placeholder="e.g. PRAJAN"
+                            placeholder="e.g. Mouse A"
                             className="glass-premium bg-black/60 border border-white/10 text-white font-mono text-xs px-4 py-3 rounded-xl outline-none focus:border-gold-accent transition-colors"
                           />
                         </div>
@@ -2434,6 +2489,70 @@ export default function Dashboard() {
                               </p>
                             ))}
                             {importLog.length === 0 && <p className="text-muted">// Ready. Specify name and path to execute import scanning.</p>}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Pane 3b: Image Upload */}
+                  {enrollTab === "upload" && (
+                    <div className="grid grid-cols-2 gap-5 h-full min-h-0">
+                      {/* Left: Input Form */}
+                      <form onSubmit={handleFileUpload} className="glass-premium p-5 flex flex-col min-h-0 bg-black/20 gap-4 justify-center" style={{ borderRadius: 16 }}>
+                        <h4 className="font-orbitron text-xs font-black text-gold-accent tracking-widest uppercase text-center mb-2">IMAGE FILE UPLOAD</h4>
+                        
+                        <div className="flex flex-col gap-1.5">
+                          <label className="font-orbitron text-[9px] text-sec font-bold tracking-wider">OBJECT NAME</label>
+                          <input
+                            type="text"
+                            required
+                            value={uploadName}
+                            onChange={(e) => setUploadName(e.target.value)}
+                            placeholder="e.g. Mouse A"
+                            className="glass-premium bg-black/60 border border-white/10 text-white font-mono text-xs px-4 py-3 rounded-xl outline-none focus:border-gold-accent transition-colors"
+                          />
+                        </div>
+
+                        <div className="flex flex-col gap-1.5">
+                          <label className="font-orbitron text-[9px] text-sec font-bold tracking-wider">SELECT OBJECT IMAGES (MAX 8)</label>
+                          <input
+                            type="file"
+                            multiple
+                            accept="image/*"
+                            onChange={(e) => setUploadFiles(e.target.files)}
+                            className="glass-premium bg-black/60 border border-white/10 text-white font-mono text-xs px-4 py-3 rounded-xl outline-none focus:border-gold-accent transition-colors file:bg-gold/10 file:border-none file:text-gold-accent file:font-orbitron file:text-[9px] file:font-bold file:px-2.5 file:py-1 file:rounded-lg"
+                          />
+                        </div>
+
+                        <button
+                          type="submit"
+                          disabled={uploadLoading || !uploadName.trim() || !uploadFiles || uploadFiles.length === 0}
+                          className="btn-gold-luxury py-3 justify-center gap-2 mt-2"
+                        >
+                          {uploadLoading ? (
+                            <RefreshCw size={14} className="animate-spin text-gold-accent" />
+                          ) : (
+                            <Upload size={14} />
+                          )}
+                          UPLOAD & ENROLL OBJECT
+                        </button>
+                      </form>
+
+                      {/* Right: Upload console logs */}
+                      <div className="glass-premium p-5 flex flex-col min-h-0 bg-black/20 justify-between gap-4" style={{ borderRadius: 16 }}>
+                        <h4 className="font-orbitron text-xs font-bold text-gold tracking-widest uppercase flex items-center gap-2 border-b border-white/5 pb-2 mb-1 flex-shrink-0">
+                          <Bot size={14} /> SECURE UPLOAD PROCESSING FEED
+                        </h4>
+
+                        <div className="flex-1 glass-premium bg-black/60 border border-white/5 p-4 flex flex-col font-mono text-[9px] min-h-[220px]" style={{ borderRadius: 12 }}>
+                          <div className="flex-1 overflow-y-auto flex flex-col gap-1 text-sec">
+                            {uploadLog.map((log, i) => (
+                              <p key={i} className={log.startsWith("✓") ? "text-green-oms" : log.startsWith("✗") ? "text-red-400" : log.startsWith("-") ? "text-gold-dim" : "text-muted"}>
+                                {log}
+                              </p>
+                            ))}
+                            {uploadLog.length === 0 && <p className="text-muted">// Ready. Select images and specify object name to execute upload.</p>}
                           </div>
                         </div>
                       </div>
@@ -2699,19 +2818,19 @@ export default function Dashboard() {
                     {/* Advanced Person Enrollment Section */}
                     <div className="glass-premium p-4 col-span-2 flex flex-col gap-3.5" style={{ borderRadius: 16 }}>
                       <h4 className="font-orbitron text-xs font-bold text-gold tracking-widest uppercase flex items-center gap-2">
-                        <UserPlus size={14} /> ADVANCED PERSON ENROLLMENT PROTOCOLS
+                        <UserPlus size={14} /> ADVANCED OBJECT ENROLLMENT PROTOCOLS
                       </h4>
                       <p className="text-[8.5px] text-muted font-inter">
-                        Enroll a new identity using SFace multi-angle profiles. Provide the target's name and local folder path. Minimum required poses: Front, Left, Right, Up.
+                        Enroll a new physical object. Provide the object's name and local folder path.
                       </p>
                       <div className="grid grid-cols-2 gap-4">
                         <div className="flex flex-col gap-1.5">
-                          <label className="font-orbitron text-[9px] text-sec font-bold tracking-wider">TARGET SUBJECT NAME</label>
+                          <label className="font-orbitron text-[9px] text-sec font-bold tracking-wider">TARGET OBJECT NAME</label>
                           <input
                             type="text"
                             value={settingsEnrollName}
                             onChange={(e) => setSettingsEnrollName(e.target.value)}
-                            placeholder="e.g. PRAJAN"
+                            placeholder="e.g. Mouse A"
                             className="glass-premium bg-black/50 border border-white/10 text-white font-mono text-xs px-4 py-2.5 rounded-lg outline-none focus:border-gold-accent transition-colors"
                           />
                         </div>
@@ -2747,7 +2866,7 @@ export default function Dashboard() {
                           ) : (
                             <UserPlus size={12} />
                           )}
-                          ENROLL NEW IDENTITY
+                          ENROLL NEW OBJECT
                         </button>
                       </div>
                     </div>

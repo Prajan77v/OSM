@@ -17,7 +17,7 @@ import threading
 import time
 import webbrowser
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, List
 
 import cv2
 import numpy as np
@@ -34,12 +34,18 @@ else:
     WORKING_DIR = Path(__file__).parent.resolve()
     BUNDLE_DIR = Path(__file__).parent.resolve()
 
+# Add directories to sys.path so embedded/portable python can import local modules
+if str(WORKING_DIR) not in sys.path:
+    sys.path.insert(0, str(WORKING_DIR))
+if str(BUNDLE_DIR) not in sys.path:
+    sys.path.insert(0, str(BUNDLE_DIR))
+
 # Module-level logger (fixes BUG-03: undefined app_log in rename_camera)
 app_log = logging.getLogger("OMS.app")
 
 # FastAPI imports
 try:
-    from fastapi import FastAPI, Response, Request
+    from fastapi import FastAPI, Response, Request, Form, File, UploadFile
     from fastapi.responses import StreamingResponse, JSONResponse, HTMLResponse
     from fastapi.staticfiles import StaticFiles
     from fastapi.middleware.cors import CORSMiddleware
@@ -781,7 +787,7 @@ def create_app() -> "FastAPI":
                 sv._save_db_json()
 
             # File I/O AFTER releasing _fdb_lock (H14)
-            known_dir = WORKING_DIR / "faces" / "known"
+            known_dir = WORKING_DIR / "objects" / "known"
             if known_dir.exists():
                 for fp in known_dir.iterdir():
                     if fp.is_file() and fp.stem.lower() == name.lower():
@@ -1018,7 +1024,7 @@ def create_app() -> "FastAPI":
                                     pass
 
                         if not photo_copied:
-                            captured_dir = WORKING_DIR / "faces/captured"
+                            captured_dir = WORKING_DIR / "objects/captured"
                             if captured_dir.exists():
                                 matches = sorted(list(captured_dir.glob(f"{pid}_*.jpg")), key=os.path.getmtime, reverse=True)
                                 if matches:
@@ -1069,14 +1075,14 @@ def create_app() -> "FastAPI":
                         # FE-03: Call preload_known AFTER releasing _fdb_lock
                         # (we'll call it after the with block)
 
-                        if "Intruder" in old_name:
+                        if "Intruder" in old_name or "Object-" in old_name:
                             any_intruders = False
                             with _cameras_lock:
                                 cams_s2 = list(_cameras)
                             for cs in cams_s2:
                                 for active_pid in getattr(cs, "present_pids", set()):
                                     p_name = sv.faces_db.get(active_pid, {}).get("name", "")
-                                    if "Intruder" in p_name:
+                                    if "Intruder" in p_name or "Object-" in p_name:
                                         any_intruders = True
                                         break
                                 if any_intruders:
@@ -1452,8 +1458,8 @@ def create_app() -> "FastAPI":
         return JSONResponse({"status": "ok", "message": f"Camera '{cam_name}' removed successfully"})
 
 
-    # ─── Advanced Face Enrollment APIs ─────────────────────────────────────────
-    POSES = ["front", "left", "right", "slight_left", "slight_right", "up", "down", "neutral", "smiling", "glasses", "no_glasses"]
+    # ─── Object Enrollment APIs ─────────────────────────────────────────────────
+    POSES = ["front", "back", "left", "right", "top", "bottom", "angle_left", "angle_right"]
 
     @app.post("/api/enroll/start")
     async def enroll_start(request: Request):
@@ -1482,7 +1488,7 @@ def create_app() -> "FastAPI":
             else:
                 pid = sv._new_pid()
 
-        enroll_dir = WORKING_DIR / "faces" / "enrolled" / pid
+        enroll_dir = WORKING_DIR / "objects" / "enrolled" / pid
         enroll_dir.mkdir(parents=True, exist_ok=True)
 
         return JSONResponse({"status": "ok", "pid": pid, "name": name, "poses": POSES})
@@ -1497,7 +1503,7 @@ def create_app() -> "FastAPI":
         if not pid or not re.match(r'^[A-Za-z0-9_\-]{1,64}$', pid):
             return JSONResponse({"status": "error", "message": "Invalid pid"}, status_code=400)
 
-        enroll_dir = WORKING_DIR / "faces" / "enrolled" / pid
+        enroll_dir = WORKING_DIR / "objects" / "enrolled" / pid
         progress = {}
         for pose in POSES:
             img_path = enroll_dir / f"{pose}.jpg"
@@ -1512,19 +1518,18 @@ def create_app() -> "FastAPI":
 
     @app.post("/api/enroll/capture/{pid}/{pose}")
     async def enroll_capture(pid: str, pose: str):
-        """Capture a pose for enrollment."""
+        """Capture an object viewpoint for enrollment."""
         if pose not in POSES:
             return JSONResponse({"status": "error", "message": f"Invalid pose '{pose}'"}, status_code=400)
 
-        # S4: Validate pid
         if not pid or not re.match(r'^[A-Za-z0-9_\-]{1,64}$', pid):
             return JSONResponse({"status": "error", "message": "Invalid pid"}, status_code=400)
 
         sv = _get_sv()
         if not sv:
             return JSONResponse({"status": "error", "message": "OMS Engine not running"}, status_code=500)
-        if not getattr(sv, "YUNET_AVAILABLE", False):
-            return JSONResponse({"status": "error", "message": "YuNet face detector is not loaded"}, status_code=500)
+        if not getattr(sv, "OBJECT_ENGINE_AVAILABLE", False):
+            return JSONResponse({"status": "error", "message": "Object recognition engine is not loaded"}, status_code=500)
 
         active_cs = None
         with _cameras_lock:
@@ -1543,79 +1548,54 @@ def create_app() -> "FastAPI":
         if frame is None:
             return JSONResponse({"status": "error", "message": "Camera did not yield a valid frame."}, status_code=400)
 
-        # EH-05: Use timeout on _yunet_lock to avoid blocking uvicorn worker
         h, w = frame.shape[:2]
-        acquired = sv._yunet_lock.acquire(timeout=3.0)
-        if not acquired:
-            return JSONResponse({"status": "error", "message": "Face detector busy, please retry."}, status_code=503)
-        try:
-            sv._yunet_detector.setInputSize((w, h))
-            _, faces = sv._yunet_detector.detect(frame)
-        finally:
-            sv._yunet_lock.release()
 
-        if faces is None or len(faces) == 0:
-            return JSONResponse({"status": "error", "message": "No face detected. Please look directly at the camera."}, status_code=400)
+        # Crop the largest YOLO-detected bounding box (excluding person boxes) in the frame
+        crop = None
+        dets = list(getattr(active_cs, "latest_dets", []))
+        non_person_dets = [d for d in dets if d.get("label") != "person"]
+        if non_person_dets:
+            best = max(non_person_dets, key=lambda d: (d['box'][2]-d['box'][0])*(d['box'][3]-d['box'][1]))
+            x1, y1, x2, y2 = best['box']
+            pad = 10
+            crop = frame[max(0, y1-pad):min(h, y2+pad),
+                         max(0, x1-pad):min(w, x2+pad)]
+            if crop.size == 0:
+                crop = None
+        else:
+            # Fallback: Crop the center 50% of the frame where objects are typically presented
+            cx, cy = w // 2, h // 2
+            cw, ch = int(w * 0.5), int(h * 0.5)
+            x1, y1 = cx - cw // 2, cy - ch // 2
+            x2, y2 = x1 + cw, y1 + ch
+            crop = frame[y1:y2, x1:x2]
+            if crop.size == 0:
+                crop = None
 
-        person_box = None
-        for d in getattr(active_cs, "latest_dets", []):
-            if d.get("pid") == pid:
-                person_box = d["box"]
-                break
+        if crop is None:
+            return JSONResponse({"status": "error", "message": "No physical object or frame center could be acquired."}, status_code=400)
 
-        target_face = None
-        if person_box:
-            px1, py1, px2, py2 = person_box
-            sx = w / float(sv.Config.FRAME_W)
-            sy = h / float(sv.Config.FRAME_H)
-            px1_f = int(px1 * sx); py1_f = int(py1 * sy)
-            px2_f = int(px2 * sx); py2_f = int(py2 * sy)
-            matched_faces = []
-            for face in faces:
-                fx, fy, fw, fh = int(face[0]), int(face[1]), int(face[2]), int(face[3])
-                fcx = fx + fw // 2; fcy = fy + fh // 2
-                if px1_f <= fcx <= px2_f and py1_f <= fcy <= py2_f:
-                    matched_faces.append(face)
-            if len(matched_faces) == 1:
-                target_face = matched_faces[0]
-            elif len(matched_faces) > 1:
-                target_face = max(matched_faces, key=lambda f: int(f[2]) * int(f[3]))
-
-        if target_face is None:
-            target_face = max(faces, key=lambda f: int(f[2]) * int(f[3]))
-
-        face = target_face
-        fx, fy, fw, fh = int(face[0]), int(face[1]), int(face[2]), int(face[3])
-        conf = float(face[14])
-
-        if conf < 0.70:
-            return JSONResponse({"status": "error", "message": f"Face detection confidence too low ({conf:.0%}). Better lighting required."}, status_code=400)
-        if fw < 80 or fh < 80:
-            return JSONResponse({"status": "error", "message": f"Face size too small ({fw}x{fh}px). Move closer (minimum 80x80px)."}, status_code=400)
-
-        x1 = max(0, fx); y1 = max(0, fy)
-        x2 = min(w, fx + fw); y2 = min(h, fy + fh)
-        crop = frame[y1:y2, x1:x2]
-
-        if crop.size == 0:
-            return JSONResponse({"status": "error", "message": "Cropped region is empty."}, status_code=400)
-
+        # Blur quality check
         gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
         blur_score = cv2.Laplacian(gray, cv2.CV_64F).var()
-        if blur_score < 30.0:
-            return JSONResponse({"status": "error", "message": f"Image too blurry (score: {blur_score:.1f}). Stay still during capture."}, status_code=400)
+        if blur_score < 20.0:
+            return JSONResponse({"status": "error",
+                                 "message": f"Image too blurry (score: {blur_score:.1f}). Hold the object still."},
+                                status_code=400)
 
-        enroll_dir = WORKING_DIR / "faces" / "enrolled" / pid
+        enroll_dir = WORKING_DIR / "objects" / "enrolled" / pid
         enroll_dir.mkdir(parents=True, exist_ok=True)
         img_path = enroll_dir / f"{pose}.jpg"
         cv2.imwrite(str(img_path), crop)
 
-        return JSONResponse({"status": "ok", "message": f"Pose '{pose}' captured successfully",
-                             "blur_score": blur_score, "face_size": f"{fw}x{fh}px", "confidence": conf})
+        obj_size = f"{crop.shape[1]}x{crop.shape[0]}px"
+        return JSONResponse({"status": "ok",
+                             "message": f"Pose '{pose}' captured successfully",
+                             "blur_score": blur_score, "object_size": obj_size})
 
     @app.post("/api/enroll/save/{pid}")
     async def enroll_save(pid: str, request: Request):
-        """Save enrollment session and build face embeddings. (C1+C2+C3 fixes)"""
+        """Save object enrollment session and build embeddings."""
         try:
             body = await request.json()
         except Exception:
@@ -1627,7 +1607,6 @@ def create_app() -> "FastAPI":
         if not name:
             return JSONResponse({"status": "error", "message": "Name is required to save profile"}, status_code=400)
 
-        # S4: Validate pid
         if not pid or not re.match(r'^[A-Za-z0-9_\-]{1,64}$', pid):
             return JSONResponse({"status": "error", "message": "Invalid pid"}, status_code=400)
 
@@ -1635,9 +1614,10 @@ def create_app() -> "FastAPI":
         if not sv:
             return JSONResponse({"status": "error", "message": "OMS Engine not running"}, status_code=500)
 
-        enroll_dir = WORKING_DIR / "faces" / "enrolled" / pid
+        enroll_dir = WORKING_DIR / "objects" / "enrolled" / pid
         if not enroll_dir.exists():
-            return JSONResponse({"status": "error", "message": f"No enrollment session directory found for {pid}"}, status_code=400)
+            return JSONResponse({"status": "error",
+                                 "message": f"No enrollment session directory found for {pid}"}, status_code=400)
 
         encodings = []
         first_pose_img = None
@@ -1649,39 +1629,22 @@ def create_app() -> "FastAPI":
                 if img is not None:
                     if first_pose_img is None:
                         first_pose_img = img
-                    h, w = img.shape[:2]
-                    if w >= 30 and h >= 30:
-                        if w < 112 or h < 112:
-                            img = cv2.resize(img, (128, 128), interpolation=cv2.INTER_CUBIC)
-                            h, w = 128, 128
-                        # EH-05: Timeout on yunet lock
-                        acquired = sv._yunet_lock.acquire(timeout=3.0)
-                        if not acquired:
-                            continue
-                        try:
-                            sv._yunet_detector.setInputSize((w, h))
-                            _, faces = sv._yunet_detector.detect(img)
-                            if faces is not None and len(faces) > 0:
-                                aligned = sv._sface_recognizer.alignCrop(img, faces[0])
-                                feat = sv._sface_recognizer.feature(aligned)
-                                if feat is not None:
-                                    encodings.append(feat[0])
-                        finally:
-                            sv._yunet_lock.release()
+                    enc = sv._object_encode(img)
+                    if enc is not None:
+                        encodings.append(enc)
 
         if not encodings:
-            return JSONResponse({"status": "error", "message": "No valid face encodings could be extracted."}, status_code=400)
+            return JSONResponse({"status": "error",
+                                 "message": "No valid object encodings could be extracted."}, status_code=400)
 
-        known_faces_dir = WORKING_DIR / "faces" / "known"
+        known_faces_dir = WORKING_DIR / "objects" / "known"
         known_faces_dir.mkdir(parents=True, exist_ok=True)
-        photo_rel = f"faces/known/{pid}.jpg"
+        photo_rel = f"objects/known/{pid}.jpg"
         photo_path = WORKING_DIR / photo_rel
 
         if first_pose_img is not None:
             cv2.imwrite(str(photo_path), first_pose_img)
 
-        # C2: Convert numpy arrays to list for JSON serialization
-        # C3: Only hold _fdb_lock, update _yunet_enc_cache separately after
         encodings_list = [e.tolist() for e in encodings]
 
         with sv._fdb_lock:
@@ -1693,14 +1656,13 @@ def create_app() -> "FastAPI":
                 "visit_count": 0,
                 "threat_level": "GREEN",
                 "photo": photo_rel,
-                "encoding": encodings_list[0],    # C2: list, not numpy
-                "encodings": encodings_list        # C2: list, not numpy
+                "encoding":  encodings_list[0],
+                "encodings": encodings_list
             }
             sv._save_db_json()
 
-        # C3: Update yunet cache AFTER releasing _fdb_lock (fixes ABBA deadlock)
-        with sv._yunet_lock:
-            sv._yunet_enc_cache[pid] = encodings  # Keep numpy in memory cache
+        with sv._obj_lock:
+            sv._obj_enc_cache[pid] = encodings
 
         try:
             sv.db_log_person(pid, name, True, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
@@ -1712,7 +1674,7 @@ def create_app() -> "FastAPI":
 
     @app.post("/api/enroll/import")
     async def enroll_import(request: Request):
-        """Import face profiles from a folder. (C1 fix + S3 path validation + M14 pose fix)"""
+        """Import object profiles from a folder of images."""
         try:
             body = await request.json()
         except Exception:
@@ -1732,13 +1694,14 @@ def create_app() -> "FastAPI":
             try:
                 folder_path.relative_to(working_dir_resolved)
             except ValueError:
-                return JSONResponse({"status": "error", "message": "Access denied. Folder path must be under the application working directory."}, status_code=403)
+                return JSONResponse({"status": "error",
+                                     "message": "Access denied. Folder path must be under the application working directory."}, status_code=403)
         except Exception:
             return JSONResponse({"status": "error", "message": "Invalid folder path"}, status_code=400)
 
-        # Allow paths that exist and are directories
         if not folder_path.exists() or not folder_path.is_dir():
-            return JSONResponse({"status": "error", "message": f"Folder '{folder_path_str}' does not exist"}, status_code=400)
+            return JSONResponse({"status": "error",
+                                 "message": f"Folder '{folder_path_str}' does not exist"}, status_code=400)
 
         sv = _get_sv()
         if not sv:
@@ -1748,9 +1711,10 @@ def create_app() -> "FastAPI":
         img_files = [f for f in folder_path.iterdir() if f.is_file() and f.suffix.lower() in valid_exts]
 
         if not img_files:
-            return JSONResponse({"status": "error", "message": f"No valid image files found in folder"}, status_code=400)
+            return JSONResponse({"status": "error",
+                                 "message": "No valid image files found in folder"}, status_code=400)
 
-        # M14: Map to canonical POSES list instead of custom mapping
+        # Map filenames to POSES based on keyword matching
         mapped: dict = {}
         for f in img_files:
             name_lower = f.stem.lower()
@@ -1762,160 +1726,47 @@ def create_app() -> "FastAPI":
             if matched_pose and matched_pose not in mapped:
                 mapped[matched_pose] = f
 
-        required_poses = ["front", "left", "right"]
-        missing_required = [p for p in required_poses if p not in mapped]
-        if missing_required:
-            missing_str = ", ".join(p.capitalize() for p in missing_required)
-            return JSONResponse({
-                "status": "error",
-                "message": f"Missing required poses: {missing_str}. Filenames must contain pose keywords (front, left, right, up, etc.)."
-            }, status_code=400)
+        # Accept any 1+ images even without pose keyword in filename
+        if not mapped:
+            for i, f in enumerate(img_files[:len(POSES)]):
+                mapped[POSES[i]] = f
 
         with sv._fdb_lock:
             pid = sv._new_pid()
 
-        enroll_dir = WORKING_DIR / "faces" / "enrolled" / pid
+        enroll_dir = WORKING_DIR / "objects" / "enrolled" / pid
         enroll_dir.mkdir(parents=True, exist_ok=True)
 
         encodings = []
         accepted_files = []
         rejected_reasons = []
-        photo_scores = []
         first_pose_img = None
 
         for pose, f_path in mapped.items():
-            is_required = pose in required_poses
             img = cv2.imread(str(f_path))
             if img is None:
-                err_msg = f"{f_path.name}: Failed to read image"
-                if is_required:
-                    try:
-                        import shutil
-                        shutil.rmtree(str(enroll_dir))
-                    except Exception:
-                        pass
-                    return JSONResponse({"status": "error", "message": f"Required photo failed: {err_msg}"}, status_code=400)
-                rejected_reasons.append(err_msg)
+                rejected_reasons.append(f"{f_path.name}: Failed to read image")
                 continue
 
-            h, w = img.shape[:2]
-            acquired = sv._yunet_lock.acquire(timeout=5.0)
-            if not acquired:
-                rejected_reasons.append(f"{f_path.name}: Detector busy")
-                continue
-            try:
-                sv._yunet_detector.setInputSize((w, h))
-                _, faces = sv._yunet_detector.detect(img)
-            finally:
-                sv._yunet_lock.release()
-
-            if faces is None or len(faces) == 0:
-                err_msg = f"{f_path.name}: No face detected"
-                if is_required:
-                    try:
-                        import shutil
-                        shutil.rmtree(str(enroll_dir))
-                    except Exception:
-                        pass
-                    return JSONResponse({"status": "error", "message": f"Required photo failed: {err_msg}"}, status_code=400)
-                rejected_reasons.append(err_msg)
-                continue
-
-            face = max(faces, key=lambda f: int(f[2]) * int(f[3]))
-            fx, fy, fw, fh = int(face[0]), int(face[1]), int(face[2]), int(face[3])
-            conf = float(face[14])
-
-            if conf < 0.70 or fw < 80 or fh < 80:
-                err_msg = f"{f_path.name}: Quality checks failed (conf={conf:.0%}, size={fw}x{fh})"
-                if is_required:
-                    try:
-                        import shutil
-                        shutil.rmtree(str(enroll_dir))
-                    except Exception:
-                        pass
-                    return JSONResponse({"status": "error", "message": f"Required photo failed: {err_msg}"}, status_code=400)
-                rejected_reasons.append(err_msg)
-                continue
-
-            x1, y1 = max(0, fx), max(0, fy)
-            x2, y2 = min(w, fx + fw), min(h, fy + fh)
-            crop = img[y1:y2, x1:x2]
-
-            gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+            # Blur check only
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
             blur_score = cv2.Laplacian(gray, cv2.CV_64F).var()
-            if blur_score < 30.0:
-                err_msg = f"{f_path.name}: Too blurry (score: {blur_score:.1f})"
-                if is_required:
-                    try:
-                        import shutil
-                        shutil.rmtree(str(enroll_dir))
-                    except Exception:
-                        pass
-                    return JSONResponse({"status": "error", "message": f"Required photo failed: {err_msg}"}, status_code=400)
-                rejected_reasons.append(err_msg)
+            if blur_score < 15.0:
+                rejected_reasons.append(f"{f_path.name}: Too blurry (score: {blur_score:.1f})")
                 continue
 
-            h_crop, w_crop = crop.shape[:2]
-            enhanced = crop
-            try:
-                ycrcb = cv2.cvtColor(enhanced, cv2.COLOR_BGR2YCrCb)
-                channels = list(cv2.split(ycrcb))
-                clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-                channels[0] = clahe.apply(channels[0])
-                ycrcb = cv2.merge(channels)
-                enhanced = cv2.cvtColor(ycrcb, cv2.COLOR_YCrCb2BGR)
-            except Exception:
-                pass
-
-            if w_crop < 112 or h_crop < 112:
-                try:
-                    enhanced = cv2.resize(enhanced, (128, 128), interpolation=cv2.INTER_LANCZOS4)
-                    kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]], dtype=np.float32)
-                    enhanced = cv2.filter2D(enhanced, -1, kernel)
-                    h_crop, w_crop = 128, 128
-                except Exception:
-                    pass
-
-            acquired = sv._yunet_lock.acquire(timeout=5.0)
-            if not acquired:
-                rejected_reasons.append(f"{f_path.name}: Detector busy on encode")
-                continue
-            try:
-                sv._yunet_detector.setInputSize((w_crop, h_crop))
-                _, faces_new = sv._yunet_detector.detect(enhanced)
-                if faces_new is not None and len(faces_new) > 0:
-                    aligned = sv._sface_recognizer.alignCrop(enhanced, faces_new[0])
-                else:
-                    aligned = sv._sface_recognizer.alignCrop(img, face)
-                feat = sv._sface_recognizer.feature(aligned)
-            finally:
-                sv._yunet_lock.release()
-
-            if feat is None:
-                err_msg = f"{f_path.name}: Feature embedding extraction failed"
-                if is_required:
-                    try:
-                        import shutil
-                        shutil.rmtree(str(enroll_dir))
-                    except Exception:
-                        pass
-                    return JSONResponse({"status": "error", "message": f"Required photo failed: {err_msg}"}, status_code=400)
-                rejected_reasons.append(err_msg)
+            enc = sv._object_encode(img)
+            if enc is None:
+                rejected_reasons.append(f"{f_path.name}: Feature extraction failed")
                 continue
 
-            curr_enc = feat[0]
             img_path = enroll_dir / f"{pose}.jpg"
-            cv2.imwrite(str(img_path), crop)
-            encodings.append(curr_enc)
+            cv2.imwrite(str(img_path), img)
+            encodings.append(enc)
             accepted_files.append(f"{pose}: {f_path.name}")
 
             if first_pose_img is None:
-                first_pose_img = crop
-
-            conf_q = max(0.0, min(1.0, (conf - 0.7) / 0.3)) * 40.0 + 60.0
-            size_q = max(0.0, min(1.0, (fw - 80) / 320.0)) * 40.0 + 60.0
-            blur_q = max(0.0, min(1.0, (blur_score - 30.0) / 170.0)) * 40.0 + 60.0
-            photo_scores.append((conf_q + size_q + blur_q) / 3.0)
+                first_pose_img = img
 
         if not encodings:
             try:
@@ -1923,18 +1774,16 @@ def create_app() -> "FastAPI":
                 shutil.rmtree(str(enroll_dir))
             except Exception:
                 pass
-            return JSONResponse({"status": "error", "message": "No valid SFace encodings could be extracted."}, status_code=400)
+            return JSONResponse({"status": "error",
+                                 "message": "No valid object encodings could be extracted."}, status_code=400)
 
-        overall_quality = sum(photo_scores) / len(photo_scores) if photo_scores else 0.0
-
-        photo_rel = f"faces/known/{pid}.jpg"
+        photo_rel = f"objects/known/{pid}.jpg"
         photo_path = WORKING_DIR / photo_rel
-        known_faces_dir = WORKING_DIR / "faces" / "known"
+        known_faces_dir = WORKING_DIR / "objects" / "known"
         known_faces_dir.mkdir(parents=True, exist_ok=True)
         if first_pose_img is not None:
             cv2.imwrite(str(photo_path), first_pose_img)
 
-        # C2+C3: Convert to list, separate lock acquisitions
         encodings_list = [e.tolist() for e in encodings]
 
         with sv._fdb_lock:
@@ -1944,16 +1793,14 @@ def create_app() -> "FastAPI":
                 "last_seen": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "visit_count": 0, "threat_level": "GREEN",
                 "photo": photo_rel,
-                "encoding": encodings_list[0],
+                "encoding":  encodings_list[0],
                 "encodings": encodings_list,
-                "quality_score": overall_quality,
                 "enrolled_poses": list(mapped.keys())
             }
             sv._save_db_json()
 
-        # C3: yunet cache update after _fdb_lock released
-        with sv._yunet_lock:
-            sv._yunet_enc_cache[pid] = encodings
+        with sv._obj_lock:
+            sv._obj_enc_cache[pid] = encodings
 
         try:
             sv.db_log_person(pid, name, True, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
@@ -1961,8 +1808,119 @@ def create_app() -> "FastAPI":
             app_log.warning(f"SQLite sync error on import: {e}")
 
         return JSONResponse({"status": "ok", "pid": pid, "name": name,
-                             "accepted_count": len(accepted_files), "quality_score": overall_quality,
-                             "accepted_files": accepted_files, "rejected_reasons": rejected_reasons})
+                             "accepted_count": len(accepted_files),
+                             "accepted_files": accepted_files,
+                             "rejected_reasons": rejected_reasons})
+
+    @app.post("/api/enroll/upload")
+    async def enroll_upload(request: Request):
+        """Upload base64 encoded object images to register a new object profile."""
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+
+        name = str(body.get("name", "")).strip()
+        images = body.get("images", [])
+
+        if not name:
+            return JSONResponse({"status": "error", "message": "Object name is required"}, status_code=400)
+        if not images:
+            return JSONResponse({"status": "error", "message": "No images provided"}, status_code=400)
+
+        sv = _get_sv()
+        if not sv:
+            return JSONResponse({"status": "error", "message": "OMS Engine not running"}, status_code=500)
+
+        with sv._fdb_lock:
+            pid = sv._new_pid()
+
+        enroll_dir = WORKING_DIR / "objects" / "enrolled" / pid
+        enroll_dir.mkdir(parents=True, exist_ok=True)
+
+        encodings = []
+        accepted_files = []
+        rejected_reasons = []
+        first_pose_img = None
+
+        import base64
+        for i, img_data in enumerate(images[:len(POSES)]):
+            try:
+                # Remove data URL prefix if present
+                if "," in img_data:
+                    img_data = img_data.split(",", 1)[1]
+                contents = base64.b64decode(img_data)
+                nparr = np.frombuffer(contents, np.uint8)
+                img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                if img is None:
+                    rejected_reasons.append(f"Image {i+1}: Failed to decode base64 image")
+                    continue
+
+                # Blur check
+                gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                blur_score = cv2.Laplacian(gray, cv2.CV_64F).var()
+                if blur_score < 15.0:
+                    rejected_reasons.append(f"Image {i+1}: Too blurry (score: {blur_score:.1f})")
+                    continue
+
+                enc = sv._object_encode(img)
+                if enc is None:
+                    rejected_reasons.append(f"Image {i+1}: Feature extraction failed")
+                    continue
+
+                pose = POSES[i]
+                img_path = enroll_dir / f"{pose}.jpg"
+                cv2.imwrite(str(img_path), img)
+                encodings.append(enc)
+                accepted_files.append(f"image_{pose}.jpg")
+                if first_pose_img is None:
+                    first_pose_img = img
+            except Exception as e:
+                rejected_reasons.append(f"Image {i+1}: Error: {e}")
+
+        if not encodings:
+            try:
+                import shutil
+                shutil.rmtree(str(enroll_dir))
+            except:
+                pass
+            return JSONResponse({"status": "error", "message": "No valid object images could be registered. " + "; ".join(rejected_reasons)}, status_code=400)
+
+        known_faces_dir = WORKING_DIR / "objects" / "known"
+        known_faces_dir.mkdir(parents=True, exist_ok=True)
+        photo_rel = f"objects/known/{pid}.jpg"
+        photo_path = WORKING_DIR / photo_rel
+
+        if first_pose_img is not None:
+            cv2.imwrite(str(photo_path), first_pose_img)
+
+        encodings_list = [e.tolist() for e in encodings]
+
+        with sv._fdb_lock:
+            sv.faces_db[pid] = {
+                "name": name, "known": True,
+                "first_seen": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "last_seen": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "visit_count": 0, "threat_level": "GREEN",
+                "photo": photo_rel,
+                "encoding":  encodings_list[0],
+                "encodings": encodings_list,
+                "enrolled_poses": [POSES[i] for i in range(len(encodings))]
+            }
+            sv._save_db_json()
+
+        with sv._obj_lock:
+            sv._obj_enc_cache[pid] = encodings
+
+        try:
+            sv.db_log_person(pid, name, True, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        except Exception as e:
+            app_log.warning(f"SQLite sync error on upload: {e}")
+
+        return JSONResponse({"status": "ok", "pid": pid, "name": name,
+                             "accepted_count": len(accepted_files),
+                             "accepted_files": accepted_files,
+                             "rejected_reasons": rejected_reasons})
 
     @app.get("/api/enroll/people")
     async def enroll_people():
@@ -1977,11 +1935,12 @@ def create_app() -> "FastAPI":
         for pid, d in db_snapshot.items():
             if not d.get("known", False):
                 continue
-            enroll_dir = WORKING_DIR / "faces" / "enrolled" / pid
+            enroll_dir = WORKING_DIR / "objects" / "enrolled" / pid
             img_count = 0
             if enroll_dir.exists():
                 try:
-                    img_count = len([f for f in enroll_dir.iterdir() if f.is_file() and f.suffix.lower() == ".jpg"])
+                    img_count = len([f for f in enroll_dir.iterdir()
+                                     if f.is_file() and f.suffix.lower() == ".jpg"])
                 except Exception:
                     pass
 
@@ -1999,8 +1958,7 @@ def create_app() -> "FastAPI":
 
     @app.post("/api/enroll/rebuild/{pid}")
     async def enroll_rebuild(pid: str):
-        """Rebuild face embeddings from enrolled photos."""
-        # S4: Validate pid
+        """Rebuild object embeddings from enrolled images."""
         if not pid or not re.match(r'^[A-Za-z0-9_\-]{1,64}$', pid):
             return JSONResponse({"status": "error", "message": "Invalid pid"}, status_code=400)
 
@@ -2008,71 +1966,46 @@ def create_app() -> "FastAPI":
         if not sv:
             return JSONResponse({"status": "error", "message": "OMS Engine not running"}, status_code=500)
 
-        enroll_dir = WORKING_DIR / "faces" / "enrolled" / pid
+        enroll_dir = WORKING_DIR / "objects" / "enrolled" / pid
         if not enroll_dir.exists():
-            return JSONResponse({"status": "error", "message": f"No enrolled images folder for {pid}"}, status_code=400)
+            return JSONResponse({"status": "error",
+                                 "message": f"No enrolled images folder for {pid}"}, status_code=400)
 
         encodings = []
-        photo_scores = []
         try:
-            valid_files = [f for f in enroll_dir.iterdir() if f.is_file() and f.suffix.lower() == ".jpg"]
+            valid_files = [f for f in enroll_dir.iterdir()
+                           if f.is_file() and f.suffix.lower() == ".jpg"]
         except Exception as e:
             return JSONResponse({"status": "error", "message": f"Cannot read enroll dir: {e}"}, status_code=500)
 
         for f in valid_files:
             img = cv2.imread(str(f))
             if img is not None:
-                h, w = img.shape[:2]
-                acquired = sv._yunet_lock.acquire(timeout=5.0)
-                if not acquired:
-                    continue
-                try:
-                    sv._yunet_detector.setInputSize((w, h))
-                    _, faces = sv._yunet_detector.detect(img)
-                    if faces is not None and len(faces) > 0:
-                        face = faces[0]
-                        conf = float(face[14])
-                        fw, fh = int(face[2]), int(face[3])
-                        fx1, fy1 = max(0, int(face[0])), max(0, int(face[1]))
-                        fx2, fy2 = min(w, fx1 + fw), min(h, fy1 + fh)
-                        crop = img[fy1:fy2, fx1:fx2]
-                        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-                        blur_score = cv2.Laplacian(gray, cv2.CV_64F).var() if gray.size > 0 else 30.0
-                        conf_q = max(0.0, min(1.0, (conf - 0.7) / 0.3)) * 40.0 + 60.0
-                        size_q = max(0.0, min(1.0, (fw - 80) / 320.0)) * 40.0 + 60.0
-                        blur_q = max(0.0, min(1.0, (blur_score - 30.0) / 170.0)) * 40.0 + 60.0
-                        photo_scores.append((conf_q + size_q + blur_q) / 3.0)
-                        aligned = sv._sface_recognizer.alignCrop(img, face)
-                        feat = sv._sface_recognizer.feature(aligned)
-                        if feat is not None:
-                            encodings.append(feat[0])
-                finally:
-                    sv._yunet_lock.release()
+                enc = sv._object_encode(img)
+                if enc is not None:
+                    encodings.append(enc)
 
         if not encodings:
-            return JSONResponse({"status": "error", "message": "No valid face encodings from saved photos."}, status_code=400)
+            return JSONResponse({"status": "error",
+                                 "message": "No valid object encodings from saved images."}, status_code=400)
 
-        overall_quality = sum(photo_scores) / len(photo_scores) if photo_scores else 0.0
         encodings_list = [e.tolist() for e in encodings]
 
-        # C2+C3: Separate lock acquisitions
         with sv._fdb_lock:
             if pid in sv.faces_db:
                 sv.faces_db[pid]["encodings"] = encodings_list
-                sv.faces_db[pid]["encoding"] = encodings_list[0]
-                sv.faces_db[pid]["quality_score"] = overall_quality
+                sv.faces_db[pid]["encoding"]  = encodings_list[0]
                 sv._save_db_json()
 
-        with sv._yunet_lock:
-            sv._yunet_enc_cache[pid] = encodings
+        with sv._obj_lock:
+            sv._obj_enc_cache[pid] = encodings
 
         return JSONResponse({"status": "ok",
-                             "message": f"Rebuilt {len(encodings)} embeddings for {pid} — Quality: {overall_quality:.1f}%"})
+                             "message": f"Rebuilt {len(encodings)} embeddings for {pid}"})
 
     @app.delete("/api/enroll/profile/{pid}")
     async def enroll_delete(pid: str):
-        """Delete an enrolled profile."""
-        # S4: Validate pid
+        """Delete an enrolled object profile."""
         if not pid or not re.match(r'^[A-Za-z0-9_\-]{1,64}$', pid):
             return JSONResponse({"status": "error", "message": "Invalid pid"}, status_code=400)
 
@@ -2080,16 +2013,15 @@ def create_app() -> "FastAPI":
         if not sv:
             return JSONResponse({"status": "error", "message": "OMS Engine not running"}, status_code=500)
 
-        # C3: Update _fdb_lock and _yunet_lock separately (no nesting)
         with sv._fdb_lock:
             sv.faces_db.pop(pid, None)
             sv._save_db_json()
 
-        with sv._yunet_lock:
-            sv._yunet_enc_cache.pop(pid, None)
+        with sv._obj_lock:
+            sv._obj_enc_cache.pop(pid, None)
 
-        # RC-04: File cleanup after lock release
-        enroll_dir = WORKING_DIR / "faces" / "enrolled" / pid
+        # File cleanup after lock release
+        enroll_dir = WORKING_DIR / "objects" / "enrolled" / pid
         if enroll_dir.exists():
             try:
                 import shutil
@@ -2097,15 +2029,14 @@ def create_app() -> "FastAPI":
             except Exception as e:
                 app_log.warning(f"Could not remove enroll dir {enroll_dir}: {e}")
 
-        photo_rel = f"faces/known/{pid}.jpg"
-        photo_path = WORKING_DIR / photo_rel
-        if photo_path.exists():
-            try:
-                photo_path.unlink()
-            except Exception as e:
-                app_log.warning(f"Could not remove photo {photo_path}: {e}")
+        for photo_rel in [f"objects/known/{pid}.jpg", f"objects/captured/{pid}.jpg"]:
+            photo_path = WORKING_DIR / photo_rel
+            if photo_path.exists():
+                try:
+                    photo_path.unlink()
+                except Exception as e:
+                    app_log.warning(f"Could not remove photo {photo_path}: {e}")
 
-        # DB-01: Proper exception handling for SQLite (M16)
         try:
             with sv._db_lock:
                 if sv._db_conn:
@@ -2414,17 +2345,16 @@ def create_app() -> "FastAPI":
 
     @app.get("/faces/{subpath:path}")
     async def serve_secured_face(subpath: str):
-        """Serve secure face photos only to authenticated administrators."""
-        faces_dir = WORKING_DIR / "faces"
-        safe_path = (faces_dir / subpath).resolve()
-        
-        # Verify directory traversal guard
-        if not str(safe_path).startswith(str(faces_dir.resolve())):
-            raise HTTPException(status_code=403, detail="Access denied.")
-            
-        if not safe_path.exists() or not safe_path.is_file():
-            raise HTTPException(status_code=404, detail="File not found.")
-            
+        """Serve secure face/object photos only to authenticated administrators."""
+        objects_dir = WORKING_DIR / "objects"
+        safe_path = (objects_dir / subpath).resolve()
+        if not str(safe_path).startswith(str(objects_dir.resolve())) or not safe_path.exists() or not safe_path.is_file():
+            faces_dir = WORKING_DIR / "faces"
+            safe_path = (faces_dir / subpath).resolve()
+            if not str(safe_path).startswith(str(faces_dir.resolve())):
+                raise HTTPException(status_code=403, detail="Access denied.")
+            if not safe_path.exists() or not safe_path.is_file():
+                raise HTTPException(status_code=404, detail="File not found.")
         return FileResponse(safe_path)
 
 

@@ -43,6 +43,11 @@ faces_dir = ROOT / "faces"
 if faces_dir.exists():
     datas.append((str(faces_dir), "faces"))
 
+# objects/ directory (known objects, etc.)
+objects_dir = ROOT / "objects"
+if objects_dir.exists():
+    datas.append((str(objects_dir), "objects"))
+
 # plugins/ directory
 plugins_dir = ROOT / "plugins"
 if plugins_dir.exists():

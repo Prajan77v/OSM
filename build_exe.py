@@ -103,13 +103,16 @@ if not (frontend_dir / "node_modules").exists():
     run([npm_cmd, "install"], cwd=frontend_dir)
 
 # Build static export  (Next.js -> frontend/out/)
-run([npm_cmd, "run", "build"], cwd=frontend_dir)
+if frontend_out.exists():
+    print("  [INFO] frontend/out/ already exists. Skipping Next.js build. Delete frontend/out/ to force rebuild.")
+else:
+    run([npm_cmd, "run", "build"], cwd=frontend_dir)
 
 if not frontend_out.exists():
     print("\n[ERROR] Next.js build failed -- 'frontend/out' not found.")
     sys.exit(1)
 
-print("  [OK] Frontend built -> " + str(frontend_out))
+print("  [OK] Frontend built/verified -> " + str(frontend_out))
 
 # ---------------------------------------------------------------------------
 # STEP 2  -- Install Python dependencies
@@ -155,7 +158,7 @@ run([
 ])
 
 # ---------------------------------------------------------------------------
-# STEP 5 -- Copy faces directory to dist/ (to maintain sync with executable)
+# STEP 5 -- Copy faces and objects directories to dist/ (to maintain sync with executable)
 # ---------------------------------------------------------------------------
 print("\n[STEP 5] Copying faces/ folder to dist/ ...")
 faces_src = ROOT / "faces"
@@ -167,6 +170,17 @@ if faces_src.exists():
     print("  [OK] Copied faces/ to " + str(faces_dst))
 else:
     print("  [WARNING] 'faces/' folder not found in project root.")
+
+print("\n[STEP 5b] Copying objects/ folder to dist/ ...")
+objects_src = ROOT / "objects"
+objects_dst = DIST / "objects"
+if objects_src.exists():
+    if objects_dst.exists():
+        shutil.rmtree(objects_dst)
+    shutil.copytree(objects_src, objects_dst)
+    print("  [OK] Copied objects/ to " + str(objects_dst))
+else:
+    print("  [WARNING] 'objects/' folder not found in project root.")
 
 # ---------------------------------------------------------------------------
 # STEP 6 -- Generate Portable ZIP and Standalone Installer
@@ -188,6 +202,11 @@ try:
             for file_path in faces_folder.rglob('*'):
                 if file_path.is_file():
                     zipf.write(file_path, file_path.relative_to(ROOT))
+        objects_folder = ROOT / "objects"
+        if objects_folder.exists():
+            for file_path in objects_folder.rglob('*'):
+                if file_path.is_file():
+                    zipf.write(file_path, file_path.relative_to(ROOT))
     print("  [OK] Portable ZIP created.")
 except Exception as e:
     print(f"  [WARNING] Failed to create portable ZIP: {e}")
@@ -207,6 +226,9 @@ try:
         "--add-data=web_integration.py;.",
         "--add-data=requirements.txt;.",
         "--add-data=faces;faces",
+        "--add-data=objects;objects",
+        "--add-data=models;models",
+        "--add-data=yolov8s.pt;.",
         "--add-data=config.yaml;.",
         "--add-data=frontend/out;frontend/out",
         "create_installer.py"

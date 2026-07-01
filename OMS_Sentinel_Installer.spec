@@ -5,7 +5,7 @@ a = Analysis(
     ['create_installer.py'],
     pathex=[],
     binaries=[],
-    datas=[('main.py', '.'), ('haae_engine.py', '.'), ('web_server.py', '.'), ('web_integration.py', '.'), ('requirements.txt', '.'), ('faces', 'faces'), ('config.yaml', '.'), ('frontend/out', 'frontend/out')],
+    datas=[('main.py', '.'), ('haae_engine.py', '.'), ('web_server.py', '.'), ('web_integration.py', '.'), ('requirements.txt', '.'), ('faces', 'faces'), ('objects', 'objects'), ('models', 'models'), ('yolov8s.pt', '.'), ('config.yaml', '.'), ('frontend/out', 'frontend/out')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
