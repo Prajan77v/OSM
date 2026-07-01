@@ -280,6 +280,7 @@ class Config:
     EVENT_W    = _cfg("display","event_w", default=280)
     PARTICLE_SIZE = _cfg("display","particle_size", default=3.0)
     MESH_THICKNESS = _cfg("display","mesh_thickness", default=1.0)
+    HEADLESS = _cfg("display","headless", default=True)
     TOP_H      = _cfg("display","top_h",  default=65)
     FOOTER_H   = _cfg("display","footer_h", default=45)
 
@@ -4849,17 +4850,17 @@ def main():
             wi.get_summary,
             wi.get_control_handlers(cameras, threat_engine),
         )
-        ws.start_server(port=8000, open_browser=False)
+        ws.start_server(port=8000, open_browser=True)
         app_log.info("OMS Web Dashboard started on http://localhost:8000")
     except Exception as _web_err:
         app_log.warning(f"Web server not started: {_web_err}")
 
     win_name = "OMS — OBJECT MONITORING SYSTEM v9.0"
-    cv2.namedWindow(win_name, cv2.WINDOW_NORMAL)
-    cv2.setMouseCallback(win_name, on_mouse)
-    cv2.resizeWindow(win_name, Config.WINDOW_W, Config.WINDOW_H)
-
-    run_startup_sequence(win_name)
+    if not Config.HEADLESS:
+        cv2.namedWindow(win_name, cv2.WINDOW_NORMAL)
+        cv2.setMouseCallback(win_name, on_mouse)
+        cv2.resizeWindow(win_name, Config.WINDOW_W, Config.WINDOW_H)
+        run_startup_sequence(win_name)
 
     dashboard    = np.zeros((Config.WINDOW_H, Config.WINDOW_W, 3), dtype=np.uint8)
     static_dashboard = np.zeros((Config.WINDOW_H, Config.WINDOW_W, 3), dtype=np.uint8)
@@ -4884,6 +4885,18 @@ def main():
 
         if now - last_threat_tick > 5.0:
             threat_engine.tick(); last_threat_tick = now
+
+        if Config.HEADLESS:
+            if now-last_gc_time > Config.GC_GEN1_SECS:
+                last_gc_time = now; gc.collect(1)
+                if CUDA_AVAILABLE:
+                    try:
+                        import torch
+                        torch.cuda.empty_cache()
+                    except:
+                        pass
+            time.sleep(0.03)
+            continue
 
         # Dynamically query window size to support true, seamless fullscreen scaling
         queried = False
