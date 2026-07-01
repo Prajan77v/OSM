@@ -1,39 +1,23 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  LayoutDashboard, Video, Crosshair, Radar, BarChart3,
-  AlertTriangle, MessageSquare, Settings, LogOut, ChevronRight,
-  Shield, Activity, Cpu, HardDrive, Wifi, Send, Bell, Eye,
-  UserCheck, Package, MapPin, Clock, Zap, TrendingUp,
-  Database, Bot, Download, Upload, Volume2, RefreshCw, Maximize2, Minimize2,
-  Mic, Play, Pause, Square, CheckCircle, Info, XCircle,
-  UserPlus, Award, Check, Save, ToggleLeft, ToggleRight,
-  Sliders, SlidersHorizontal, SlidersVertical, Edit2, X, Trash, Plus
+  Video, Shield, Cpu, HardDrive, Clock, Bell, Settings,
+  Eye, Activity, MessageSquare, Send, Bot, AlertTriangle,
+  UserPlus, UserCheck, Plus, X, Trash, RefreshCw, Mic,
+  Maximize2, Minimize2, ChevronRight, Sliders, Database,
+  TrendingUp, Play, Pause, Save, ToggleLeft, ToggleRight, Upload
 } from "lucide-react";
 
-// ─── API base URL (proxied in dev, same-origin in prod) ──────────────────────
 const API = "";
+const POSES = ["front", "back", "left", "right", "top", "bottom", "left_45", "right_45"];
 
-// ─── Types ───────────────────────────────────────────────────────────────────
 interface CameraInfo {
   id: number; name: string; location: string; source?: string;
   online: boolean; disconnected: boolean; fps: number;
   persons: number; detections: number; threat_level: string; uptime: string;
   active_subjects?: any[]; detections_list?: any[];
-}
-interface HAEAPerson {
-  pid: string;
-  name: string;
-  camera: string;
-  emotion: string;
-  emotion_score: number;
-  activity_label: string;
-  activity_score: number;
-  attention: string;
-  duration_secs: number;
-  duration_str: string;
 }
 
 interface Telemetry {
@@ -43,13 +27,9 @@ interface Telemetry {
   threat_level: string; fps_all: number[];
   uptime_secs: number;
 }
+
 interface Event {
   ts: string; event: string; camera: string; person: string; detail: string;
-}
-interface Summary {
-  total_detections: number; known_persons: number; unknown_persons: number;
-  objects_added: number; objects_removed: number; alerts: number;
-  operator: string; uptime: string;
 }
 
 interface EnrolledUser {
@@ -63,50 +43,35 @@ interface EnrolledUser {
   pid?: string;
 }
 
-// POSES for Guided Capture
-const POSES = ["front", "back", "left", "right", "top", "bottom", "left_45", "right_45"];
-
-// ─── Main Dashboard ───────────────────────────────────────────────────────────
 export default function Dashboard() {
   const [activeCam, setActiveCam] = useState(0);
   const [cameras, setCameras] = useState<CameraInfo[]>([]);
   const [telemetry, setTelemetry] = useState<Telemetry | null>(null);
   const [events, setEvents] = useState<Event[]>([]);
-  const [summary, setSummary] = useState<Summary | null>(null);
-  const [activityData, setActivityData] = useState<HAEAPerson[]>([]);
+  const [activityData, setActivityData] = useState<any[]>([]);
   const [time, setTime] = useState(new Date());
 
-  // Dynamic Sparkline state
-  const [cpuHistory, setCpuHistory] = useState<number[]>(Array(40).fill(0));
-  const [ramHistory, setRamHistory] = useState<number[]>(Array(40).fill(0));
-  const [netHistory, setNetHistory] = useState<number[]>(Array(40).fill(0));
-  const [gpuHistory, setGpuHistory] = useState<number[]>(Array(40).fill(0));
-
-  // Loader & Notification states
-  const [btnLoading, setBtnLoading] = useState<Record<string, boolean>>({});
-  const [controlMsg, setControlMsg] = useState<string | null>(null);
   const [notification, setNotification] = useState<string | null>(null);
+  const [controlMsg, setControlMsg] = useState<string | null>(null);
+  const [btnLoading, setBtnLoading] = useState<Record<string, boolean>>({});
 
-  // Advanced Voice / AI Core states: idle, listening, processing, speaking
+  // OS AI dialogue console states
   const [aiState, setAiState] = useState<"idle" | "listening" | "processing" | "speaking">("idle");
-  const [aiSubText, setAiSubText] = useState("Awaiting voice command input");
-  const [speechOutput, setSpeechOutput] = useState("");
+  const [aiSubText, setAiSubText] = useState("Awaiting voice command matrix...");
   const [voiceCommandText, setVoiceCommandText] = useState("");
-
-  // ChatGPT style Conversational Feed
   const [aiConversation, setAiConversation] = useState<Array<{ sender: "user" | "ai" | "system"; text: string; time: string }>>([
-    { sender: "system" as const, text: "OMS.OS v9.0 Core initialization complete. All neural pipelines operational.", time: new Date().toLocaleTimeString() }
+    { sender: "system" as const, text: "SENTINEL CORE: Neural nodes loaded. Dynamic surveillance arrays active.", time: new Date().toLocaleTimeString() }
   ]);
 
-  // Modal open states
+  // Modals
   const [isEnrollModalOpen, setIsEnrollModalOpen] = useState(false);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [isCameraModalOpen, setIsCameraModalOpen] = useState(false);
 
-  // Config settings state (Dynamically loaded & editable)
+  // Settings configurations
   const [opName, setOpName] = useState("Prajan");
   const [ttsEnabled, setTtsEnabled] = useState(true);
-  const [activeModel, setActiveModel] = useState("yolov8n.pt");
+  const [activeModel, setActiveModel] = useState("yolov8s.pt");
   const [confThresh, setConfThresh] = useState(0.45);
   const [tgBotToken, setTgBotToken] = useState("");
   const [tgChatId, setTgChatId] = useState("");
@@ -118,27 +83,9 @@ export default function Dashboard() {
   const [particleSize, setParticleSize] = useState(3.0);
   const [meshThickness, setMeshThickness] = useState(1.0);
 
-  const lastActivePidRef = useRef<string>("");
-  const [cropKey, setCropKey] = useState<string>("");
-  const activeTimeoutsRef = useRef<NodeJS.Timeout[]>([]);
-  const fetchAbortControllerRef = useRef<AbortController | null>(null);
-
-  const safeSetTimeout = useCallback((fn: () => void, delay: number) => {
-    const timer = setTimeout(fn, delay);
-    activeTimeoutsRef.current.push(timer);
-    return timer;
-  }, []);
-
-  // Clear timeouts on unmount
-  useEffect(() => {
-    return () => {
-      activeTimeoutsRef.current.forEach(clearTimeout);
-    };
-  }, []);
-
-  // ── Enrollment States ──────────────────────────────────────────────────────
-  const [enrolledPeople, setEnrolledPeople] = useState<any[]>([]);
-  const [enrollTab, setEnrollTab] = useState<"directory" | "guided" | "folder" | "upload" | "import_json">("directory");
+  // Enrollment states
+  const [enrolledPeople, setEnrolledPeople] = useState<EnrolledUser[]>([]);
+  const [enrollTab, setEnrollTab] = useState<"directory" | "guided" | "upload">("guided");
   const [guidedName, setGuidedName] = useState("");
   const [guidedPid, setGuidedPid] = useState("");
   const [guidedProgress, setGuidedProgress] = useState<Record<string, boolean>>({});
@@ -151,49 +98,16 @@ export default function Dashboard() {
   const [uploadFiles, setUploadFiles] = useState<FileList | null>(null);
   const [uploadLoading, setUploadLoading] = useState(false);
   const [uploadLog, setUploadLog] = useState<string[]>([]);
-  const [settingsEnrollName, setSettingsEnrollName] = useState("");
-  const [settingsEnrollFolder, setSettingsEnrollFolder] = useState("");
-  const [settingsEnrollLoading, setSettingsEnrollLoading] = useState(false);
-  const [settingsEnrollLog, setSettingsEnrollLog] = useState<string[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Success Face Recognition indicator
-  const [isFaceUnlocked, setIsFaceUnlocked] = useState(false);
-  
-  // Real-time inline profile renaming states
-  const [editingPid, setEditingPid] = useState<string | null>(null);
-  const [editNameValue, setEditNameValue] = useState("");
-
-  // Fullscreen Preview state & ref
-  const viewportRef = useRef<HTMLDivElement>(null);
-  const [isFullscreen, setIsFullscreen] = useState(false);
-
-  // Add Camera form states
+  // Add Camera states
   const [newCamName, setNewCamName] = useState("");
   const [newCamSource, setNewCamSource] = useState("");
   const [newCamLocation, setNewCamLocation] = useState("");
 
-  const toggleFullscreen = () => {
-    const el = viewportRef.current;
-    if (!el) return;
-    if (!document.fullscreenElement) {
-      el.requestFullscreen()
-        .then(() => speakAI("Fullscreen preview activated"))
-        .catch(() => {});
-    } else {
-      document.exitFullscreen()
-        .then(() => speakAI("Fullscreen preview deactivated"))
-        .catch(() => {});
-    }
-  };
-
-  useEffect(() => {
-    const handleFullscreenChange = () => {
-      setIsFullscreen(!!document.fullscreenElement);
-    };
-    document.addEventListener("fullscreenchange", handleFullscreenChange);
-    return () => document.removeEventListener("fullscreenchange", handleFullscreenChange);
-  }, []);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const fetchAbortControllerRef = useRef<AbortController | null>(null);
 
   // ── Clock ─────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -226,7 +140,7 @@ export default function Dashboard() {
     fetchSettings();
   }, []);
 
-  // ── Data polling ──────────────────────────────────────────────────────────
+  // ── Data Polling Loop ──────────────────────────────────────────────────────
   const fetchAll = useCallback(async () => {
     if (fetchAbortControllerRef.current) {
       fetchAbortControllerRef.current.abort();
@@ -251,7 +165,6 @@ export default function Dashboard() {
         safeFetch(`${API}/api/cameras`),
         safeFetch(`${API}/api/telemetry`),
         safeFetch(`${API}/api/events`),
-        safeFetch(`${API}/api/summary`),
         safeFetch(`${API}/api/faces`),
         safeFetch(`${API}/api/activity`),
       ]);
@@ -259,49 +172,33 @@ export default function Dashboard() {
       const camRes = results[0].status === 'fulfilled' ? results[0].value : null;
       const telRes = results[1].status === 'fulfilled' ? results[1].value : null;
       const evtRes = results[2].status === 'fulfilled' ? results[2].value : null;
-      const sumRes = results[3].status === 'fulfilled' ? results[3].value : null;
-      const facRes = results[4].status === 'fulfilled' ? results[4].value : null;
-      const actRes = results[5].status === 'fulfilled' ? results[5].value : null;
+      const facRes = results[3].status === 'fulfilled' ? results[3].value : null;
+      const actRes = results[4].status === 'fulfilled' ? results[4].value : null;
 
       if (camRes) {
         setCameras(camRes);
-        if (Array.isArray(camRes) && camRes.length > 0) {
-          const activeSubject = camRes[activeCam]?.active_subjects?.[0];
-          const currentPid = activeSubject?.pid || "";
-          if (currentPid && currentPid !== lastActivePidRef.current) {
-            lastActivePidRef.current = currentPid;
-            setCropKey(Date.now().toString());
-          }
-        }
-        const activeCamDets = camRes[activeCam]?.persons || 0;
-        setIsFaceUnlocked(activeCamDets > 0);
       }
 
       if (telRes) {
         setTelemetry(telRes);
-        setCpuHistory(h => [...h.slice(1), telRes.cpu || 0]);
-        setRamHistory(h => [...h.slice(1), telRes.ram || 0]);
-        setNetHistory(h => [...h.slice(1), Math.min(telRes.net_kb || 0, 100)]);
-        setGpuHistory(h => [...h.slice(1), telRes.gpu || 0]);
       }
 
       if (evtRes) {
         const sorted = evtRes.slice(-15).reverse();
         setEvents(sorted);
 
-        // Convert the latest event into an AI message if it is new
+        // Convert events to Jarvis style conversation logs
         if (sorted.length > 0) {
           const latest = sorted[0];
           setAiConversation(prev => {
             const hasEvent = prev.some(m => m.text.includes(latest.detail));
             if (!hasEvent) {
-              // Trigger a toast notification
-              setNotification(`Alert: ${latest.detail}`);
+              setNotification(`New Event: ${latest.detail}`);
               setTimeout(() => setNotification(null), 4000);
               
               return [...prev, {
                 sender: "system" as const,
-                text: `[${latest.event}] ${latest.detail} on ${latest.camera}`,
+                text: `[${latest.event}] ${latest.detail} on camera node ${latest.camera}`,
                 time: new Date().toLocaleTimeString()
               }].slice(-30);
             }
@@ -310,12 +207,7 @@ export default function Dashboard() {
         }
       }
 
-      if (sumRes) {
-        setSummary(sumRes);
-      }
-
       if (facRes && Array.isArray(facRes)) {
-        // Enrolled user lists mapping
         const mapped: EnrolledUser[] = facRes.map((f: any) => ({
           name: f.name,
           pid: f.pid,
@@ -332,12 +224,8 @@ export default function Dashboard() {
       if (actRes && Array.isArray(actRes.persons)) {
         setActivityData(actRes.persons);
       }
-    } catch (e: any) {
-      if (e.name === 'AbortError') {
-        // Ignored
-      }
-    }
-  }, [activeCam]);
+    } catch {}
+  }, []);
 
   useEffect(() => {
     fetchAll();
@@ -350,27 +238,27 @@ export default function Dashboard() {
     };
   }, [fetchAll]);
 
-  // ── Browser Voice Speech Output ──────────────────────────────────────────
+  // ── Speech Synthesis Output ────────────────────────────────────────────────
   const speakAI = useCallback((txt: string, forceEnabled?: boolean) => {
     const enabled = forceEnabled !== undefined ? forceEnabled : ttsEnabled;
     if (!enabled) return;
     if (typeof window !== "undefined" && window.speechSynthesis) {
       window.speechSynthesis.cancel();
-      const interstate = new SpeechSynthesisUtterance(txt);
+      const utt = new SpeechSynthesisUtterance(txt);
       const voices = window.speechSynthesis.getVoices();
       const idealVoice = voices.find(v => v.name.includes("Google") || v.name.includes("Natural") || v.name.includes("Zira"));
-      if (idealVoice) interstate.voice = idealVoice;
-      interstate.rate = 1.05;
-      interstate.pitch = 0.95;
-      window.speechSynthesis.speak(interstate);
+      if (idealVoice) utt.voice = idealVoice;
+      utt.rate = 1.05;
+      utt.pitch = 0.95;
+      window.speechSynthesis.speak(utt);
     }
   }, [ttsEnabled]);
 
-  // ── Voice Input & Command Controller ──────────────────────────────────────
+  // ── Voice Input Commands ───────────────────────────────────────────────────
   const sendVoiceCommand = async (command: string) => {
     if (!command.trim()) return;
     setAiState("processing");
-    setAiSubText("Synthesizing parameters...");
+    setAiSubText("Synthesizing core parameters...");
 
     setAiConversation(prev => [...prev, {
       sender: "user" as const,
@@ -386,8 +274,7 @@ export default function Dashboard() {
       });
       const data = await res.json();
       setAiState("speaking");
-      setAiSubText("Sentinel OS outputting feedback...");
-      setSpeechOutput(data.response);
+      setAiSubText("Sentinel OS outputting parameters...");
       speakAI(data.response);
 
       setAiConversation(prev => [...prev, {
@@ -396,16 +283,15 @@ export default function Dashboard() {
         time: new Date().toLocaleTimeString()
       }]);
 
-      safeSetTimeout(() => {
+      setTimeout(() => {
         setAiState("idle");
-        setAiSubText("Awaiting voice command input");
+        setAiSubText("Awaiting voice command matrix...");
       }, 5000);
 
-      // Perform updates
       fetchAll();
     } catch {
       setAiState("idle");
-      setAiSubText("Core command execution failed");
+      setAiSubText("Core command execution failed.");
     }
   };
 
@@ -416,6 +302,40 @@ export default function Dashboard() {
     setVoiceCommandText("");
   };
 
+  const saveSettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const res = await fetch(`${API}/api/settings`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          username: opName,
+          confidence: confThresh,
+          model: activeModel,
+          tg_token: tgBotToken,
+          tg_chat_id: tgChatId,
+          detect_new_ids: detectNewIds,
+          use_cuda: useCuda,
+          detect_people: detectPeople,
+          detect_objects: detectObjects,
+          match_threshold: matchThresh,
+          particle_size: particleSize,
+          mesh_thickness: meshThickness
+        })
+      });
+      const data = await res.json();
+      if (data.status === "ok") {
+        setNotification("Engine configuration matrix updated.");
+        setTimeout(() => setNotification(null), 4000);
+        setIsSettingsModalOpen(false);
+        fetchAll();
+      }
+    } catch {
+      setNotification("Failed to apply configuration matrix.");
+      setTimeout(() => setNotification(null), 4000);
+    }
+  };
+
   // ── Action Controls ────────────────────────────────────────────────────────
   const triggerControlAction = async (action: string) => {
     setBtnLoading(prev => ({ ...prev, [action]: true }));
@@ -424,49 +344,20 @@ export default function Dashboard() {
       const d = await r.json();
       setControlMsg(d.message || `Action executed successfully.`);
       speakAI(d.message || "Executed command matrix");
-      safeSetTimeout(() => setControlMsg(null), 4000);
+      setTimeout(() => setControlMsg(null), 4000);
       fetchAll();
     } catch {
       setControlMsg("Command routing failed.");
-      safeSetTimeout(() => setControlMsg(null), 4000);
+      setTimeout(() => setControlMsg(null), 4000);
     } finally {
       setBtnLoading(prev => ({ ...prev, [action]: false }));
     }
   };
 
-  // ── Rename Enrolled Profiles ──────────────────────────────────────────────
-  const handleRenameSubject = async (pid: string, newName: string) => {
-    if (!newName.trim()) return;
-    try {
-      const r = await fetch(`${API}/api/control/rename_subject`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pid, name: newName }),
-      });
-      const d = await r.json();
-      if (d.status === "ok") {
-        setEditingPid(null);
-        setNotification(`Profile updated: ${newName}`);
-        setTimeout(() => setNotification(null), 4000);
-        fetchAll();
-      }
-    } catch {}
-  };
-
   // ── Enrollment Handlers ────────────────────────────────────────────────────
-  const fetchEnrolledPeople = async () => {
-    try {
-      const res = await fetch(`${API}/api/enroll/people`);
-      const data = await res.json();
-      if (data.status === "ok") {
-        setEnrolledPeople(data.profiles || []);
-      }
-    } catch {}
-  };
-
   const startGuidedEnrollment = async () => {
     if (!guidedName.trim()) return;
-    setGuidedLog(["[SYSTEM] Initiating Guided Multi-Angle Scanning..."]);
+    setGuidedLog(["[SYSTEM] Connecting guided camera arrays..."]);
     try {
       const res = await fetch(`${API}/api/enroll/start`, {
         method: "POST",
@@ -476,44 +367,43 @@ export default function Dashboard() {
       const data = await res.json();
       if (data.status === "ok") {
         setGuidedPid(data.pid);
-        setGuidedLog(prev => [...prev, `✓ Profile registered with ID: ${data.pid}`, `- Position the object facing the camera for 'front' view`]);
+        setGuidedLog(prev => [...prev, `✓ Profile linked: ${data.pid}`, `- Position the object facing the camera for 'front' view`]);
         setGuidedProgress({});
         setGuidedActivePoseIdx(0);
       }
     } catch {
-      setGuidedLog(prev => [...prev, "✗ Communication line link error."]);
+      setGuidedLog(prev => [...prev, "✗ Camera mapping error."]);
     }
   };
 
   const capturePose = async (pose: string) => {
     if (!guidedPid) return;
-    setGuidedLog(prev => [...prev, `[PROCESS] Capturing viewpoint angle: ${pose.toUpperCase()}...`]);
+    setGuidedLog(prev => [...prev, `[PROCESS] Extracting camera parameters for view: ${pose.toUpperCase()}...`]);
     try {
       const res = await fetch(`${API}/api/enroll/capture/${guidedPid}/${pose}`, { method: "POST" });
       const data = await res.json();
       if (data.status === "ok") {
         setGuidedProgress(prev => ({ ...prev, [pose]: true }));
-        setGuidedLog(prev => [...prev, `✓ Captured ${pose.toUpperCase()} view successfully`]);
+        setGuidedLog(prev => [...prev, `✓ Angle recorded: ${pose.toUpperCase()}`]);
         
-        // Progress to next index
         const nextIdx = guidedActivePoseIdx + 1;
         if (nextIdx < POSES.length) {
           setGuidedActivePoseIdx(nextIdx);
-          setGuidedLog(prev => [...prev, `- Next: Position the object for '${POSES[nextIdx]}' view`]);
+          setGuidedLog(prev => [...prev, `- Next: Position target for '${POSES[nextIdx]}' view`]);
         } else {
-          setGuidedLog(prev => [...prev, `✓ All 8 pose vectors recorded successfully. Click SAVE below to compile profile.`]);
+          setGuidedLog(prev => [...prev, `✓ All 8 pose vectors recorded successfully. Click COMPILE below.`]);
         }
       } else {
-        setGuidedLog(prev => [...prev, `✗ Bounding box failed. Ensure object is centered.`]);
+        setGuidedLog(prev => [...prev, `✗ Crop error: Target not centered in feed.`]);
       }
     } catch {
-      setGuidedLog(prev => [...prev, "✗ Target snapshot extraction failed."]);
+      setGuidedLog(prev => [...prev, "✗ Capture pipeline communication failure."]);
     }
   };
 
   const saveGuidedEnrollment = async () => {
     if (!guidedPid) return;
-    setGuidedLog(prev => [...prev, "[PROCESS] Saving and building object vectors..."]);
+    setGuidedLog(prev => [...prev, "[PROCESS] Compiling object neural vectors..."]);
     try {
       const res = await fetch(`${API}/api/enroll/save/${guidedPid}`, {
         method: "POST",
@@ -522,16 +412,15 @@ export default function Dashboard() {
       });
       const data = await res.json();
       if (data.status === "ok") {
-        setGuidedLog(prev => [...prev, "✓ Neural profile created successfully!", "✓ Database registry updated."]);
+        setGuidedLog(prev => [...prev, "✓ Neural profile created successfully!", "✓ Database compiled."]);
         setGuidedName("");
         setGuidedPid("");
         setGuidedProgress({});
         setGuidedActivePoseIdx(0);
-        fetchEnrolledPeople();
         fetchAll();
       }
     } catch {
-      setGuidedLog(prev => [...prev, "✗ Profile writing failed."]);
+      setGuidedLog(prev => [...prev, "✗ Neural compile aborted."]);
     }
   };
 
@@ -539,22 +428,19 @@ export default function Dashboard() {
     e.preventDefault();
     if (!uploadName.trim() || !uploadFiles || uploadFiles.length === 0) return;
     setUploadLoading(true);
-    setUploadLog(["[SYSTEM] Initiating file uploader..."]);
+    setUploadLog(["[SYSTEM] Packing files to upload vectors..."]);
 
     const imagePromises = Array.from(uploadFiles).map(file => {
       return new Promise<string>((resolve) => {
         const reader = new FileReader();
         reader.onloadend = () => {
-          const base64String = reader.result as string;
-          resolve(base64String);
+          resolve(reader.result as string);
         };
         reader.readAsDataURL(file);
       });
     });
 
     const base64Images = await Promise.all(imagePromises);
-    setUploadLog(prev => [...prev, `[PROCESS] Encoded ${base64Images.length} files to base64.`, "[PROCESS] Sending payload to AI engine..."]);
-
     try {
       const res = await fetch(`${API}/api/enroll/upload`, {
         method: "POST",
@@ -565,20 +451,18 @@ export default function Dashboard() {
       if (data.status === "ok") {
         setUploadLog(prev => [
           ...prev, 
-          `✓ Success: Enrolled object '${uploadName}'!`, 
-          `✓ Registered ID: ${data.pid}`,
-          `✓ Database updated with ${data.vector_count || base64Images.length} poses.`
+          `✓ Success: Enrolled '${uploadName}'!`, 
+          `✓ Registered ID: ${data.pid}`
         ]);
         setUploadName("");
         setUploadFiles(null);
         if (fileInputRef.current) fileInputRef.current.value = "";
-        fetchEnrolledPeople();
         fetchAll();
       } else {
-        setUploadLog(prev => [...prev, `✗ Server error: ${data.detail || "Upload aborted"}`]);
+        setUploadLog(prev => [...prev, `✗ Error: ${data.detail || "Upload aborted"}`]);
       }
     } catch {
-      setUploadLog(prev => [...prev, "✗ Transmission failed. Check link parameters."]);
+      setUploadLog(prev => [...prev, "✗ Upload communication link failure."]);
     } finally {
       setUploadLoading(false);
     }
@@ -586,7 +470,7 @@ export default function Dashboard() {
 
   const runFolderImport = async () => {
     if (!importName.trim() || !importFolder.trim()) return;
-    setImportLog(["[SYSTEM] Connecting to folder scanning pipeline..."]);
+    setImportLog(["[SYSTEM] Scanning folder matrix..."]);
     try {
       const res = await fetch(`${API}/api/enroll/import`, {
         method: "POST",
@@ -597,19 +481,16 @@ export default function Dashboard() {
       if (data.status === "ok") {
         setImportLog(prev => [
           ...prev, 
-          `✓ Success: Folder scanning complete!`,
-          `✓ Registered ID: ${data.pid}`, 
-          `✓ Profiles processed: ${data.images_processed} images`
+          `✓ Success: Folder import complete!`,
+          `✓ Registered ID: ${data.pid}`,
+          `✓ Vector frames loaded: ${data.images_processed}`
         ]);
         setImportName("");
         setImportFolder("");
-        fetchEnrolledPeople();
         fetchAll();
-      } else {
-        setImportLog(prev => [...prev, `✗ Scan error: ${data.detail || "Aborted"}`]);
       }
     } catch {
-      setImportLog(prev => [...prev, "✗ Folder directory link error."]);
+      setImportLog(prev => [...prev, "✗ Directory link mapping failure."]);
     }
   };
 
@@ -620,19 +501,6 @@ export default function Dashboard() {
       const data = await res.json();
       if (data.status === "ok") {
         setNotification(`Profile deleted: ${pid}`);
-        setTimeout(() => setNotification(null), 4000);
-        fetchEnrolledPeople();
-        fetchAll();
-      }
-    } catch {}
-  };
-
-  const rebuildProfile = async (pid: string) => {
-    try {
-      const res = await fetch(`${API}/api/enroll/rebuild/${pid}`, { method: "POST" });
-      const data = await res.json();
-      if (data.status === "ok") {
-        setNotification(`Retrained: ${pid}`);
         setTimeout(() => setNotification(null), 4000);
         fetchAll();
       }
@@ -665,53 +533,32 @@ export default function Dashboard() {
   const handleRemoveCamera = async (idx: number) => {
     if (!confirm("Are you sure you want to remove this camera node?")) return;
     try {
-      const r = await fetch(`${API}/api/camera/${idx}/remove`, {
+      await fetch(`${API}/api/camera/${idx}/remove`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({}),
       });
-      const d = await r.json();
-      if (d.status === "ok") {
-        setNotification("Camera node deleted.");
-        setTimeout(() => setNotification(null), 4000);
-        fetchAll();
-      }
+      setNotification("Camera node deleted.");
+      setTimeout(() => setNotification(null), 4000);
+      fetchAll();
     } catch {}
   };
 
-  // ── Settings Submit ────────────────────────────────────────────────────────
-  const saveSettings = async (e: React.FormEvent) => {
-    e.preventDefault();
-    try {
-      const r = await fetch(`${API}/api/control/save_settings`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          username: opName,
-          confidence: confThresh,
-          model: activeModel,
-          tg_token: tgBotToken,
-          tg_chat_id: tgChatId,
-          detect_new_ids: detectNewIds,
-          use_cuda: useCuda,
-          detect_people: detectPeople,
-          detect_objects: detectObjects,
-          match_threshold: matchThresh,
-          particle_size: particleSize,
-          mesh_thickness: meshThickness,
-        }),
-      });
-      const d = await r.json();
-      if (d.status === "ok") {
-        setNotification("Core parameter settings saved atomically.");
-        setTimeout(() => setNotification(null), 4000);
-        setIsSettingsModalOpen(false);
-        fetchAll();
-      }
-    } catch {}
+  const toggleFullscreen = () => {
+    const el = viewportRef.current;
+    if (!el) return;
+    if (!document.fullscreenElement) {
+      el.requestFullscreen()
+        .then(() => speakAI("Fullscreen preview activated"))
+        .catch(() => {});
+    } else {
+      document.exitFullscreen()
+        .then(() => speakAI("Fullscreen preview deactivated"))
+        .catch(() => {});
+    }
   };
 
-  // ── Particle Background Canvas ─────────────────────────────────────────────
+  // ── Neural Network Gold Particle Background ────────────────────────────────
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -730,36 +577,32 @@ export default function Dashboard() {
 
     const init = () => {
       particles = [];
-      const density = 60; // Minimal high fidelity density
+      const density = 60;
       for (let i = 0; i < density; i++) {
         particles.push({
           x: Math.random() * canvas.width,
           y: Math.random() * canvas.height,
-          vx: (Math.random() - 0.5) * 0.4,
-          vy: (Math.random() - 0.5) * 0.4,
-          radius: Math.random() * 1.5 + 0.5
+          vx: (Math.random() - 0.5) * 0.35,
+          vy: (Math.random() - 0.5) * 0.35,
+          radius: Math.random() * 1.2 + 0.6
         });
       }
     };
 
     const draw = () => {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      
-      // Draw neural connections
       ctx.lineWidth = 0.5;
       for (let i = 0; i < particles.length; i++) {
         const p1 = particles[i];
         p1.x += p1.vx;
         p1.y += p1.vy;
 
-        // Bounce borders
         if (p1.x < 0 || p1.x > canvas.width) p1.vx *= -1;
         if (p1.y < 0 || p1.y > canvas.height) p1.vy *= -1;
 
-        // Draw node
         ctx.beginPath();
         ctx.arc(p1.x, p1.y, p1.radius, 0, Math.PI * 2);
-        ctx.fillStyle = "rgba(212, 175, 55, 0.4)";
+        ctx.fillStyle = "rgba(212, 175, 55, 0.35)";
         ctx.fill();
 
         for (let j = i + 1; j < particles.length; j++) {
@@ -769,7 +612,7 @@ export default function Dashboard() {
             ctx.beginPath();
             ctx.moveTo(p1.x, p1.y);
             ctx.lineTo(p2.x, p2.y);
-            ctx.strokeStyle = `rgba(212, 175, 55, ${0.12 * (1 - dist / 180)})`;
+            ctx.strokeStyle = `rgba(212, 175, 55, ${0.11 * (1 - dist / 180)})`;
             ctx.stroke();
           }
         }
@@ -787,187 +630,187 @@ export default function Dashboard() {
     };
   }, []);
 
-  // ── Derived Variables ──────────────────────────────────────────────────────
   const activeCameraData = cameras[activeCam] || null;
 
   return (
-    <div className="relative w-screen h-screen overflow-hidden bg-[#050505] text-white flex flex-col font-inter">
-      {/* ── Background Particles Canvas ── */}
-      <canvas ref={canvasRef} className="absolute inset-0 z-0 pointer-events-none opacity-60" />
+    <div className="relative w-screen h-screen overflow-hidden bg-[#020202] text-white flex flex-col font-inter z-0">
+      
+      {/* ── Neural Network Background Canvas ── */}
+      <canvas ref={canvasRef} className="absolute inset-0 z-0 pointer-events-none opacity-50" />
+      <div className="absolute inset-0 z-0 pointer-events-none bg-radial-gradient from-transparent to-[#020202] opacity-90" />
+      <div className="absolute inset-0 z-0 pointer-events-none opacity-[0.02] bg-[linear-gradient(rgba(212,175,55,0.1)_1px,transparent_1px)_0_0_/_100%_20px,linear-gradient(90deg,rgba(212,175,55,0.1)_1px,transparent_1px)_0_0_/_20px_100%]" />
 
-      {/* Background Holographic overlays */}
-      <div className="absolute inset-0 z-0 pointer-events-none bg-radial-gradient from-transparent to-[#050505] opacity-80" />
-      <div className="absolute inset-0 z-0 pointer-events-none opacity-[0.03] bg-[linear-gradient(rgba(212,175,55,0.1)_1px,transparent_1px)_0_0_/_100%_20px,linear-gradient(90deg,rgba(212,175,55,0.1)_1px,transparent_1px)_0_0_/_20px_100%]" />
-
-      {/* ── Toast Notifications ── */}
-      <AnimatePresence>
-        {notification && (
-          <motion.div 
-            initial={{ opacity: 0, y: -20, scale: 0.95 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -20, scale: 0.95 }}
-            className="fixed top-24 left-1/2 -translate-x-1/2 z-50 glass-premium px-6 py-3 border-gold-dim border flex items-center gap-3 shadow-[0_0_30px_rgba(212,175,55,0.15)] text-xs text-gold-accent font-orbitron tracking-widest rounded-full"
-          >
-            <Bell size={14} className="animate-bounce" />
-            {notification.toUpperCase()}
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* ── Top Capsule Navigation Bar ── */}
-      <header className="relative z-10 mx-6 mt-6 flex-shrink-0 flex items-center justify-between">
-        {/* Left: Brand Capsule */}
-        <div className="glass-premium flex items-center gap-3 px-6 py-2.5 rounded-full border-white/5">
-          <div className="w-2.5 h-2.5 rounded-full bg-gold-accent animate-ping" />
-          <h1 className="font-orbitron text-xs font-black tracking-[0.2em] text-gold-accent flex items-center gap-2">
-            🛰️ OMS.OS <span className="text-white/40">//</span> SENTINEL v9.0
+      {/* ── Top Bar floating glass capsule ── */}
+      <header className="relative z-20 mx-6 mt-6 flex-shrink-0 flex items-center justify-between glass-premium px-8 py-3.5 border-white/5 rounded-full shadow-[0_20px_40px_rgba(0,0,0,0.7)]">
+        
+        {/* Logo */}
+        <div className="flex items-center gap-3">
+          <div className="w-2.5 h-2.5 rounded-full bg-gold-accent animate-pulse shadow-[0_0_10px_#FFD700]" />
+          <h1 className="font-orbitron text-xs font-black tracking-[0.25em] text-gold-accent">
+            OMS.OS <span className="text-white/40">//</span> SENTINEL
           </h1>
         </div>
 
-        {/* Center: System Telemetry Capsules */}
-        <div className="hidden lg:flex items-center gap-3">
-          <div className="glass-premium px-4 py-2 rounded-full flex items-center gap-2 text-[10px] text-sec border-white/5 font-mono">
+        {/* Telemetry Capsule Grid */}
+        <div className="hidden lg:flex items-center gap-5">
+          <div className="flex items-center gap-2 text-[10px] text-sec font-mono">
             <Cpu size={12} className="text-gold" />
             <span>GPU: {telemetry?.gpu || 0}%</span>
           </div>
 
-          <div className="glass-premium px-4 py-2 rounded-full flex items-center gap-2 text-[10px] text-sec border-white/5 font-mono">
+          <div className="flex items-center gap-2 text-[10px] text-sec font-mono">
             <HardDrive size={12} className="text-gold" />
             <span>RAM: {telemetry?.ram || 0}%</span>
           </div>
 
-          <div className="glass-premium px-4 py-2 rounded-full flex items-center gap-2 text-[10px] border-white/5 font-mono">
-            <div className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
-            <span className="text-green-400">SYS: OPERATIONAL</span>
+          <div className="flex items-center gap-2 text-[10px] font-mono">
+            <div className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse shadow-[0_0_6px_#00ff00]" />
+            <span className="text-green-400">SYS STATUS: ACTIVE</span>
           </div>
         </div>
 
-        {/* Right: Operator & Settings Capsule */}
-        <div className="flex items-center gap-3">
-          <div className="glass-premium px-5 py-2 rounded-full flex items-center gap-3 border-white/5">
+        {/* Clock & Operator profile */}
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2 text-sec">
             <Clock size={12} className="text-gold" />
-            <span className="font-orbitron text-xs tracking-wider text-sec">{time.toLocaleTimeString()}</span>
+            <span className="font-orbitron text-xs tracking-wider font-semibold">{time.toLocaleTimeString()}</span>
           </div>
 
-          <div className="glass-premium px-4 py-2 rounded-full flex items-center gap-2 border-white/5">
-            <div className="w-6 h-6 rounded-full bg-gold/10 border border-gold-dim flex items-center justify-center text-[10px] text-gold font-bold">
+          <div className="flex items-center gap-2 border-l border-white/10 pl-4">
+            <div className="w-6.5 h-6.5 rounded-full bg-gold/15 border border-gold-dim flex items-center justify-center text-[10px] text-gold font-bold">
               {opName.charAt(0).toUpperCase()}
             </div>
-            <span className="text-[10px] font-orbitron tracking-widest text-white hidden sm:inline">{opName.toUpperCase()}</span>
+            <span className="text-[10px] font-orbitron tracking-widest text-white/90 hidden sm:inline">{opName.toUpperCase()}</span>
           </div>
 
           <button 
             onClick={() => setIsSettingsModalOpen(true)}
-            className="glass-premium p-2.5 rounded-full hover:border-gold transition-colors duration-300 border-white/5 text-sec hover:text-white"
+            className="p-1 text-sec hover:text-white transition-colors"
           >
             <Settings size={14} />
           </button>
         </div>
       </header>
 
-      {/* ── Main Dashboard Workspace ── */}
-      <main className="relative z-10 flex-1 grid grid-cols-1 xl:grid-cols-4 gap-6 p-6 min-h-0">
+      {/* ── Left Floating Icon Dock ── */}
+      <nav className="absolute left-6 top-32 bottom-32 w-16 z-20 flex flex-col items-center justify-between py-8 glass-premium border-white/5 shadow-2xl rounded-full hover:border-gold-dim/40 transition-all duration-300">
+        <div className="flex flex-col gap-6 items-center">
+          <button 
+            onClick={() => setIsCameraModalOpen(true)}
+            className="group relative p-3 rounded-full hover:bg-gold/15 hover:text-gold-accent transition-all duration-300 text-sec"
+          >
+            <Plus size={16} />
+            <span className="absolute left-18 scale-0 group-hover:scale-100 bg-[#0d0d0d] border border-white/10 px-3 py-1.5 rounded text-[8px] tracking-widest font-orbitron transition-all duration-300 z-50">
+              ADD NODE
+            </span>
+          </button>
+
+          <button 
+            onClick={() => setIsEnrollModalOpen(true)}
+            className="group relative p-3 rounded-full hover:bg-gold/15 hover:text-gold-accent transition-all duration-300 text-sec"
+          >
+            <UserPlus size={16} />
+            <span className="absolute left-18 scale-0 group-hover:scale-100 bg-[#0d0d0d] border border-white/10 px-3 py-1.5 rounded text-[8px] tracking-widest font-orbitron transition-all duration-300 z-50">
+              ADD OBJECT
+            </span>
+          </button>
+
+          <button 
+            onClick={() => triggerControlAction("clear_logs")}
+            className="group relative p-3 rounded-full hover:bg-gold/15 hover:text-gold-accent transition-all duration-300 text-sec"
+          >
+            <Trash size={16} />
+            <span className="absolute left-18 scale-0 group-hover:scale-100 bg-[#0d0d0d] border border-white/10 px-3 py-1.5 rounded text-[8px] tracking-widest font-orbitron transition-all duration-300 z-50">
+              CLEAR LOGS
+            </span>
+          </button>
+        </div>
+
+        <button 
+          onClick={() => triggerControlAction("trigger_alarm")}
+          className="group relative p-3 bg-red-500/10 hover:bg-red-500/25 border border-red-500/20 hover:border-red-500 text-red-400 rounded-full transition-all duration-300"
+        >
+          <AlertTriangle size={16} />
+          <span className="absolute left-18 scale-0 group-hover:scale-100 bg-[#0d0d0d] border border-white/10 px-3 py-1.5 rounded text-[8px] tracking-widest font-orbitron transition-all duration-300 z-50">
+            TRIGGER ALARM
+          </span>
+        </button>
+      </nav>
+
+      {/* ── Main Workspace ── */}
+      <div className="flex-1 pl-28 pr-6 pt-6 pb-6 flex flex-col xl:flex-row gap-6 min-h-0 relative z-10">
         
-        {/* ── LEFT & CENTER HERO: Live AI Camera (Columns 1, 2, 3) ── */}
-        <section className="xl:col-span-3 flex flex-col gap-6 min-h-0">
+        {/* Left/Center Area: Large Floating AI Camera feed (Takes 65% width) */}
+        <section className="flex-1 flex flex-col gap-6 min-h-0">
           
-          {/* Camera Selector Capsular Rail */}
-          <div className="flex flex-wrap items-center justify-between gap-3 flex-shrink-0">
-            <div className="flex items-center gap-2 overflow-x-auto scrollbar-none py-1">
-              {cameras.map((c, idx) => (
-                <button
-                  key={c.id}
-                  onClick={() => setActiveCam(idx)}
-                  className={`px-5 py-2.5 rounded-full font-orbitron text-[10px] tracking-widest transition-all duration-300 flex items-center gap-2 border ${
-                    activeCam === idx 
-                      ? "bg-gold/10 border-gold-accent text-gold-accent shadow-[0_0_15px_rgba(212,175,55,0.15)]" 
-                      : "glass-premium border-white/5 text-sec hover:text-white"
-                  }`}
-                >
-                  <Video size={10} />
-                  {c.name.toUpperCase()}
-                  {c.online ? (
-                    <span className="w-1 h-1 rounded-full bg-green-400" />
-                  ) : (
-                    <span className="w-1 h-1 rounded-full bg-red-400 animate-pulse" />
-                  )}
-                </button>
-              ))}
-
-              <button 
-                onClick={() => setIsCameraModalOpen(true)}
-                className="glass-premium px-4 py-2.5 border-dashed border-white/10 hover:border-gold-dim hover:text-gold-accent transition-colors duration-300 rounded-full flex items-center gap-2 text-[10px] font-orbitron tracking-widest"
+          {/* Node selection cap-rail */}
+          <div className="flex items-center gap-2 overflow-x-auto scrollbar-none py-1">
+            {cameras.map((c, idx) => (
+              <button
+                key={c.id}
+                onClick={() => setActiveCam(idx)}
+                className={`px-6 py-2.5 rounded-full font-orbitron text-[9px] tracking-widest transition-all duration-300 flex items-center gap-2 border ${
+                  activeCam === idx 
+                    ? "bg-gold/10 border-gold-accent text-gold-accent shadow-[0_0_12px_rgba(212,175,55,0.15)] font-bold" 
+                    : "glass-premium border-white/5 text-sec hover:text-white"
+                }`}
               >
-                <Plus size={10} />
-                ADD NODE
+                <Video size={10} />
+                {c.name.toUpperCase()}
+                {c.online ? (
+                  <span className="w-1 h-1 rounded-full bg-green-400 animate-pulse" />
+                ) : (
+                  <span className="w-1 h-1 rounded-full bg-red-400 animate-pulse" />
+                )}
               </button>
-            </div>
-
-            {/* Quick Actions capsules */}
-            <div className="flex items-center gap-2">
-              <button 
-                onClick={() => triggerControlAction("trigger_alarm")}
-                className="glass-premium px-5 py-2.5 border-red-500/20 text-red-400 hover:bg-red-500/10 hover:border-red-400 transition-all duration-300 rounded-full text-[10px] font-orbitron tracking-widest flex items-center gap-1.5"
-              >
-                <AlertTriangle size={12} />
-                TRIGGER ALARM
-              </button>
-              <button 
-                onClick={() => setIsEnrollModalOpen(true)}
-                className="glass-premium px-5 py-2.5 border-gold-dim/20 text-gold-accent hover:bg-gold/10 hover:border-gold transition-all duration-300 rounded-full text-[10px] font-orbitron tracking-widest flex items-center gap-1.5"
-              >
-                <UserPlus size={12} />
-                ADD OBJECT
-              </button>
-            </div>
+            ))}
           </div>
 
-          {/* Large Hero Camera Display */}
-          <div ref={viewportRef} className="flex-1 glass-premium border-white/5 shadow-[0_20px_50px_rgba(0,0,0,0.8)] flex flex-col min-h-0 group overflow-hidden" style={{ borderRadius: 24 }}>
-            {/* Embedded HUD Header */}
-            <div className="absolute top-4 left-4 right-4 z-10 pointer-events-none flex items-center justify-between">
+          {/* Floating AI Camera Hero Element */}
+          <div ref={viewportRef} className="flex-1 glass-premium border-white/5 shadow-[0_24px_80px_rgba(0,0,0,0.85)] flex flex-col justify-between overflow-hidden relative group" style={{ borderRadius: 28 }}>
+            
+            {/* Overlay: HUD top parameters */}
+            <div className="absolute top-5 left-5 right-5 z-10 pointer-events-none flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <div className="glass-premium px-4 py-1.5 rounded-full text-[9px] font-orbitron tracking-widest border-white/10 bg-black/40 text-white/90">
-                  NODE: {activeCameraData?.name.toUpperCase() || "NULL"}
+                  CAMERA: {activeCameraData?.name.toUpperCase() || "LOBBY"}
                 </div>
-                <div className="glass-premium px-3 py-1.5 rounded-full text-[9px] font-orbitron tracking-widest border-white/10 bg-black/40 text-sec">
-                  LOC: {activeCameraData?.location.toUpperCase() || "LOBBY"}
+                <div className="glass-premium px-3.5 py-1.5 rounded-full text-[9px] font-orbitron tracking-widest border-white/10 bg-black/40 text-sec">
+                  LOC: {activeCameraData?.location.toUpperCase() || "MAIN ENTRANCE SECTOR"}
                 </div>
               </div>
 
               <div className="flex items-center gap-2">
-                <div className="glass-premium px-3 py-1.5 rounded-full text-[9px] font-orbitron tracking-widest border-white/10 bg-black/40 text-sec flex items-center gap-1.5">
+                <div className="glass-premium px-3.5 py-1.5 rounded-full text-[9px] font-orbitron tracking-widest border-white/10 bg-black/40 text-sec flex items-center gap-2">
                   <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-ping" />
                   REC ACTIVE
                 </div>
                 <button 
                   onClick={toggleFullscreen}
-                  className="pointer-events-auto glass-premium p-1.5 rounded-full border-white/10 bg-black/40 text-sec hover:text-white transition-colors duration-300"
+                  className="pointer-events-auto glass-premium p-1.5 rounded-full border-white/10 bg-black/40 text-sec hover:text-white transition-all duration-300"
                 >
                   {isFullscreen ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
                 </button>
               </div>
             </div>
 
-            {/* Camera feed viewport container */}
-            <div className="flex-1 w-full h-full relative bg-black/40 flex items-center justify-center min-h-0 overflow-hidden">
+            {/* Video feed container */}
+            <div className="absolute inset-0 w-full h-full bg-[#050505]/40 flex items-center justify-center overflow-hidden">
               {activeCameraData?.online ? (
                 <>
                   <img
-                    src={`${API}/api/camera/${activeCam}/stream`}
+                    src={`${API}/api/stream/${activeCam}`}
                     alt="OMS Live Video Feed"
                     className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-[1.01]"
-                    onError={(e) => {
-                      (e.target as HTMLImageElement).src = "";
-                    }}
                   />
-                  {/* Jarvis-Style HUD Reticle Ring Overlay */}
+                  
+                  {/* Cyberpunk HUD Scanning Reticle Overlay */}
                   <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
-                    <svg className="w-36 h-36 opacity-30 text-gold-accent animate-[spin_20s_linear_infinite]" viewBox="0 0 100 100">
+                    <svg className="w-32 h-32 opacity-25 text-gold-accent animate-[spin_25s_linear_infinite]" viewBox="0 0 100 100">
                       <circle cx="50" cy="50" r="45" stroke="currentColor" strokeWidth="0.5" fill="none" strokeDasharray="5,15" />
-                      <circle cx="50" cy="50" r="40" stroke="currentColor" strokeWidth="1" fill="none" strokeDasharray="30,10" />
+                      <circle cx="50" cy="50" r="40" stroke="currentColor" strokeWidth="1" fill="none" strokeDasharray="25,10" />
                     </svg>
-                    <svg className="absolute w-44 h-44 opacity-15 text-gold animate-[spin_40s_linear_infinite_reverse]" viewBox="0 0 100 100">
+                    <svg className="absolute w-40 h-40 opacity-10 text-gold animate-[spin_35s_linear_infinite_reverse]" viewBox="0 0 100 100">
                       <circle cx="50" cy="50" r="48" stroke="currentColor" strokeWidth="0.5" fill="none" strokeDasharray="1,5" />
                     </svg>
                   </div>
@@ -981,8 +824,8 @@ export default function Dashboard() {
               )}
             </div>
 
-            {/* Embedded HUD Footer Overlay */}
-            <div className="absolute bottom-4 left-4 right-4 z-10 pointer-events-none flex items-center justify-between">
+            {/* Overlay: HUD bottom parameters */}
+            <div className="absolute bottom-5 left-5 right-5 z-10 pointer-events-none flex items-center justify-between">
               <div className="glass-premium px-4 py-2 rounded-full text-[9px] font-orbitron tracking-widest border-white/10 bg-black/40 text-sec flex items-center gap-2">
                 <Shield size={10} className="text-gold" />
                 THREAT SHIELD: <span className={activeCameraData?.threat_level === "RED" ? "text-red-400 font-bold" : "text-green-400"}>{activeCameraData?.threat_level || "GREEN"}</span>
@@ -997,14 +840,13 @@ export default function Dashboard() {
 
         </section>
 
-        {/* ── RIGHT COLUMN: System Intelligence Control Panel ── */}
-        <section className="flex flex-col gap-6 min-h-0">
+        {/* Right Area: Target Intelligence Cards panel */}
+        <section className="w-96 flex flex-col gap-6 flex-shrink-0 min-h-0">
           
-          {/* Circular Holographic OS Core */}
+          {/* OS AI Core spinner */}
           <div className="glass-premium p-5 flex flex-col items-center justify-center text-center gap-4 border-white/5 relative overflow-hidden" style={{ borderRadius: 24 }}>
             <h4 className="font-orbitron text-[9px] font-bold text-gold tracking-[0.2em] uppercase">SENTINEL AI OS CORE</h4>
             
-            {/* Spinners & Waves */}
             <div className="relative w-28 h-28 flex items-center justify-center">
               <motion.div 
                 animate={{ rotate: 360 }}
@@ -1035,7 +877,7 @@ export default function Dashboard() {
           {/* Active Target Detections List */}
           <div className="flex-1 glass-premium p-5 flex flex-col min-h-0 border-white/5" style={{ borderRadius: 24 }}>
             <h4 className="font-orbitron text-[10px] font-bold text-gold tracking-wider uppercase border-b border-white/5 pb-2.5 mb-3 flex-shrink-0 flex items-center gap-2">
-              <Crosshair size={12} className="text-gold" /> LIVE RECOGNITION VECTORS
+              <Activity size={12} className="text-gold" /> LIVE RECOGNITION VECTORS
             </h4>
 
             <div className="flex-1 overflow-y-auto flex flex-col gap-3 pr-1 scrollbar-thin">
@@ -1048,7 +890,7 @@ export default function Dashboard() {
                   <div key={act.pid} className="glass-premium p-3 border-white/5 bg-white/[0.01] hover:border-gold-dim/40 transition-colors duration-300" style={{ borderRadius: 16 }}>
                     <div className="flex items-center justify-between mb-1.5">
                       <div className="flex items-center gap-2">
-                        <div className="w-1.5 h-1.5 rounded-full bg-green-400" />
+                        <div className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
                         <span className="font-orbitron text-[11px] font-bold text-white uppercase tracking-wider">{act.name}</span>
                       </div>
                       <span className="font-mono text-[9px] text-gold-accent bg-gold/10 px-1.5 py-0.5 rounded-md">ID:{act.pid}</span>
@@ -1074,12 +916,13 @@ export default function Dashboard() {
           </div>
 
         </section>
-      </main>
+      </div>
 
-      {/* ── Bottom Capsule AI Console ── */}
+      {/* ── Bottom Panel ChatGPT-style Console ── */}
       <footer className="relative z-10 mx-6 mb-6 flex-shrink-0 grid grid-cols-1 xl:grid-cols-4 gap-6 items-end">
-        {/* ChatGPT Conversations Feed / Logs (Columns 1, 2, 3) */}
-        <div className="xl:col-span-3 glass-premium p-5 flex flex-col border-white/5 h-48" style={{ borderRadius: 24 }}>
+        
+        {/* Conversation Feed */}
+        <div className="xl:col-span-3 glass-premium p-5 flex flex-col border-white/5 h-44" style={{ borderRadius: 24 }}>
           <h4 className="font-orbitron text-[9px] font-bold text-gold tracking-widest uppercase border-b border-white/5 pb-2 mb-2 flex-shrink-0 flex items-center gap-1.5">
             <MessageSquare size={12} className="text-gold" /> CORE SENTINEL DIALOGUE INDEX
           </h4>
@@ -1104,14 +947,13 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Dynamic Voice Prompt Capsule Column */}
-        <div className="glass-premium p-5 flex flex-col justify-between border-white/5 h-48" style={{ borderRadius: 24 }}>
+        {/* Voice prompt capsule */}
+        <div className="glass-premium p-5 flex flex-col justify-between border-white/5 h-44" style={{ borderRadius: 24 }}>
           <div className="flex flex-col gap-1">
             <span className="font-orbitron text-[9px] text-gold tracking-widest uppercase">VOICE PROMPT CAPSULE</span>
-            <p className="text-[8.5px] text-muted">Submit voice instructions or core terminal scripts below.</p>
+            <p className="text-[8px] text-muted">Submit voice parameters or core commands below.</p>
           </div>
 
-          {/* Interactive Command Prompt */}
           <form onSubmit={handleVoiceSubmit} className="relative mt-2">
             <input 
               type="text" 
@@ -1128,7 +970,7 @@ export default function Dashboard() {
             </button>
           </form>
 
-          {/* Quick command suggestions chips */}
+          {/* Prompt quick actions */}
           <div className="flex flex-wrap gap-1.5 mt-2 overflow-x-auto scrollbar-none max-h-12 py-1">
             {["/trigger alarm", "/clear logs", "/status", "/add camera"].map((cmd) => (
               <button 
@@ -1139,7 +981,7 @@ export default function Dashboard() {
                   else if (cmd === "/add camera") setIsCameraModalOpen(true);
                   else setVoiceCommandText(cmd);
                 }}
-                className="glass-premium px-3 py-1 rounded-full text-[8.5px] font-mono border-white/5 text-muted hover:text-gold-accent hover:border-gold-dim transition-all duration-300"
+                className="glass-premium px-3 py-1 rounded-full text-[8px] font-mono border-white/5 text-muted hover:text-gold-accent hover:border-gold-dim transition-all duration-300"
               >
                 {cmd}
               </button>
@@ -1170,7 +1012,6 @@ export default function Dashboard() {
                 <UserPlus size={16} /> ADVANCED OBJECT ENROLLMENT PROTOCOLS
               </h3>
 
-              {/* Tab Navigation capsules */}
               <div className="flex items-center gap-2 mb-4 border-b border-white/5 pb-3">
                 {[
                   { id: "directory", label: "DIRECTORY SCAN" },
@@ -1191,7 +1032,6 @@ export default function Dashboard() {
                 ))}
               </div>
 
-              {/* Scrollable Modal Content */}
               <div className="flex-1 overflow-y-auto pr-1 scrollbar-thin min-h-[300px]">
                 {enrollTab === "directory" && (
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6 p-1">
@@ -1249,7 +1089,6 @@ export default function Dashboard() {
 
                 {enrollTab === "guided" && (
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6 p-1">
-                    {/* Setup form / Camera Snapshot controls */}
                     <div className="glass-premium p-5 flex flex-col bg-black/20 gap-4 border-white/5" style={{ borderRadius: 20 }}>
                       <h4 className="font-orbitron text-[10px] font-black text-gold tracking-widest uppercase text-center mb-1">GUIDED SNAPSHOT CALIBRATOR</h4>
                       
@@ -1306,7 +1145,6 @@ export default function Dashboard() {
                             </button>
                           </div>
 
-                          {/* Progress Tracker Capsules */}
                           <div className="grid grid-cols-4 gap-1.5 mt-2">
                             {POSES.map((pose) => (
                               <div 
@@ -1572,7 +1410,6 @@ export default function Dashboard() {
                   />
                 </div>
 
-                {/* Option Switches */}
                 <div className="flex items-center justify-between p-2.5 glass-premium border-white/5 rounded-lg">
                   <span className="font-orbitron text-[9px] text-sec tracking-wider">DETECT PEOPLE</span>
                   <button 
