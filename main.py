@@ -788,8 +788,53 @@ def _object_encode(img_bgr: np.ndarray) -> Optional[np.ndarray]:
             return enc
     return _object_encode_orb(img_bgr)
 
-# Backward-compat alias used by legacy code paths
-_yunet_encode = _object_encode
+def _yunet_encode(img_bgr: np.ndarray) -> Optional[np.ndarray]:
+    if not YUNET_AVAILABLE: return None
+    try:
+        h, w = img_bgr.shape[:2]
+        if w < 30 or h < 30: return None
+        
+        # Normalize lighting (low-light improvement)
+        img_bgr = _preprocess_lighting(img_bgr)
+        
+        # Dynamic Resolution Upgrade: If the crop is small, upscale it using Lanczos
+        # and apply a sharpening filter to enhance features for distant recognition
+        if w < 112 or h < 112:
+            img_bgr = cv2.resize(img_bgr, (128, 128), interpolation=cv2.INTER_LANCZOS4)
+            # Unsharp mask / Sharpening filter
+            kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]], dtype=np.float32)
+            img_bgr = cv2.filter2D(img_bgr, -1, kernel)
+            h, w = 128, 128
+            
+        with _yunet_lock:
+            _yunet_detector.setInputSize((w, h))
+            _, faces = _yunet_detector.detect(img_bgr)
+        
+        # Smart Padding Fallback: If no face is detected on a tight crop,
+        # pad the image with black borders on all sides to give YuNet convolutional layers context!
+        if faces is None or len(faces) == 0:
+            pad_h, pad_w = h // 2, w // 2
+            padded = cv2.copyMakeBorder(img_bgr, pad_h, pad_h, pad_w, pad_w, cv2.BORDER_CONSTANT, value=[0, 0, 0])
+            ph, pw = padded.shape[:2]
+            with _yunet_lock:
+                _yunet_detector.setInputSize((pw, ph))
+                _, faces = _yunet_detector.detect(padded)
+            if faces is not None and len(faces) > 0:
+                face = faces[0]
+                with _yunet_lock:
+                    aligned = _sface_recognizer.alignCrop(padded, face)
+                    feat    = _sface_recognizer.feature(aligned)
+                return feat[0] if feat is not None else None
+            return None
+        
+        face = faces[0]
+        with _yunet_lock:
+            aligned = _sface_recognizer.alignCrop(img_bgr, face)
+            feat    = _sface_recognizer.feature(aligned)
+        return feat[0] if feat is not None else None
+    except Exception as e:
+        app_log.error(f"[YUNET] Encode exception: {e}")
+        return None
 
 
 def _object_match(enc: np.ndarray, face_size: Optional[int] = None) -> Tuple[Optional[str], Optional[str], bool, float]:
@@ -1637,10 +1682,15 @@ def _load_db_json():
             if "encodings" in d and d["encodings"] is not None:
                 encs = [np.array(e, dtype=np.float32) for e in d["encodings"] if e is not None]
                 d["encodings"] = encs
-                if YUNET_AVAILABLE and encs:
-                    with _yunet_lock:
-                        # For multi-embedding profiles, store the list directly
-                        _yunet_enc_cache[pid] = encs
+                if encs:
+                    dim = encs[0].shape[0] if len(encs[0].shape) > 0 else 0
+                    if dim == 128:
+                        if YUNET_AVAILABLE:
+                            with _yunet_lock:
+                                _yunet_enc_cache[pid] = encs
+                    elif dim in (1280, 608):
+                        with _obj_lock:
+                            _obj_enc_cache[pid] = encs
                 # Also ensure single encoding key is set for backward compat
                 if "encoding" not in d or d["encoding"] is None:
                     d["encoding"] = encs[0] if encs else None
@@ -1649,9 +1699,14 @@ def _load_db_json():
             elif "encoding" in d and d["encoding"] is not None:
                 enc_arr = np.array(d["encoding"], dtype=np.float32)
                 d["encoding"] = enc_arr
-                if YUNET_AVAILABLE:
-                    with _yunet_lock:
-                        _yunet_enc_cache[pid] = enc_arr
+                dim = enc_arr.shape[0] if len(enc_arr.shape) > 0 else 0
+                if dim == 128:
+                    if YUNET_AVAILABLE:
+                        with _yunet_lock:
+                            _yunet_enc_cache[pid] = enc_arr
+                elif dim in (1280, 608):
+                    with _obj_lock:
+                        _obj_enc_cache[pid] = enc_arr
         faces_db = db
         update_db_counts()
     except Exception as e: app_log.error(f"DB load: {e}"); faces_db = {}; update_db_counts()
@@ -2931,7 +2986,10 @@ def camera_thread(cs: CameraState):
                                 if not exists:
                                     del cs.track_to_pid[tid]
                                     continue
-                                disp = name.split("-")[0][:12]
+                                if is_person:
+                                    disp = name.split("-")[0][:12]
+                                else:
+                                    disp = f"OBJECT: {name}"[:22]
 
                         # Schedule recognition only if not locked
                         is_locked = cs.tid_identity_locked.get(tid, False)
