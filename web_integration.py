@@ -257,6 +257,7 @@ def get_control_handlers(cameras, threat_engine) -> dict:
             if sv:
                 sv.speak("System shutdown initiated.")
                 sv.log_event("SYSTEM_SHUTDOWN", detail="web command")
+                sv.Config.should_shutdown = True
         except Exception as e:
             return f"Error: {e}"
         return "Shutdown initiated"

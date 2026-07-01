@@ -201,6 +201,7 @@ class Config:
     TG_MAX_RETRIES = _cfg("threat","max_retries", default=3)
     TG_RETRY_DELAY = _cfg("threat","retry_delay",  default=2.0)
     TG_QUEUE_SIZE  = _cfg("threat","queue_size",   default=128)
+    should_shutdown = False
 
     COOLDOWN: Dict[str, float] = _cfg("threat","cooldown", default={
         "PERSON_ENTERED": 60, "PERSON_RETURNED": 60, "PERSON_LEFT": 45,
@@ -4878,6 +4879,9 @@ def main():
     app_log.info("OMS dashboard live.")
 
     while True:
+        if getattr(Config, "should_shutdown", False):
+            app_log.info("OMS shutdown requested.")
+            break
         clear_blur_cache()
         now = time.time()  # MUST be first — referenced throughout the loop
         loop_start = now
