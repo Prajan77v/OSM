@@ -4849,7 +4849,7 @@ def main():
             wi.get_summary,
             wi.get_control_handlers(cameras, threat_engine),
         )
-        ws.start_server(port=8000, open_browser=True)
+        ws.start_server(port=8000, open_browser=False)
         app_log.info("OMS Web Dashboard started on http://localhost:8000")
     except Exception as _web_err:
         app_log.warning(f"Web server not started: {_web_err}")
