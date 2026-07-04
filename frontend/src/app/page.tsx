@@ -1015,7 +1015,7 @@ export default function Dashboard() {
   };
 
   // Advanced Object Enrollment functions & effects
-  const POSES = ["front", "back", "left", "right", "top", "bottom", "left_45", "right_45"];
+  const POSES = ["front", "back", "left", "right", "top", "bottom", "angle_left", "angle_right"];
 
   const loadEnrolledPeople = useCallback(async () => {
     try {
@@ -2324,8 +2324,8 @@ export default function Dashboard() {
                                   {POSES[guidedActivePoseIdx] === "right" && "Turn the object 90 degrees to show its right side."}
                                   {POSES[guidedActivePoseIdx] === "top" && "Tilt the object to show its top side."}
                                   {POSES[guidedActivePoseIdx] === "bottom" && "Tilt the object to show its bottom side."}
-                                  {POSES[guidedActivePoseIdx] === "left_45" && "Turn the object 45 degrees towards the left."}
-                                  {POSES[guidedActivePoseIdx] === "right_45" && "Turn the object 45 degrees towards the right."}
+                                  {POSES[guidedActivePoseIdx] === "angle_left" && "Turn the object 45 degrees towards the left."}
+                                  {POSES[guidedActivePoseIdx] === "angle_right" && "Turn the object 45 degrees towards the right."}
                                 </p>
                               </div>
 
