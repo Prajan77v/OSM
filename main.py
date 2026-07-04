@@ -627,8 +627,8 @@ _obj_transform          = None    # torchvision transform pipeline
 _obj_enc_cache: Dict[str, any] = {}  # pid -> object embedding list
 _obj_orb_cache: Dict[str, List[np.ndarray]] = {}  # pid -> list of ORB descriptors
 
-_yunet_lock             = threading.Lock()
-_obj_lock               = _yunet_lock
+_yunet_lock             = threading.RLock()
+_obj_lock               = threading.RLock()
 
 def _download_model(url: str, path: str):
     Path(path).parent.mkdir(parents=True, exist_ok=True)
