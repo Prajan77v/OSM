@@ -1565,8 +1565,9 @@ def create_app() -> "FastAPI":
                          max(0, x1-pad):min(w, x2+pad)]
             if crop.size == 0:
                 crop = None
-        else:
-            # Fallback: Crop the center 50% of the frame where objects are typically presented
+
+        if crop is None:
+            # Fallback 1: Crop the center 50% of the frame where objects are typically presented
             cx, cy = w // 2, h // 2
             cw, ch = int(w * 0.5), int(h * 0.5)
             x1, y1 = cx - cw // 2, cy - ch // 2
@@ -1576,15 +1577,12 @@ def create_app() -> "FastAPI":
                 crop = None
 
         if crop is None:
-            return JSONResponse({"status": "error", "message": "No physical object or frame center could be acquired."}, status_code=400)
+            # Fallback 2: Use the full frame itself
+            crop = frame
 
-        # Blur quality check
+        # Calculate blur score for logging, but NEVER reject the frame
         gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
         blur_score = cv2.Laplacian(gray, cv2.CV_64F).var()
-        if blur_score < 5.0:
-            return JSONResponse({"status": "error",
-                                 "message": f"Image too blurry (score: {blur_score:.1f}). Hold the object still."},
-                                status_code=400)
 
         enroll_dir = WORKING_DIR / "objects" / "enrolled" / pid
         enroll_dir.mkdir(parents=True, exist_ok=True)
