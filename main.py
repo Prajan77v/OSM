@@ -668,12 +668,12 @@ def _init_yunet():
         import torchvision.transforms as transforms
 
         try:
-            weights = models.MobileNet_V2_Weights.IMAGENET1K_V1
-            model = models.mobilenet_v2(weights=weights)
+            weights = models.ResNet50_Weights.DEFAULT
+            model = models.resnet50(weights=weights)
         except AttributeError:
-            model = models.mobilenet_v2(pretrained=True)
+            model = models.resnet50(pretrained=True)
 
-        model.classifier = torch.nn.Identity()
+        model.fc = torch.nn.Identity()
         model.eval()
         device = "cuda" if (CUDA_AVAILABLE and Config.USE_CUDA) else "cpu"
         model = model.to(device)
@@ -695,11 +695,11 @@ def _init_yunet():
             ])
 
         OBJECT_ENGINE_AVAILABLE = True
-        print("[OMS] ✔ Object Recognition Engine ONLINE (MobileNetV2 CNN)")
-        app_log.info("[OBJ] MobileNetV2 CNN Object Recognition ONLINE")
+        print("[OMS] ✔ Object Recognition Engine ONLINE (ResNet50 CNN)")
+        app_log.info("[OBJ] ResNet50 CNN Object Recognition ONLINE")
         return
     except Exception as e:
-        app_log.warning(f"[OBJ] MobileNetV2 not available ({e}). Using ORB+Histogram fallback.")
+        app_log.warning(f"[OBJ] ResNet50 not available ({e}). Using ORB+Histogram fallback.")
 
     OBJECT_ENGINE_AVAILABLE = True
     print("[OMS] ~ Object Recognition Engine ONLINE (ORB+Histogram fallback)")
@@ -720,7 +720,7 @@ def _preprocess_lighting(img_bgr: np.ndarray) -> np.ndarray:
 
 
 def _object_encode_cnn(img_bgr: np.ndarray) -> Optional[np.ndarray]:
-    """Extract 1280-dim MobileNetV2 feature vector (L2-normalised)."""
+    """Extract 2048-dim ResNet50 feature vector (L2-normalised)."""
     if _obj_model is None or _obj_transform is None:
         return None
     try:
@@ -939,9 +939,9 @@ def _object_match(enc: np.ndarray, img_bgr: Optional[np.ndarray] = None) -> Tupl
                 # Normalize matches: 15+ RANSAC inliers = 1.0
                 pid_orb_score = min(1.0, max_inliers / 15.0)
             
-            # Blend score (CNN 50%, ORB 50% if ORB cache/descriptors exist, else 100% CNN)
+            # Blend score (CNN 30%, ORB 70% if ORB cache/descriptors exist, else 100% CNN)
             if train_templates and query_desc is not None and len(query_desc) >= 10:
-                hybrid_score = 0.5 * pid_cnn_score + 0.5 * pid_orb_score
+                hybrid_score = 0.3 * pid_cnn_score + 0.7 * pid_orb_score
             else:
                 hybrid_score = pid_cnn_score
                 
@@ -1783,7 +1783,7 @@ def _load_db_json():
                         if YUNET_AVAILABLE:
                             with _yunet_lock:
                                 _yunet_enc_cache[pid] = encs
-                    elif dim in (1280, 608):
+                    elif dim in (2048, 1280, 608):
                         with _obj_lock:
                             _obj_enc_cache[pid] = encs
                 # Also ensure single encoding key is set for backward compat
@@ -1799,13 +1799,13 @@ def _load_db_json():
                     if YUNET_AVAILABLE:
                         with _yunet_lock:
                             _yunet_enc_cache[pid] = enc_arr
-                elif dim in (1280, 608):
+                elif dim in (2048, 1280, 608):
                     with _obj_lock:
                         _obj_enc_cache[pid] = enc_arr
         faces_db = db
         update_db_counts()
         
-        # Build ORB cache for all physical objects to speed up hybrid matching
+        # Build ORB cache for all physical objects to speed up hybrid matching, and dynamically update legacy embeddings
         for pid in list(faces_db.keys()):
             dim = 0
             if "encoding" in faces_db[pid] and faces_db[pid]["encoding"] is not None:
@@ -1815,7 +1815,25 @@ def _load_db_json():
                 enc_arr = np.array(faces_db[pid]["encodings"][0])
                 dim = enc_arr.shape[0] if len(enc_arr.shape) > 0 else 0
             
-            if dim in (1280, 608):
+            if dim in (2048, 1280, 608):
+                # Upgrade legacy embeddings to ResNet50 if enrolled image templates are available
+                enroll_dir = WORKING_DIR / "objects" / "enrolled" / pid
+                if enroll_dir.exists():
+                    new_encodings = []
+                    for pose in ["front", "back", "left", "right", "top", "bottom", "angle_left", "angle_right"]:
+                        img_path = enroll_dir / f"{pose}.jpg"
+                        if img_path.exists():
+                            img = cv2.imread(str(img_path))
+                            if img is not None:
+                                enc = _object_encode(img)
+                                if enc is not None:
+                                    new_encodings.append(enc)
+                    if new_encodings:
+                        with _obj_lock:
+                            _obj_enc_cache[pid] = new_encodings
+                        faces_db[pid]["encodings"] = new_encodings
+                        faces_db[pid]["encoding"] = new_encodings[0]
+                        _mark_db_dirty()
                 try:
                     _update_orb_cache(pid)
                 except Exception as ex:
