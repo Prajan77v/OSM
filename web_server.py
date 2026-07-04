@@ -1550,12 +1550,15 @@ def create_app() -> "FastAPI":
 
         h, w = frame.shape[:2]
 
-        # Crop the largest YOLO-detected bounding box (excluding person boxes) in the frame
+        # Crop the YOLO-detected bounding box (excluding person boxes) closest to the center of the frame
         crop = None
         dets = list(getattr(active_cs, "latest_dets", []))
         non_person_dets = [d for d in dets if d.get("label") != "person"]
         if non_person_dets:
-            best = max(non_person_dets, key=lambda d: (d['box'][2]-d['box'][0])*(d['box'][3]-d['box'][1]))
+            best = min(non_person_dets, key=lambda d: (
+                ((d['box'][0] + d['box'][2]) / 2.0 - w/2.0)**2 +
+                ((d['box'][1] + d['box'][3]) / 2.0 - h/2.0)**2
+            ))
             x1, y1, x2, y2 = best['box']
             pad = 10
             crop = frame[max(0, y1-pad):min(h, y2+pad),
@@ -1578,7 +1581,7 @@ def create_app() -> "FastAPI":
         # Blur quality check
         gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
         blur_score = cv2.Laplacian(gray, cv2.CV_64F).var()
-        if blur_score < 20.0:
+        if blur_score < 5.0:
             return JSONResponse({"status": "error",
                                  "message": f"Image too blurry (score: {blur_score:.1f}). Hold the object still."},
                                 status_code=400)
@@ -1863,7 +1866,7 @@ def create_app() -> "FastAPI":
                 # Blur check
                 gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
                 blur_score = cv2.Laplacian(gray, cv2.CV_64F).var()
-                if blur_score < 15.0:
+                if blur_score < 5.0:
                     rejected_reasons.append(f"Image {i+1}: Too blurry (score: {blur_score:.1f})")
                     continue
 

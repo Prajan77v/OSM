@@ -1068,7 +1068,7 @@ export default function Dashboard() {
       const res = await fetch(`${API}/api/enroll/capture/${guidedPid}/${pose}`, { method: "POST" });
       const data = await res.json();
       if (res.ok && data.status === "ok") {
-        setGuidedLog(prev => [...prev, `✓ Pose '${pose}' captured: Size: ${data.face_size}, Blur: ${data.blur_score.toFixed(1)}, Conf: ${data.confidence.toFixed(2)}`]);
+        setGuidedLog(prev => [...prev, `✓ Pose '${pose}' captured: Size: ${data.object_size || "unknown"}, Blur: ${(data.blur_score || 0).toFixed(1)}`]);
         setGuidedProgress(prev => ({ ...prev, [pose]: true }));
         if (guidedActivePoseIdx < POSES.length - 1) {
           setGuidedActivePoseIdx(prev => prev + 1);
