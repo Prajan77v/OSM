@@ -922,8 +922,9 @@ def _object_match(enc: np.ndarray, img_bgr: Optional[np.ndarray] = None) -> Tupl
                             if len(m_n) == 2:
                                 m, n = m_n
                                 if m.distance < 0.75 * n.distance:
-                                    pts_q.append(query_kps[m.queryIdx])
-                                    pts_t.append(t_kps[m.trainIdx])
+                                    if m.queryIdx < len(query_kps) and m.trainIdx < len(t_kps):
+                                        pts_q.append(query_kps[m.queryIdx])
+                                        pts_t.append(t_kps[m.trainIdx])
                                     
                         if len(pts_q) >= 6:
                             pts_q = np.array(pts_q, dtype=np.float32).reshape(-1, 1, 2)
@@ -2810,63 +2811,69 @@ def camera_thread(cs: CameraState):
     cs.connect()
 
     while True:
-        if getattr(cs, "removed", False):
-            cs.release()
-            break
-        loop_t = time.perf_counter()  # Frame-rate throttle reference
+        try:
+            if getattr(cs, "removed", False):
+                cs.release()
+                break
+            loop_t = time.perf_counter()  # Frame-rate throttle reference
 
-        # (Dynamic YOLO reloading disabled to prevent UI crashes. Changes apply on restart.)
+            # (Dynamic YOLO reloading disabled to prevent UI crashes. Changes apply on restart.)
 
-        if cs.disconnected:
-            time.sleep(1.0); continue
-        if not cs.online:
-            reconnect_attempts = getattr(cs, "_reconnect_attempts", 0)
-            delay = min(60.0, 3.0 * (2 ** min(reconnect_attempts, 4)))
-            app_log.info(f"[{cs.name}] Reconnecting in {delay} seconds (attempt {reconnect_attempts + 1})...")
-            time.sleep(delay)
-            cs.release()
-            cs.connect()
-            if cs.online:
-                cs._reconnect_attempts = 0
-                read_fails = 0
-                log_event("CAM_RECONNECT", camera=cs.name)
-            else:
-                cs._reconnect_attempts = reconnect_attempts + 1
-            continue
+            if cs.disconnected:
+                time.sleep(1.0); continue
+            if not cs.online:
+                reconnect_attempts = getattr(cs, "_reconnect_attempts", 0)
+                delay = min(60.0, 3.0 * (2 ** min(reconnect_attempts, 4)))
+                app_log.info(f"[{cs.name}] Reconnecting in {delay} seconds (attempt {reconnect_attempts + 1})...")
+                time.sleep(delay)
+                cs.release()
+                cs.connect()
+                if cs.online:
+                    cs._reconnect_attempts = 0
+                    read_fails = 0
+                    log_event("CAM_RECONNECT", camera=cs.name)
+                else:
+                    cs._reconnect_attempts = reconnect_attempts + 1
+                continue
 
-        ret, raw_frame = cs.cap.read()
-        if not ret or raw_frame is None:
-            read_fails += 1
-            if read_fails >= 5:
-                # Only declare offline after 5 consecutive failures (transient drops ignored)
-                cs.online = False
-                read_fails = 0
-            time.sleep(0.02)  # Small back-off to avoid spinning on a broken stream
-            continue
-        read_fails = 0  # Reset on successful read
+            ret, raw_frame = cs.cap.read()
+            if not ret or raw_frame is None:
+                read_fails += 1
+                if read_fails >= 5:
+                    # Only declare offline after 5 consecutive failures (transient drops ignored)
+                    cs.online = False
+                    read_fails = 0
+                time.sleep(0.02)  # Small back-off to avoid spinning on a broken stream
+                continue
+            read_fails = 0  # Reset on successful read
 
-        # Motion detection is extremely cheap when run on raw_frame because has_motion resizes directly to 160x90
-        has_motion = cs.motion.has_motion(raw_frame)
-        if has_motion: cs.last_motion = time.time(); cs.idle_cnt = 0
-        else: cs.idle_cnt += 1
-        idle   = (time.time() - cs.last_motion) > 3.0 and not has_motion
-        skip_n = adaptive.skip_n + (Config.IDLE_SKIP_EXTRA if idle else 0)
+            # Motion detection is extremely cheap when run on raw_frame because has_motion resizes directly to 160x90
+            has_motion = cs.motion.has_motion(raw_frame)
+            if has_motion: cs.last_motion = time.time(); cs.idle_cnt = 0
+            else: cs.idle_cnt += 1
+            idle   = (time.time() - cs.last_motion) > 3.0 and not has_motion
+            skip_n = adaptive.skip_n + (Config.IDLE_SKIP_EXTRA if idle else 0)
 
-        # Defer main frame resizing to Config.FRAME_W, Config.FRAME_H
-        if cs.frame_cnt % skip_n != 0:
-            frame = cv2.resize(raw_frame, (Config.FRAME_W, Config.FRAME_H), interpolation=cv2.INTER_LINEAR)
-            with cs.frame_lock: cs.latest_frame = frame; cs.tile_dirty = has_motion
-            cs.frame_cnt += 1; cs._fps_cnt += 1
-            t = time.perf_counter(); e = t - cs._fps_t
-            if e >= 1.0:
-                cs.fps_inst = cs._fps_cnt / e; cs._fps_cnt = 0; cs._fps_t = t
-                cs.fps_spark.append(cs.fps_inst)
-            # Throttle sleep
-            elapsed_loop = time.perf_counter() - loop_t
-            target_s = 1.0 / max(1, adaptive.fps_target)
-            sleep_s  = target_s - elapsed_loop
-            if sleep_s > 0.001:
-                time.sleep(sleep_s)
+            # Defer main frame resizing to Config.FRAME_W, Config.FRAME_H
+            if cs.frame_cnt % skip_n != 0:
+                frame = cv2.resize(raw_frame, (Config.FRAME_W, Config.FRAME_H), interpolation=cv2.INTER_LINEAR)
+                with cs.frame_lock: cs.latest_frame = frame; cs.tile_dirty = has_motion
+                cs.frame_cnt += 1; cs._fps_cnt += 1
+                t = time.perf_counter(); e = t - cs._fps_t
+                if e >= 1.0:
+                    cs.fps_inst = cs._fps_cnt / e; cs._fps_cnt = 0; cs._fps_t = t
+                    cs.fps_spark.append(cs.fps_inst)
+                # Throttle sleep
+                elapsed_loop = time.perf_counter() - loop_t
+                target_s = 1.0 / max(1, adaptive.fps_target)
+                sleep_s  = target_s - elapsed_loop
+                if sleep_s > 0.001:
+                    time.sleep(sleep_s)
+                continue
+        except Exception as e:
+            app_log.error(f"[{cs.name}] Camera loop read/reconnect error: {e}", exc_info=True)
+            cs.online = False
+            time.sleep(2.0)
             continue
 
         frame = cv2.resize(raw_frame, (Config.FRAME_W, Config.FRAME_H), interpolation=cv2.INTER_LINEAR)
