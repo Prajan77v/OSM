@@ -625,6 +625,7 @@ OBJECT_ENGINE_AVAILABLE = False
 _obj_model              = None    # MobileNetV2 model
 _obj_transform          = None    # torchvision transform pipeline
 _obj_enc_cache: Dict[str, any] = {}  # pid -> object embedding list
+_obj_orb_cache: Dict[str, List[np.ndarray]] = {}  # pid -> list of ORB descriptors
 
 _yunet_lock             = threading.Lock()
 _obj_lock               = _yunet_lock
@@ -838,29 +839,121 @@ def _yunet_encode(img_bgr: np.ndarray) -> Optional[np.ndarray]:
         return None
 
 
-def _object_match(enc: np.ndarray, face_size: Optional[int] = None) -> Tuple[Optional[str], Optional[str], bool, float]:
-    """Cosine similarity match against all enrolled object embeddings."""
-    best_score, best_pid = -1.0, None
+def _extract_raw_orb_keypoints_and_descriptors(img_bgr: np.ndarray) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+    try:
+        gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+        h, w = gray.shape[:2]
+        if w > 320 or h > 320:
+            scale = min(320.0 / w, 320.0 / h)
+            gray = cv2.resize(gray, (0, 0), fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+        orb = cv2.ORB_create(nfeatures=500)
+        kps, desc = orb.detectAndCompute(gray, None)
+        if kps and desc is not None:
+            coords = np.array([kp.pt for kp in kps], dtype=np.float32)
+            return coords, desc
+        return None, None
+    except Exception:
+        return None, None
+
+def _update_orb_cache(pid: str):
+    """Pre-compute and cache ORB keypoints and descriptors for all poses of an object."""
+    templates = []
+    enroll_dir = WORKING_DIR / "objects" / "enrolled" / pid
+    if enroll_dir.exists():
+        for pose in ["front", "back", "left", "right", "top", "bottom", "angle_left", "angle_right"]:
+            img_path = enroll_dir / f"{pose}.jpg"
+            if img_path.exists():
+                img = cv2.imread(str(img_path))
+                if img is not None:
+                    kps, desc = _extract_raw_orb_keypoints_and_descriptors(img)
+                    if kps is not None and desc is not None:
+                        templates.append({"kps": kps, "desc": desc})
+    else:
+        photo_path = WORKING_DIR / f"objects/known/{pid}.jpg"
+        if photo_path.exists():
+            img = cv2.imread(str(photo_path))
+            if img is not None:
+                kps, desc = _extract_raw_orb_keypoints_and_descriptors(img)
+                if kps is not None and desc is not None:
+                    templates.append({"kps": kps, "desc": desc})
+    
+    with _obj_lock:
+        if templates:
+            _obj_orb_cache[pid] = templates
+
+def _object_match(enc: np.ndarray, img_bgr: Optional[np.ndarray] = None) -> Tuple[Optional[str], Optional[str], bool, float]:
+    """Hybrid Cosine Similarity + ORB Feature Matcher with Homography RANSAC Verification."""
+    best_score = -1.0
+    best_pid = None
+    
+    query_kps, query_desc = None, None
+    if img_bgr is not None:
+        query_kps, query_desc = _extract_raw_orb_keypoints_and_descriptors(img_bgr)
+        
+    bf = cv2.BFMatcher(cv2.NORM_HAMMING)
+    
     with _obj_lock:
         for pid, cached in _obj_enc_cache.items():
-            try:
-                candidates = cached if isinstance(cached, list) else [cached]
-                for c_enc in candidates:
-                    if c_enc.shape != enc.shape:
+            # 1. Cosine similarity score for this pid
+            pid_cnn_score = -1.0
+            candidates = cached if isinstance(cached, list) else [cached]
+            for c_enc in candidates:
+                if c_enc.shape == enc.shape:
+                    s = float(np.dot(enc, c_enc))
+                    if s > pid_cnn_score:
+                        pid_cnn_score = s
+            
+            # 2. ORB RANSAC match score for this pid
+            pid_orb_score = 0.0
+            train_templates = _obj_orb_cache.get(pid, [])
+            
+            if query_desc is not None and len(query_desc) >= 10 and train_templates:
+                max_inliers = 0
+                for t in train_templates:
+                    t_kps = t["kps"]
+                    t_desc = t["desc"]
+                    if t_desc is None or len(t_desc) < 10:
                         continue
-                    score = float(np.dot(enc, c_enc))
-                    if score > best_score:
-                        best_score = score
-                        best_pid   = pid
-            except Exception:
-                pass
-
+                    try:
+                        matches = bf.knnMatch(query_desc, t_desc, k=2)
+                        pts_q = []
+                        pts_t = []
+                        for m_n in matches:
+                            if len(m_n) == 2:
+                                m, n = m_n
+                                if m.distance < 0.75 * n.distance:
+                                    pts_q.append(query_kps[m.queryIdx])
+                                    pts_t.append(t_kps[m.trainIdx])
+                                    
+                        if len(pts_q) >= 6:
+                            pts_q = np.array(pts_q, dtype=np.float32).reshape(-1, 1, 2)
+                            pts_t = np.array(pts_t, dtype=np.float32).reshape(-1, 1, 2)
+                            _, mask = cv2.findHomography(pts_q, pts_t, cv2.RANSAC, 5.0)
+                            if mask is not None:
+                                inliers = int(np.sum(mask))
+                                if inliers > max_inliers:
+                                    max_inliers = inliers
+                    except Exception:
+                        pass
+                # Normalize matches: 15+ RANSAC inliers = 1.0
+                pid_orb_score = min(1.0, max_inliers / 15.0)
+            
+            # Blend score (CNN 50%, ORB 50% if ORB cache/descriptors exist, else 100% CNN)
+            if train_templates and query_desc is not None and len(query_desc) >= 10:
+                hybrid_score = 0.5 * pid_cnn_score + 0.5 * pid_orb_score
+            else:
+                hybrid_score = pid_cnn_score
+                
+            if hybrid_score > best_score:
+                best_score = hybrid_score
+                best_pid = pid
+                
     thresh = Config.OBJECT_MATCH_THRESH
     with _fdb_lock:
         is_known = faces_db.get(best_pid, {}).get("known", False) if best_pid else False
     if not is_known:
         thresh = min(thresh, max(0.65, thresh - 0.10))
-
+        
     if best_pid and best_score >= thresh:
         with _fdb_lock:
             name = faces_db.get(best_pid, {}).get("name", "Unknown")
@@ -1710,6 +1803,22 @@ def _load_db_json():
                         _obj_enc_cache[pid] = enc_arr
         faces_db = db
         update_db_counts()
+        
+        # Build ORB cache for all physical objects to speed up hybrid matching
+        for pid in list(faces_db.keys()):
+            dim = 0
+            if "encoding" in faces_db[pid] and faces_db[pid]["encoding"] is not None:
+                enc_arr = np.array(faces_db[pid]["encoding"])
+                dim = enc_arr.shape[0] if len(enc_arr.shape) > 0 else 0
+            elif "encodings" in faces_db[pid] and faces_db[pid]["encodings"]:
+                enc_arr = np.array(faces_db[pid]["encodings"][0])
+                dim = enc_arr.shape[0] if len(enc_arr.shape) > 0 else 0
+            
+            if dim in (1280, 608):
+                try:
+                    _update_orb_cache(pid)
+                except Exception as ex:
+                    app_log.warning(f"Failed to precompute ORB descriptors for {pid}: {ex}")
     except Exception as e: app_log.error(f"DB load: {e}"); faces_db = {}; update_db_counts()
 
 # Async dirty-flag for face DB saves — avoids blocking camera threads
@@ -1911,7 +2020,7 @@ def async_face(rgb_or_bgr: np.ndarray, is_bgr: bool = False, is_person: bool = T
                 bgr = rgb_or_bgr if is_bgr else cv2.cvtColor(rgb_or_bgr, cv2.COLOR_RGB2BGR)
                 enc = _object_encode(bgr)
                 if enc is None: return None, None, 0.0
-                pid, name, _, score = _object_match(enc)
+                pid, name, _, score = _object_match(enc, bgr)
                 if pid:
                     return pid, name, score
             except Exception as e:

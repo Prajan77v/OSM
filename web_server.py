@@ -1663,6 +1663,10 @@ def create_app() -> "FastAPI":
 
         with sv._obj_lock:
             sv._obj_enc_cache[pid] = encodings
+            try:
+                sv._update_orb_cache(pid)
+            except Exception as ex:
+                app_log.warning(f"Failed to update ORB cache for saved profile {pid}: {ex}")
 
         try:
             sv.db_log_person(pid, name, True, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
@@ -1911,6 +1915,10 @@ def create_app() -> "FastAPI":
 
         with sv._obj_lock:
             sv._obj_enc_cache[pid] = encodings
+            try:
+                sv._update_orb_cache(pid)
+            except Exception as ex:
+                app_log.warning(f"Failed to update ORB cache for uploaded profile {pid}: {ex}")
 
         try:
             sv.db_log_person(pid, name, True, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
