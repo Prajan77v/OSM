@@ -3133,42 +3133,57 @@ export default function Dashboard() {
                 animate={{ opacity: 1, scale: 1 }}
                 className="glass-premium flex-1 p-6 flex flex-col min-h-0 h-full overflow-hidden"
               >
-                <div className="flex items-center gap-3 border-b border-white/5 pb-4 mb-4 flex-shrink-0">
-                  <AlertTriangle className="text-gold-accent" size={20} />
-                  <h2 className="font-orbitron text-base font-black text-gold-accent tracking-widest uppercase">
-                    OMS RECOGNITION SECURITY ALERT LOG DATABASE
-                  </h2>
+                <div className="flex items-center justify-between border-b border-white/5 pb-4 mb-4 flex-shrink-0">
+                  <div className="flex items-center gap-3">
+                    <AlertTriangle className="text-gold-accent" size={20} />
+                    <h2 className="font-orbitron text-base font-black text-gold-accent tracking-widest uppercase">
+                      OMS RECOGNITION SECURITY ALERT LOG DATABASE
+                    </h2>
+                  </div>
+                  <span className="font-mono text-[9px] text-sec glass-premium px-2 py-1">
+                    TOTAL RECORDS: {events.length}
+                  </span>
                 </div>
 
-                <div className="flex-1 overflow-y-auto pr-1 flex flex-col gap-2">
-                  {events.map((ev, i) => {
-                    const color = EVENT_COLORS[ev.event] || "#B8B8B8";
-                    return (
-                      <div 
-                        key={i} 
-                        className="glass-premium bg-black/30 p-3 border border-white/5 hover:border-gold-dim/10 flex items-center justify-between gap-4"
-                        style={{ borderRadius: 12 }}
-                      >
-                        <div className="flex items-center gap-3 min-w-0">
-                          <div className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: color, boxShadow: `0 0 8px ${color}` }} />
-                          <div className="min-w-0">
-                            <span className="font-orbitron text-[10.5px] font-black tracking-wider uppercase block" style={{ color }}>
-                              {eventLabel(ev.event)}
-                            </span>
-                            <span className="font-inter text-[9.5px] text-sec truncate block">
-                              Source Camera: <span className="text-[#FFFFFF]">{ev.camera || "Sector Grid"}</span> | Payload Details: <span className="text-[#FFFFFF] font-mono">{ev.detail || "Baseline confirmed"}</span>
-                            </span>
-                          </div>
-                        </div>
-                        <div className="text-right flex-shrink-0">
-                          <span className="font-orbitron text-xs font-bold text-gold block">{ev.person || opName.toUpperCase()}</span>
-                          <span className="font-mono text-[9px] text-muted block mt-0.5">{ev.ts}</span>
-                        </div>
-                      </div>
-                    );
-                  })}
-                  {events.length === 0 && (
+                <div className="flex-1 overflow-auto pr-1">
+                  {events.length === 0 ? (
                     <div className="text-center py-10 font-mono text-[10px] text-muted">Timeline logs pristine. No telemetry captured</div>
+                  ) : (
+                    <table className="w-full text-left font-mono text-[9.5px] border-collapse">
+                      <thead>
+                        <tr className="border-b border-white/10 text-gold-accent font-orbitron text-[9px] font-black uppercase tracking-wider bg-white/5">
+                          <th className="py-2.5 px-3">Time</th>
+                          <th className="py-2.5 px-3">Event Type</th>
+                          <th className="py-2.5 px-3">Detected Subject</th>
+                          <th className="py-2.5 px-3">Camera</th>
+                          <th className="py-2.5 px-3">Telemetry / Detail</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {events.map((ev, i) => {
+                          const color = EVENT_COLORS[ev.event] || "#B8B8B8";
+                          return (
+                            <tr 
+                              key={i} 
+                              className="border-b border-white/5 hover:bg-white/5 transition-colors duration-150"
+                            >
+                              <td className="py-2.5 px-3 text-muted whitespace-nowrap">{ev.ts}</td>
+                              <td className="py-2.5 px-3">
+                                <div className="flex items-center gap-2">
+                                  <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: color, boxShadow: `0 0 6px ${color}` }} />
+                                  <span className="font-orbitron font-black tracking-wider uppercase" style={{ color }}>
+                                    {eventLabel(ev.event)}
+                                  </span>
+                                </div>
+                              </td>
+                              <td className="py-2.5 px-3 text-[#FFFFFF] font-bold">{ev.person || opName.toUpperCase()}</td>
+                              <td className="py-2.5 px-3 text-sec font-medium">{ev.camera || "Sector Grid"}</td>
+                              <td className="py-2.5 px-3 text-sec italic max-w-xs truncate" title={ev.detail}>{ev.detail || "Baseline confirmed"}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
                   )}
                 </div>
               </motion.div>

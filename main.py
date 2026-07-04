@@ -2344,27 +2344,7 @@ class BehaviorEngine:
                             anomalies.append("IDLE")
                             rec.last_tg_status = "IDLE"
 
-        # Pacing detection
-        recent_changes = [t for t in rec.direction_changes if now - t < Config.PACE_WINDOW_SECS]
-        if len(recent_changes) >= Config.PACE_DIR_CHANGES and now - rec.pacing_alerted > 30:
-            anomalies.append("PACING")
-            rec.pacing_alerted = now
-
-        # Zone loitering
-        for zone_name in zones_in:
-            if zone_name not in rec.zone_entry_time:
-                rec.zone_entry_time[zone_name] = now
-            elapsed = now - rec.zone_entry_time[zone_name]
-            if elapsed > Config.LOITER_SECS:
-                last_alerted = rec.loitering_alerted.get(zone_name, 0)
-                if now - last_alerted > 30:
-                    anomalies.append(f"LOITERING:{zone_name}")
-                    rec.loitering_alerted[zone_name] = now
-        # Clear zone timers for zones no longer occupied
-        for zone_name in list(rec.zone_entry_time.keys()):
-            if zone_name not in zones_in:
-                del rec.zone_entry_time[zone_name]
-
+        # Pacing and loitering detections disabled as per request (only ACTIVE/IDLE supported)
         return anomalies
 
     def soft_remove(self, pid: str):
