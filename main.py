@@ -977,7 +977,7 @@ def _object_match(enc: np.ndarray, img_bgr: Optional[np.ndarray] = None) -> Tupl
 _yunet_match = _object_match
 
 
-def _yunet_match_face(enc: np.ndarray, face_size: Optional[int] = None) -> Tuple[Optional[str], Optional[str], bool, float]:
+def _yunet_match_face(enc: np.ndarray, face_size: Optional[int] = None, blur_score: Optional[float] = None) -> Tuple[Optional[str], Optional[str], bool, float]:
     """Compare enc against all cached face embeddings."""
     best_score, best_pid = -1.0, None
     with _yunet_lock:
@@ -1002,6 +1002,10 @@ def _yunet_match_face(enc: np.ndarray, face_size: Optional[int] = None) -> Tuple
 
     if face_size is not None and face_size < 50:
         thresh += 0.03
+
+    if blur_score is not None and blur_score < 25.0:
+        # Increase threshold for blurry images to avoid false matches
+        thresh += 0.04
         
     if best_pid and best_score >= thresh:
         with _fdb_lock:
@@ -2074,9 +2078,15 @@ def async_face(rgb_or_bgr: np.ndarray, is_bgr: bool = False, is_person: bool = T
     elif YUNET_AVAILABLE:
         try:
             bgr = rgb_or_bgr if is_bgr else cv2.cvtColor(rgb_or_bgr, cv2.COLOR_RGB2BGR)
+            # Calculate blur score using Laplacian variance
+            gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+            blur_score = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+            if blur_score < 12.0:
+                # Ignore extremely blurry frames to prevent false matches
+                return None, None, 0.0
             enc = _yunet_encode(bgr)
             if enc is None: return None, None, 0.0
-            pid, name, is_new, score = _yunet_match_face(enc, face_size=face_size)
+            pid, name, is_new, score = _yunet_match_face(enc, face_size=face_size, blur_score=blur_score)
             if is_new:
                 if Config.DETECT_NEW_IDS:
                     if face_size is not None and face_size >= 75:
@@ -3087,7 +3097,7 @@ def camera_thread(cs: CameraState):
                                         candidates.append((active_tid, active_pid, cs.last_track_boxes[active_tid]))
                             
                             cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
-                            best_dist = 80.0
+                            best_dist = 160.0
                             for c_tid, c_pid, c_box in candidates:
                                 cx1, cy1, cx2, cy2 = c_box
                                 ccx, ccy = (cx1 + cx2) / 2.0, (cy1 + cy2) / 2.0
