@@ -26,6 +26,11 @@ import sys
 import threading
 import time
 import urllib.request
+import ssl
+try:
+    ssl._create_default_https_context = ssl._create_unverified_context
+except AttributeError:
+    pass
 from collections import Counter, deque
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -631,8 +636,15 @@ _yunet_lock             = threading.RLock()
 _obj_lock               = threading.RLock()
 
 def _download_model(url: str, path: str):
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    if Path(path).exists(): return True
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    if p.exists() and p.stat().st_size > 10240:
+        return True
+    if p.exists():
+        try:
+            p.unlink()
+        except Exception:
+            pass
     try:
         app_log.info(f"[YUNET] Downloading {Path(path).name} ...")
         print(f"[OMS] Downloading neural face model: {Path(path).name}")
@@ -2796,7 +2808,14 @@ def on_behavior_anomaly(cs: CameraState, pid: str, name: str, anomaly: str):
         cs.warning_msg = f"ANOMALY: {btype}"
     cs.warning_time = time.time()
 
+_camera_heartbeats: Dict[int, float] = {}
+_camera_run_ids: Dict[int, int] = {}
+
 def camera_thread(cs: CameraState):
+    run_id = random.randint(100000, 999999)
+    _camera_run_ids[cs.cam_id] = run_id
+    _camera_heartbeats[cs.cam_id] = time.time()
+
     yolo       = make_camera_yolo()
     cs.yolo_model = yolo
     cs.loaded_model_name = Config.MODEL_NAME
@@ -2810,6 +2829,11 @@ def camera_thread(cs: CameraState):
 
     while True:
         try:
+            _camera_heartbeats[cs.cam_id] = time.time()
+            if _camera_run_ids.get(cs.cam_id) != run_id:
+                app_log.info(f"[{cs.name}] Replaced by a newer thread run (run_id: {run_id}). Exiting current thread.")
+                break
+
             if getattr(cs, "removed", False):
                 cs.release()
                 break
@@ -4988,6 +5012,25 @@ def on_mouse(event, x, y, flags, param):
 # ══════════════════════════════════════════════════════════════════════════════
 # MAIN
 # ══════════════════════════════════════════════════════════════════════════════
+def _camera_watchdog_thread():
+    app_log.info("[WATCHDOG] Camera self-healing supervisor ONLINE")
+    while True:
+        time.sleep(5.0)
+        now = time.time()
+        for cs in _active_cameras:
+            if getattr(cs, "removed", False) or cs.disconnected or not cs.enabled:
+                continue
+            last_hb = _camera_heartbeats.get(cs.cam_id, 0.0)
+            last_restart = getattr(cs, "_last_restart_time", 0.0)
+            # Restart if heartbeat timed out (15s) and last restart was more than 15s ago (prevents spin loops)
+            if last_hb > 0.0 and (now - last_hb) > 15.0 and (now - last_restart) > 15.0:
+                cs._last_restart_time = now
+                app_log.warning(f"[WATCHDOG] Camera '{cs.name}' (ID: {cs.cam_id}) heartbeat timeout! Thread hung or died. Restarting thread...")
+                cs.online = False
+                _camera_heartbeats[cs.cam_id] = now
+                threading.Thread(target=camera_thread, args=(cs,),
+                                 daemon=True, name=f"Cam-{cs.cam_id}-Recover").start()
+
 def main():
     global UI_LEFT_W, UI_RIGHT_W, UI_HDR_H, UI_NAV_H, UI_FOOT_H, hud_overlay_active, cam_area_pct, ui_static_dirty
 
@@ -5007,6 +5050,9 @@ def main():
     for cs in cameras:
         threading.Thread(target=camera_thread, args=(cs,),
                          daemon=True, name=f"Cam-{cs.cam_id}").start()
+
+    # Spawn the camera watchdog thread
+    threading.Thread(target=_camera_watchdog_thread, daemon=True, name="CamWatchdog").start()
 
     threading.Thread(target=_diag_worker, args=(cameras,), daemon=True, name="Diag").start()
     threading.Thread(target=_sys_monitor_thread_loop, daemon=True, name="SysMonitor").start()

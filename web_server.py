@@ -24,6 +24,11 @@ import numpy as np
 
 # ── Frozen Executable Path Resolution ─────────────────────────────────────────
 import sys
+import ssl
+try:
+    ssl._create_default_https_context = ssl._create_unverified_context
+except AttributeError:
+    pass
 from pathlib import Path
 
 IS_FROZEN = getattr(sys, 'frozen', False)
