@@ -1682,6 +1682,28 @@ def create_app() -> "FastAPI":
         return JSONResponse({"status": "ok", "pid": pid, "name": name,
                              "photo": photo_rel, "embeddings_count": len(encodings)})
 
+    @app.post("/api/enroll/browse_folder")
+    async def enroll_browse_folder():
+        """Open a native folder selection dialog on the host."""
+        import asyncio
+        def _dialog():
+            try:
+                import tkinter as tk
+                from tkinter import filedialog
+                root = tk.Tk()
+                root.withdraw()
+                root.attributes('-topmost', True)
+                folder = filedialog.askdirectory(parent=root, title="Select Object Images Folder")
+                root.destroy()
+                return folder
+            except Exception as e:
+                logging.getLogger("OMS.app").warning(f"Tkinter browse dialog error: {e}")
+                return ""
+        folder = await asyncio.to_thread(_dialog)
+        if folder:
+            return JSONResponse({"status": "ok", "path": os.path.normpath(folder)})
+        return JSONResponse({"status": "cancelled", "path": ""})
+
     @app.post("/api/enroll/import")
     async def enroll_import(request: Request):
         """Import object profiles from a folder of images."""

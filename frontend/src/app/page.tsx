@@ -2327,6 +2327,9 @@ export default function Dashboard() {
                                   {POSES[guidedActivePoseIdx] === "angle_left" && "Turn the object 45 degrees towards the left."}
                                   {POSES[guidedActivePoseIdx] === "angle_right" && "Turn the object 45 degrees towards the right."}
                                 </p>
+                                <div className="mt-2 text-[9px] text-gold-accent font-bold font-mono border-t border-white/5 pt-2 w-full">
+                                  💡 TIP: You can click "SAVE PROFILE" after capturing just 1 pose!
+                                </div>
                               </div>
 
                               <div className="flex gap-2">
@@ -2451,14 +2454,33 @@ export default function Dashboard() {
 
                         <div className="flex flex-col gap-1.5">
                           <label className="font-orbitron text-[9px] text-sec font-bold tracking-wider">LOCAL DIRECTORY PATH</label>
-                          <input
-                            type="text"
-                            required
-                            value={importFolder}
-                            onChange={(e) => setImportFolder(e.target.value)}
-                            placeholder="e.g. C:\Users\Prajan\Pictures\dataset"
-                            className="glass-premium bg-black/60 border border-white/10 text-white font-mono text-xs px-4 py-3 rounded-xl outline-none focus:border-gold-accent transition-colors"
-                          />
+                          <div className="flex gap-2">
+                            <input
+                              type="text"
+                              required
+                              value={importFolder}
+                              onChange={(e) => setImportFolder(e.target.value)}
+                              placeholder="e.g. C:\Users\Prajan\Pictures\dataset"
+                              className="glass-premium bg-black/60 border border-white/10 text-white font-mono text-xs px-4 py-3 rounded-xl outline-none focus:border-gold-accent transition-colors flex-1"
+                            />
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                try {
+                                  const res = await fetch(`${API}/api/enroll/browse_folder`, { method: "POST" });
+                                  const data = await res.json();
+                                  if (data.status === "ok" && data.path) {
+                                    setImportFolder(data.path);
+                                  }
+                                } catch (e) {
+                                  alert("Error launching native directory browser: " + (e as any).message);
+                                }
+                              }}
+                              className="font-orbitron text-[9px] font-bold tracking-widest px-4 rounded-xl border border-gold-dim/20 text-gold-accent hover:bg-gold/10 hover:border-gold transition-all"
+                            >
+                              BROWSE...
+                            </button>
+                          </div>
                         </div>
 
                         <button
@@ -2836,13 +2858,32 @@ export default function Dashboard() {
                         </div>
                         <div className="flex flex-col gap-1.5">
                           <label className="font-orbitron text-[9px] text-sec font-bold tracking-wider">LOCAL DIRECTORY PATH</label>
-                          <input
-                            type="text"
-                            value={settingsEnrollFolder}
-                            onChange={(e) => setSettingsEnrollFolder(e.target.value)}
-                            placeholder="e.g. C:\Users\Prajan\Pictures\dataset"
-                            className="glass-premium bg-black/50 border border-white/10 text-white font-mono text-xs px-4 py-2.5 rounded-lg outline-none focus:border-gold-accent transition-colors"
-                          />
+                          <div className="flex gap-2">
+                            <input
+                              type="text"
+                              value={settingsEnrollFolder}
+                              onChange={(e) => setSettingsEnrollFolder(e.target.value)}
+                              placeholder="e.g. C:\Users\Prajan\Pictures\dataset"
+                              className="glass-premium bg-black/50 border border-white/10 text-white font-mono text-xs px-4 py-2.5 rounded-lg outline-none focus:border-gold-accent transition-colors flex-1"
+                            />
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                try {
+                                  const res = await fetch(`${API}/api/enroll/browse_folder`, { method: "POST" });
+                                  const data = await res.json();
+                                  if (data.status === "ok" && data.path) {
+                                    setSettingsEnrollFolder(data.path);
+                                  }
+                                } catch (e) {
+                                  alert("Error launching native directory browser: " + (e as any).message);
+                                }
+                              }}
+                              className="font-orbitron text-[9px] font-bold tracking-widest px-3 rounded-lg border border-gold-dim/20 text-gold-accent hover:bg-gold/10 hover:border-gold transition-all"
+                            >
+                              BROWSE...
+                            </button>
+                          </div>
                         </div>
                       </div>
                       {settingsEnrollLog.length > 0 && (
