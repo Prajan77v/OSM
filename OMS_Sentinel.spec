@@ -17,17 +17,6 @@ frontend_out = ROOT / "frontend" / "out"
 if frontend_out.exists():
     datas.append((str(frontend_out), "frontend/out"))
 
-# AI models directory
-models_dir = ROOT / "models"
-if models_dir.exists():
-    datas.append((str(models_dir), "models"))
-
-# YOLO weights (all that exist)
-for w in ["yolov8n.pt", "yolov8s.pt", "yolov8m.pt"]:
-    p = ROOT / w
-    if p.exists():
-        datas.append((str(p), "."))
-
 # config.yaml (runtime config — user-editable, placed next to exe)
 config_yaml = ROOT / "config.yaml"
 if config_yaml.exists():

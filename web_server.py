@@ -2395,7 +2395,9 @@ def create_app() -> "FastAPI":
 
 
     # ─── Static Frontend ──────────────────────────────────────────────────────
-    frontend_dir = str(BUNDLE_DIR / "frontend" / "out")
+    frontend_dir = str(WORKING_DIR / "frontend" / "out")
+    if not os.path.isdir(frontend_dir):
+        frontend_dir = str(BUNDLE_DIR / "frontend" / "out")
     if os.path.isdir(frontend_dir):
         @app.get("/")
         async def serve_root():

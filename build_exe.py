@@ -182,6 +182,22 @@ if objects_src.exists():
 else:
     print("  [WARNING] 'objects/' folder not found in project root.")
 
+print("\n[STEP 5c] Copying models/ folder to dist/ ...")
+models_src = ROOT / "models"
+models_dst = DIST / "models"
+if models_src.exists():
+    if models_dst.exists():
+        shutil.rmtree(models_dst)
+    shutil.copytree(models_src, models_dst)
+    print("  [OK] Copied models/ to " + str(models_dst))
+
+print("\n[STEP 5d] Copying yolov8s.pt weight to dist/ ...")
+yolo_src = ROOT / "yolov8s.pt"
+yolo_dst = DIST / "yolov8s.pt"
+if yolo_src.exists():
+    shutil.copy2(yolo_src, yolo_dst)
+    print("  [OK] Copied yolov8s.pt to " + str(yolo_dst))
+
 # ---------------------------------------------------------------------------
 # STEP 6 -- Generate Portable ZIP and Standalone Installer
 # ---------------------------------------------------------------------------
@@ -193,6 +209,8 @@ print(f"  Creating portable archive: {portable_zip_path.name}...")
 try:
     with zipfile.ZipFile(portable_zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
         zipf.write(DIST / "OMS_Sentinel.exe", "OMS_Sentinel.exe")
+        if (DIST / "yolov8s.pt").exists():
+            zipf.write(DIST / "yolov8s.pt", "yolov8s.pt")
         if (ROOT / "config.yaml").exists():
             zipf.write(ROOT / "config.yaml", "config.yaml")
         if (ROOT / ".env.example").exists():
@@ -207,6 +225,11 @@ try:
             for file_path in objects_folder.rglob('*'):
                 if file_path.is_file():
                     zipf.write(file_path, file_path.relative_to(ROOT))
+        models_folder = DIST / "models"
+        if models_folder.exists():
+            for file_path in models_folder.rglob('*'):
+                if file_path.is_file():
+                    zipf.write(file_path, file_path.relative_to(DIST))
     print("  [OK] Portable ZIP created.")
 except Exception as e:
     print(f"  [WARNING] Failed to create portable ZIP: {e}")

@@ -50,6 +50,16 @@ else:
     WORKING_DIR = Path(__file__).parent.resolve()
     BUNDLE_DIR = Path(__file__).parent.resolve()
 
+def get_resource_path(relative_path: str) -> str:
+    """Get absolute path to resource, prioritizing WORKING_DIR over BUNDLE_DIR."""
+    p_work = WORKING_DIR / relative_path
+    if p_work.exists():
+        return str(p_work.resolve())
+    p_bundle = BUNDLE_DIR / relative_path
+    if p_bundle.exists():
+        return str(p_bundle.resolve())
+    return str(p_work.resolve())
+
 # Add directories to sys.path so embedded/portable python can import local modules
 if str(WORKING_DIR) not in sys.path:
     sys.path.insert(0, str(WORKING_DIR))
@@ -234,7 +244,7 @@ class Config:
     CAMERA_CONFIGS: List[dict] = _load_cameras.__func__()
     focused_cam_idx: int = -1
 
-    MODEL_NAME  = str(BUNDLE_DIR / _cfg("detection","model",HW_PROFILE, default={"LOW":"yolov8n.pt","MEDIUM":"yolov8n.pt","HIGH":"yolov8s.pt"}[HW_PROFILE]))
+    MODEL_NAME  = get_resource_path(_cfg("detection","model",HW_PROFILE, default={"LOW":"yolov8n.pt","MEDIUM":"yolov8n.pt","HIGH":"yolov8s.pt"}[HW_PROFILE]))
     USE_CUDA    = _cfg("detection","use_cuda", default=True)
     DEVICE      = "cuda" if (CUDA_AVAILABLE and USE_CUDA) else "cpu"
     CONFIDENCE  = _cfg("detection","confidence", default=0.45)
@@ -258,8 +268,8 @@ class Config:
     FACE_POOL_WORKERS   = _cfg("face_recognition","pool_workers",HW_PROFILE, default={"LOW":1,"MEDIUM":2,"HIGH":3}[HW_PROFILE])
     FACE_RECHECK_CYCLES = _cfg("face_recognition","recheck_cycles",HW_PROFILE, default={"LOW":120,"MEDIUM":90,"HIGH":60}[HW_PROFILE])
     KNOWN_FACES_DIR     = str(WORKING_DIR / _cfg("face_recognition","known_faces_dir", default="faces/known"))
-    YUNET_MODEL_PATH    = str(BUNDLE_DIR / _cfg("face_recognition","yunet_model_path", default="models/face_detection_yunet_2023mar.onnx"))
-    SFACE_MODEL_PATH    = str(BUNDLE_DIR / _cfg("face_recognition","sface_model_path", default="models/face_recognition_sface_2021dec.onnx"))
+    YUNET_MODEL_PATH    = get_resource_path(_cfg("face_recognition","yunet_model_path", default="models/face_detection_yunet_2023mar.onnx"))
+    SFACE_MODEL_PATH    = get_resource_path(_cfg("face_recognition","sface_model_path", default="models/face_recognition_sface_2021dec.onnx"))
     YUNET_MODEL_URL     = _cfg("face_recognition","yunet_model_url", default="https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx")
     SFACE_MODEL_URL     = _cfg("face_recognition","sface_model_url", default="https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx")
 
@@ -277,8 +287,8 @@ class Config:
     LOG_DIR       = WORKING_DIR / _cfg("storage","log_dir",    default="logs")
     SQLITE_DB     = WORKING_DIR / _cfg("storage","sqlite_db",  default="logs/OMS.db")
     FACES_DB_FILE = WORKING_DIR / _cfg("storage","faces_db_json", default="logs/faces_db.json")
-    MODELS_DIR    = BUNDLE_DIR / _cfg("storage","models_dir", default="models")
-    ALARM_WAV     = str(BUNDLE_DIR / "alarm.wav")
+    MODELS_DIR    = Path(get_resource_path(_cfg("storage","models_dir", default="models")))
+    ALARM_WAV     = get_resource_path("alarm.wav")
 
     WINDOW_W   = _cfg("display","window_w", default=1920)
     WINDOW_H   = _cfg("display","window_h", default=1080)
