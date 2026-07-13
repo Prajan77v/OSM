@@ -5,9 +5,10 @@ detection:
   use_cuda: false
   detect_people: true
   detect_objects: true
+  profile: LOW
   model:
-    LOW: yolov8s.pt
-    MEDIUM: yolov8s.pt
+    LOW: yolov8n.pt
+    MEDIUM: yolov8n.pt
     HIGH: yolov8s.pt
 face_recognition:
   detect_new_ids: true

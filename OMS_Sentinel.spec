@@ -111,7 +111,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["scipy", "pandas", "matplotlib", "h5py", "sympy", "IPython", "notebook", "jinja2", "sklearn", "scikit-learn"],
+    excludes=["scipy", "pandas", "matplotlib", "h5py", "sympy", "IPython", "notebook", "jinja2", "sklearn", "scikit-learn", "tensorflow", "tensorboard", "keras", "PyQt5", "PySide2", "PySide6", "boto3", "botocore", "cryptography", "sqlalchemy", "numpy.tests"],
     noarchive=False,
     optimize=0,
 )

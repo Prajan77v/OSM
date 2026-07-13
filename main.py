@@ -184,6 +184,9 @@ except Exception as _haae_err:
 # HARDWARE PROFILE
 # ══════════════════════════════════════════════════════════════════════════════
 def _detect_profile() -> str:
+    cfg_prof = _cfg("detection", "profile")
+    if cfg_prof in ("LOW", "MEDIUM", "HIGH"):
+        return cfg_prof
     if CUDA_AVAILABLE: return "HIGH"
     cores  = os.cpu_count() or 2
     ram_gb = (psutil.virtual_memory().total / (1024**3)) if PSUTIL_AVAILABLE else 4.0

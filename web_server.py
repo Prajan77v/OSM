@@ -218,6 +218,9 @@ def save_config_safe(body: dict) -> dict:
         config_data["detection"]["use_cuda"] = use_cuda
         config_data["detection"]["detect_people"] = detect_people
         config_data["detection"]["detect_objects"] = detect_objects
+        profile_req = body.get("profile")
+        if profile_req in ("LOW", "MEDIUM", "HIGH"):
+            config_data["detection"]["profile"] = profile_req
 
         # SS-02: Only update the active model tier, not all tiers
         if "model" not in config_data["detection"] or not isinstance(config_data["detection"]["model"], dict):
@@ -677,6 +680,7 @@ def create_app() -> "FastAPI":
                 "username": sv.Config.USERNAME,
                 "confidence": sv.Config.CONFIDENCE,
                 "model": sv.Config.MODEL_NAME,
+                "profile": getattr(sv, "HW_PROFILE", "LOW"),
                 # S1: Never return credentials in plaintext; return masked version
                 "tg_token": ("*" * 8 + sv.Config.BOT_TOKEN[-4:]) if sv.Config.BOT_TOKEN else "",
                 "tg_chat_id": sv.Config.CHAT_ID,

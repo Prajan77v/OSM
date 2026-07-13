@@ -435,6 +435,7 @@ export default function Dashboard() {
   const [useCuda, setUseCuda] = useState(true);
   const [detectPeople, setDetectPeople] = useState(true);
   const [detectObjects, setDetectObjects] = useState(true);
+  const [hwProfile, setHwProfile] = useState("LOW");
   const [particlesActive, setParticlesActive] = useState(true);
   const [particleDensity, setParticleDensity] = useState(120);
   const [matchThresh, setMatchThresh] = useState(0.36);
@@ -578,6 +579,7 @@ export default function Dashboard() {
           setMatchThresh(d.match_threshold !== undefined ? d.match_threshold : 0.36);
           setParticleSize(d.particle_size !== undefined ? d.particle_size : 3.0);
           setMeshThickness(d.mesh_thickness !== undefined ? d.mesh_thickness : 1.0);
+          setHwProfile(d.profile || "LOW");
         }
       } catch {}
     };
@@ -1375,7 +1377,8 @@ export default function Dashboard() {
           detect_objects: detectObjects,
           match_threshold: matchThresh,
           particle_size: particleSize,
-          mesh_thickness: meshThickness
+          mesh_thickness: meshThickness,
+          profile: hwProfile
         })
       });
       const d = await r.json();
@@ -2827,6 +2830,22 @@ export default function Dashboard() {
                           </div>
                         </>
                       )}
+
+                      <div className="flex flex-col gap-1.5 pt-2.5 mt-2.5 border-t border-white/5">
+                        <label className="font-orbitron text-[9px] text-sec font-bold tracking-wider uppercase">SYSTEM PERFORMANCE MODE</label>
+                        <select
+                          value={hwProfile}
+                          onChange={(e) => {
+                            setHwProfile(e.target.value);
+                          }}
+                          className="glass-premium bg-black/60 border border-white/10 text-white font-mono text-xs px-3 py-2 rounded-lg outline-none focus:border-gold-accent transition-colors cursor-pointer"
+                        >
+                          <option value="LOW" className="bg-[#0c0e17] text-white">LOW SPEC MODE (Fastest / CPU Optimized)</option>
+                          <option value="MEDIUM" className="bg-[#0c0e17] text-white">MEDIUM SPEC MODE (Standard CPU)</option>
+                          <option value="HIGH" className="bg-[#0c0e17] text-white">HIGH SPEC MODE (GPU / Precision)</option>
+                        </select>
+                        <span className="text-[8px] text-muted font-inter mt-0.5">* Requires system restart to reload model weights.</span>
+                      </div>
 
                       <div className="flex flex-col gap-1 pt-1 mt-1 border-t border-white/5">
                         <span className="font-orbitron text-[9px] text-gold font-bold tracking-wider block uppercase">HARDWARE ACCELERATION TARGET</span>
