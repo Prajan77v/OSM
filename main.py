@@ -116,8 +116,15 @@ IS_LINUX   = platform.system() == "Linux"
 try:
     from ultralytics import YOLO
     YOLO_AVAILABLE = True
-except ImportError:
+except Exception as e:
     YOLO_AVAILABLE = False
+    import traceback
+    try:
+        with open("yolo_import_error.txt", "w", encoding="utf-8") as f:
+            f.write(f"Error: {e}\n")
+            f.write(traceback.format_exc())
+    except Exception:
+        pass
 
 # Statically disabled dlib face_recognition to prevent CUDA loading freezes on Windows. Falling back to stable YuNet/SFace.
 FACE_RECOG_AVAILABLE = False
@@ -648,24 +655,35 @@ _obj_orb_cache: Dict[str, List[np.ndarray]] = {}  # pid -> list of ORB descripto
 _yunet_lock             = threading.RLock()
 _obj_lock               = threading.RLock()
 
+# Minimum expected sizes for face recognition models (bytes)
+_MODEL_MIN_SIZES = {
+    "face_detection_yunet_2023mar.onnx": 100_000,      # ~232 KB
+    "face_recognition_sface_2021dec.onnx": 35_000_000,  # ~38 MB
+}
+
 def _download_model(url: str, path: str):
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    if p.exists() and p.stat().st_size > 10240:
-        return True
+    min_size = _MODEL_MIN_SIZES.get(p.name, 10_240)
     if p.exists():
-        try:
-            p.unlink()
-        except Exception:
-            pass
+        actual_size = p.stat().st_size
+        if actual_size >= min_size:
+            return True  # Model is present and large enough
+        else:
+            app_log.warning(f"[YUNET] Model {p.name} is too small ({actual_size} bytes, expected >= {min_size}). Re-downloading...")
+            try:
+                p.unlink()
+            except Exception:
+                pass
     try:
-        app_log.info(f"[YUNET] Downloading {Path(path).name} ...")
-        print(f"[OMS] Downloading neural face model: {Path(path).name}")
+        app_log.info(f"[YUNET] Downloading {p.name} ...")
+        print(f"[OMS] Downloading neural face model: {p.name}")
         urllib.request.urlretrieve(url, path)
-        app_log.info(f"[YUNET] Downloaded {Path(path).name}")
+        downloaded_size = Path(path).stat().st_size
+        app_log.info(f"[YUNET] Downloaded {p.name} ({downloaded_size} bytes)")
         return True
     except Exception as e:
-        app_log.error(f"[YUNET] Download failed: {e}")
+        app_log.error(f"[YUNET] Download failed for {p.name}: {e}")
         return False
 
 def _init_yunet():
@@ -677,14 +695,21 @@ def _init_yunet():
     try:
         yu_ok = _download_model(Config.YUNET_MODEL_URL, Config.YUNET_MODEL_PATH)
         sf_ok = _download_model(Config.SFACE_MODEL_URL, Config.SFACE_MODEL_PATH)
+        if not yu_ok:
+            app_log.error(f"[FACE] YuNet model unavailable: {Config.YUNET_MODEL_PATH}")
+        if not sf_ok:
+            app_log.error(f"[FACE] SFace model unavailable: {Config.SFACE_MODEL_PATH}")
         if yu_ok and sf_ok:
             _yunet_detector   = cv2.FaceDetectorYN.create(Config.YUNET_MODEL_PATH, "", (320, 320), 0.45)
             _sface_recognizer = cv2.FaceRecognizerSF.create(Config.SFACE_MODEL_PATH, "")
             YUNET_AVAILABLE   = True
-            print("[OMS] ✔ Face Recognition Engine ONLINE (YuNet+SFace)")
+            print("[OMS] \u2714 Face Recognition Engine ONLINE (YuNet+SFace)")
             app_log.info("[FACE] YuNet+SFace Neural Face Engine ONLINE")
     except Exception as e:
-        app_log.error(f"[FACE] Init failed: {e}")
+        import traceback
+        app_log.error(f"[YUNET] Init failed: {e}")
+        app_log.error(f"[YUNET] Traceback: {traceback.format_exc()}")
+        YUNET_AVAILABLE = False
 
     # ── 2. Initialize Object Engine ────────────────────────────────────────────
     try:

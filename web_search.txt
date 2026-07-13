@@ -1,0 +1,39 @@
+Line 223:     BOT_TOKEN      = os.environ.get("TELEGRAM_BOT_TOKEN",   _cfg("threat", "tg_token", default="8938780809:AAHzpgv_fbfbmXJ9x_ui44LY83CWnTWfKPo"))
+Line 224:     CHAT_ID        = os.environ.get("TELEGRAM_CHAT_ID",     _cfg("threat", "tg_chat_id", default="8076971661"))
+Line 229:     should_shutdown = False
+Line 301:     ALARM_WAV     = get_resource_path("alarm.wav")
+Line 1121:     elif ev == "SYSTEM_SHUTDOWN":
+Line 1265:         import web_integration as _wi
+Line 1271: def export_csv(path: str = "logs/events_export.csv"):
+Line 1415:         import web_integration as _wi
+Line 1474:         import web_integration as wi
+Line 1578:         export_csv()
+Line 1583: # TELEGRAM NOTIFICATIONS
+Line 1649:                         f"https://api.telegram.org/bot{Config.BOT_TOKEN}/sendMessage",
+Line 1656:                             f"https://api.telegram.org/bot{Config.BOT_TOKEN}/sendPhoto",
+Line 2636: def _alarm():
+Line 2637:     if IS_WINDOWS and WINSOUND_AVAILABLE and os.path.exists(Config.ALARM_WAV):
+Line 2638:         threading.Thread(target=lambda: winsound.PlaySound(Config.ALARM_WAV, winsound.SND_ASYNC), daemon=True).start()
+Line 2709:         # Silence all unauthorized audio alerts and alarms
+Line 2719:     # Silence Telegram alerts for unauthorized (intruder) entries
+Line 2757:     cs.threat_level = "ORANGE"; _alarm()
+Line 2827:         # Build Telegram message
+Line 3801:     # Volumetric danger alarm warning overlay directly in center-bottom of feed
+Line 4313:         ("TELEGRAM BOT", "CONNECTED", True),
+Line 4509:     # ── 3. TELEGRAM STATUS ──────────────────────────────────────────────────
+Line 4511:         _text(img, "TELEGRAM STATUS", px1, y, 0.46, C_GOLD, bold=True)
+Line 4517:         # Telegram card
+Line 4963:         (3.0, "LOADING TELEGRAM DISPATCHER..."),
+Line 5111:         import web_integration as wi
+Line 5112:         import web_server as ws
+Line 5114:         ws.init_web_server(
+Line 5119:             wi.get_control_handlers(cameras, threat_engine),
+Line 5149:         if getattr(Config, "should_shutdown", False):
+Line 5150:             app_log.info("OMS shutdown requested.")
+Line 5333:             app_log.info("Shutdown command.")
+Line 5334:             speak("Initiating O S M shutdown.")
+Line 5335:             log_event("SYSTEM_SHUTDOWN", detail="user command")
+Line 5338:             export_csv(); speak("Event log exported.")
+Line 5344:             log_event("MANUAL_ALARM", detail="user triggered")
+Line 5345:             threat_engine.raise_threat("RED","MANUAL ALARM")
+Line 5346:             _alarm(); speak("Warning. Manual alarm activated.")

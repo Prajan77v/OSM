@@ -1,0 +1,13 @@
+Line 722: const r = await fetch(`${API}/api/control/rename_subject`, {
+Line 837: if (data.action_executed === "alarm") {
+Line 1318: const r = await fetch(`${API}/api/control/register_face`, {
+Line 1367: const r = await fetch(`${API}/api/control/save_settings`, {
+Line 1466: onClick={() => doControl("shutdown")}
+Line 1468: disabled={btnLoading["shutdown"]}
+Line 1470: {btnLoading["shutdown"] ? (
+Line 2079: onClick={() => doControl("alarm")}
+Line 2680: const r = await fetch(`${API}/api/control/toggle_auto_register`, { method: "POST" });
+Line 3615: const r = await fetch(`${API}/api/control/toggle_auto_register`, { method: "POST" });
+Line 3676: onClick={() => doControl("alarm")}
+Line 3677: disabled={btnLoading["alarm"]}
+Line 3681: {btnLoading["alarm"] ? (

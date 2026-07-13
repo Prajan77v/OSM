@@ -2701,10 +2701,25 @@ export default function Dashboard() {
                         <span className="font-orbitron text-[9.5px] text-sec font-bold tracking-wider">PERSON TRACKING ENGINE</span>
                         <button
                           type="button"
-                          onClick={() => {
+                          onClick={async () => {
                             const newVal = !detectPeople;
                             setDetectPeople(newVal);
                             speakAI(newVal ? "Person tracking activated" : "Person tracking suspended");
+                            try {
+                              await fetch(`${API}/api/control/save_settings`, {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({
+                                  username: opName, confidence: confThresh,
+                                  tg_token: tgBotToken, tg_chat_id: tgChatId,
+                                  detect_new_ids: detectNewIds, detect_people: newVal,
+                                  detect_objects: detectObjects, match_threshold: matchThresh,
+                                  particle_size: particleSize, mesh_thickness: meshThickness, profile: hwProfile
+                                })
+                              });
+                              setControlMsg(newVal ? "Person tracking ON" : "Person tracking OFF");
+                              safeSetTimeout(() => setControlMsg(null), 2000);
+                            } catch {}
                           }}
                           className="text-gold hover:text-gold-accent transition-colors"
                         >
@@ -2715,15 +2730,60 @@ export default function Dashboard() {
                         <span className="font-orbitron text-[9.5px] text-sec font-bold tracking-wider">OBJECT DETECTION ENGINE</span>
                         <button
                           type="button"
-                          onClick={() => {
+                          onClick={async () => {
                             const newVal = !detectObjects;
                             setDetectObjects(newVal);
                             speakAI(newVal ? "Object detection activated" : "Object detection suspended");
+                            try {
+                              await fetch(`${API}/api/control/save_settings`, {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({
+                                  username: opName, confidence: confThresh,
+                                  tg_token: tgBotToken, tg_chat_id: tgChatId,
+                                  detect_new_ids: detectNewIds, detect_people: detectPeople,
+                                  detect_objects: newVal, match_threshold: matchThresh,
+                                  particle_size: particleSize, mesh_thickness: meshThickness, profile: hwProfile
+                                })
+                              });
+                              setControlMsg(newVal ? "Object detection ON" : "Object detection OFF");
+                              safeSetTimeout(() => setControlMsg(null), 2000);
+                            } catch {}
                           }}
                           className="text-gold hover:text-gold-accent transition-colors"
                         >
                           {detectObjects ? <ToggleRight size={32} /> : <ToggleLeft size={32} className="text-muted" />}
                         </button>
+                      </div>
+
+                      {/* CONFIDENCE THRESHOLD SLIDER */}
+                      <div className="flex flex-col gap-2 pt-2.5 mt-1 border-t border-white/5">
+                        <div className="flex justify-between items-center">
+                          <span className="font-orbitron text-[9px] text-sec font-bold tracking-wider uppercase">DETECTION CONFIDENCE</span>
+                          <span className="font-mono text-[10px] text-gold-accent font-bold">{(confThresh * 100).toFixed(0)}%</span>
+                        </div>
+                        <input
+                          type="range" min="0.1" max="0.95" step="0.01"
+                          value={confThresh}
+                          onChange={(e) => setConfThresh(parseFloat(e.target.value))}
+                          className="w-full accent-[#D4AF37] cursor-pointer bg-white/10 h-1 rounded-lg"
+                        />
+                        <span className="text-[8px] text-muted font-inter">Low values = more sensitive but more false positives. High = stricter.</span>
+                      </div>
+
+                      {/* FACE MATCH THRESHOLD SLIDER */}
+                      <div className="flex flex-col gap-2 pt-2 border-t border-white/5">
+                        <div className="flex justify-between items-center">
+                          <span className="font-orbitron text-[9px] text-sec font-bold tracking-wider uppercase">FACE MATCH STRICTNESS</span>
+                          <span className="font-mono text-[10px] text-gold-accent font-bold">{(matchThresh * 100).toFixed(0)}%</span>
+                        </div>
+                        <input
+                          type="range" min="0.1" max="0.8" step="0.01"
+                          value={matchThresh}
+                          onChange={(e) => setMatchThresh(parseFloat(e.target.value))}
+                          className="w-full accent-[#D4AF37] cursor-pointer bg-white/10 h-1 rounded-lg"
+                        />
+                        <span className="text-[8px] text-muted font-inter">Lower = match more faces as known. Higher = stricter identity matching.</span>
                       </div>
                     </div>
 
@@ -2850,8 +2910,18 @@ export default function Dashboard() {
                       <div className="flex flex-col gap-1 pt-1 mt-1 border-t border-white/5">
                         <span className="font-orbitron text-[9px] text-gold font-bold tracking-wider block uppercase">HARDWARE ACCELERATION TARGET</span>
                         <div className="flex items-center gap-2 mt-1">
-                          <span className="w-2 h-2 rounded-full bg-green-oms" />
-                          <span className="font-mono text-[10px] text-sec uppercase font-bold">ACTIVE NVIDIA CUDA CAPABLE</span>
+                          <span className={`w-2 h-2 rounded-full ${telemetry?.cuda ? 'bg-green-oms' : 'bg-yellow-500'}`} />
+                          <span className="font-mono text-[10px] text-sec uppercase font-bold">
+                            {telemetry?.cuda
+                              ? `CUDA ONLINE — ${telemetry?.gpu_name || 'NVIDIA GPU'}`
+                              : 'CPU MODE — CUDA UNAVAILABLE'}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2 mt-0.5">
+                          <span className={`w-2 h-2 rounded-full ${telemetry?.face_recog ? 'bg-green-oms' : 'bg-red-500 animate-pulse'}`} />
+                          <span className="font-mono text-[10px] text-sec uppercase font-bold">
+                            {telemetry?.face_recog ? 'FACE ENGINE ONLINE (YuNet+SFace)' : 'FACE ENGINE OFFLINE — Check models/'}
+                          </span>
                         </div>
                       </div>
                     </div>
@@ -3581,9 +3651,15 @@ export default function Dashboard() {
             
             <div className="h-[84px] overflow-y-auto font-mono text-[9.5px] text-sec flex flex-col gap-0.5 pr-1 mt-1 leading-none">
               <p className="text-muted uppercase">// AI core telemetry initialized successfully.</p>
-              <p className="text-[#FFFFFF] uppercase">✓ YOLO model loaded on device target GPU index 0.</p>
-              <p className="text-[#FFFFFF] uppercase">✓ Face recognition database secure. Known records: {knownUsers.length}.</p>
-              <p className="text-[#FFFFFF]">✓ Telegram bot client connected secure.</p>
+              <p className={telemetry?.yolo ? 'text-[#FFFFFF] uppercase' : 'text-red-400 uppercase'}>
+                {telemetry?.yolo ? '✓' : '✗'} YOLO OBJECT DETECTION ENGINE {telemetry?.yolo ? 'ONLINE' : 'OFFLINE — CHECK YOLO MODEL'}.
+              </p>
+              <p className={telemetry?.face_recog ? 'text-[#FFFFFF] uppercase' : 'text-red-400 uppercase'}>
+                {telemetry?.face_recog ? '✓' : '✗'} FACE RECOGNITION ENGINE {telemetry?.face_recog ? `ONLINE — ${knownUsers.length} PROFILES SECURED` : 'OFFLINE — MODELS MISSING OR CORRUPT'}.
+              </p>
+              <p className={telemetry?.telegram ? 'text-[#FFFFFF]' : 'text-yellow-400 uppercase'}>
+                {telemetry?.telegram ? '✓' : '⚠'} TELEGRAM CHANNEL {telemetry?.telegram ? 'CONNECTED SECURE' : 'NOT CONFIGURED'}.
+              </p>
               <p className="text-gold uppercase">✓ Uptime index established: {summary?.uptime || "00:00:00"}.</p>
             </div>
           </div>

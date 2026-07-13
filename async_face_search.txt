@@ -1,0 +1,1 @@
+Line 2060: def async_face(rgb_or_bgr: np.ndarray, is_bgr: bool = False, is_person: bool = True):

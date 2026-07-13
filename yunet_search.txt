@@ -1,0 +1,13 @@
+Line 638: _yunet_detector         = None
+Line 673: global YUNET_AVAILABLE, _yunet_detector, _sface_recognizer
+Line 681: _yunet_detector   = cv2.FaceDetectorYN.create(Config.YUNET_MODEL_PATH, "", (320, 320), 0.45)
+Line 837: _yunet_detector.setInputSize((w, h))
+Line 838: _, faces = _yunet_detector.detect(img_bgr)
+Line 847: _yunet_detector.setInputSize((pw, ph))
+Line 848: _, faces = _yunet_detector.detect(padded)
+Line 1037: _yunet_detector.setInputSize((w, h))
+Line 1038: _, faces = _yunet_detector.detect(frame)
+Line 2157: _yunet_detector.setInputSize((w, h))
+Line 2158: _, faces = _yunet_detector.detect(frame)
+Line 2635: _yunet_detector.setInputSize((w_c, h_c))
+Line 2636: _, faces = _yunet_detector.detect(person_crop)

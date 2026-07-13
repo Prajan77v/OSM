@@ -1,0 +1,2 @@
+Line 42:   yolo: boolean; face_recog: boolean; db: boolean; telegram: boolean;
+Line 524:   // Success Face Recognition indicator

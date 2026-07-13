@@ -1,0 +1,10 @@
+Line 876: const doControl = async (action: string) => {
+Line 1466: onClick={() => doControl("shutdown")}
+Line 1522: onClick={() => doControl("refresh")}
+Line 1589: onClick={() => doControl("toggle_hud")}
+Line 2079: onClick={() => doControl("alarm")}
+Line 3286: onClick={() => doControl("test_telegram")}
+Line 3648: onClick={() => doControl("export_csv")}
+Line 3662: onClick={() => doControl("test_telegram")}
+Line 3676: onClick={() => doControl("alarm")}
+Line 3690: onClick={() => doControl("reset_logs")}

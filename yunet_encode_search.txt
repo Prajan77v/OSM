@@ -1,0 +1,1 @@
+Line 818: def _yunet_encode(img_bgr: np.ndarray) -> Optional[np.ndarray]:

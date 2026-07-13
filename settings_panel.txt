@@ -1,0 +1,204 @@
+Line 2620: 
+Line 2621:             {/* FULLY FUNCTIONAL DYNAMIC SETTINGS PANEL */}
+Line 2622:             {activeNav === "settings" && (
+Line 2623:               <motion.div
+Line 2624:                 initial={{ opacity: 0, scale: 0.98 }}
+Line 2625:                 animate={{ opacity: 1, scale: 1 }}
+Line 2626:                 className="glass-premium flex-1 p-6 flex flex-col min-h-0 h-full overflow-hidden"
+Line 2627:               >
+Line 2628:                 <div className="flex items-center gap-3 border-b border-white/5 pb-4 mb-4 flex-shrink-0">
+Line 2629:                   <SlidersHorizontal className="text-gold-accent" size={20} />
+Line 2630:                   <h2 className="font-orbitron text-base font-black text-gold-accent tracking-widest uppercase">
+Line 2631:                     OMS SYSTEM CONFIGURATION MATRIX
+Line 2632:                   </h2>
+Line 2633:                 </div>
+Line 2634: 
+Line 2635:                 <form onSubmit={saveSettings} className="flex-1 flex flex-col gap-5 overflow-y-auto pr-2">
+Line 2636:                   <div className="grid grid-cols-2 gap-5">
+Line 2637: 
+Line 2638:                     {/* User profile */}
+Line 2639:                     <div className="glass-premium p-4 flex flex-col gap-3.5">
+Line 2640:                       <h4 className="font-orbitron text-xs font-bold text-gold tracking-widest uppercase flex items-center gap-2">
+Line 2641:                         <UserCheck size={14} /> USER PROFILE PROTOCOLS
+Line 2642:                       </h4>
+Line 2643:                       <div className="flex flex-col gap-1.5">
+Line 2644:                         <label className="font-orbitron text-[9px] text-sec font-bold tracking-wider">OPERATOR USERNAME</label>
+Line 2645:                         <input
+Line 2646:                           type="text"
+Line 2647:                           value={opName}
+Line 2648:                           onChange={(e) => setOpName(e.target.value)}
+Line 2649:                           className="glass-premium bg-black/50 border border-white/10 text-white font-mono text-xs px-4 py-2.5 rounded-lg outline-none focus:border-gold-accent transition-colors"
+Line 2650:                         />
+Line 2651:                       </div>
+Line 2652:                       <div className="flex items-center justify-between mt-1">
+Line 2653:                         <span className="font-orbitron text-[9.5px] text-sec font-bold tracking-wider">VOICE ASSISTANT SPEECH</span>
+Line 2654:                         <button
+Line 2655:                           type="button"
+Line 2656:                           onClick={() => {
+Line 2657:                             const nextVal = !ttsEnabled;
+Line 2658:                             setTtsEnabled(nextVal);
+Line 2659:                             speakAI("Voice assistance toggled", nextVal);
+Line 2660:                           }}
+Line 2661:                           className="text-gold hover:text-gold-accent transition-colors"
+Line 2662:                         >
+Line 2663:                           {ttsEnabled ? <ToggleRight size={32} /> : <ToggleLeft size={32} className="text-muted" />}
+Line 2664:                         </button>
+Line 2665:                       </div>
+Line 2666:                     </div>
+Line 2667: 
+Line 2668:                     {/* Neural parameters */}
+Line 2669:                     <div className="glass-premium p-4 flex flex-col gap-3.5">
+Line 2670:                       <h4 className="font-orbitron text-xs font-bold text-gold tracking-widest uppercase flex items-center gap-2">
+Line 2671:                         <Cpu size={14} /> AI DETECTOR HYPERPARAMETERS
+Line 2672:                       </h4>
+Line 2673:                       <div className="flex items-center justify-between mt-1">
+Line 2674:                         <span className="font-orbitron text-[9.5px] text-sec font-bold tracking-wider">AUTO REGISTER FACES</span>
+Line 2675:                         <button
+Line 2676:                           type="button"
+Line 2677:                           onClick={async () => {
+Line 2678:                             setBtnLoading(b => ({ ...b, toggle_auto_register: true }));
+Line 2679:                             try {
+Line 2680:                               const r = await fetch(`${API}/api/control/toggle_auto_register`, { method: "POST" });
+Line 2681:                               const d = await r.json();
+Line 2682:                               const newVal = !detectNewIds;
+Line 2683:                               setDetectNewIds(newVal);
+Line 2684:                               speakAI(newVal ? "Intruder detection mode activated" : "Intruder detection suspended. Known operators only.");
+Line 2685:                               setControlMsg(d.result || d.message || "Auto Register toggled");
+Line 2686:                               safeSetTimeout(() => setControlMsg(null), 3000);
+Line 2687:                             } catch (e) {
+Line 2688:                               setControlMsg("Toggle failed: " + e);
+Line 2689:                               safeSetTimeout(() => setControlMsg(null), 3000);
+Line 2690:                             } finally {
+Line 2691:                               setBtnLoading(b => ({ ...b, toggle_auto_register: false }));
+Line 2692:                             }
+Line 2693:                           }}
+Line 2694:                           disabled={btnLoading["toggle_auto_register"]}
+Line 2695:                           className="text-gold hover:text-gold-accent transition-colors disabled:opacity-50"
+Line 2696:                         >
+Line 2697:                           {detectNewIds ? <ToggleRight size={32} /> : <ToggleLeft size={32} className="text-muted" />}
+Line 2698:                         </button>
+Line 2699:                       </div>
+Line 2700:                       <div className="flex items-center justify-between mt-1 pt-1.5 border-t border-white/5">
+Line 2701:                         <span className="font-orbitron text-[9.5px] text-sec font-bold tracking-wider">PERSON TRACKING ENGINE</span>
+Line 2702:                         <button
+Line 2703:                           type="button"
+Line 2704:                           onClick={() => {
+Line 2705:                             const newVal = !detectPeople;
+Line 2706:                             setDetectPeople(newVal);
+Line 2707:                             speakAI(newVal ? "Person tracking activated" : "Person tracking suspended");
+Line 2708:                           }}
+Line 2709:                           className="text-gold hover:text-gold-accent transition-colors"
+Line 2710:                         >
+Line 2711:                           {detectPeople ? <ToggleRight size={32} /> : <ToggleLeft size={32} className="text-muted" />}
+Line 2712:                         </button>
+Line 2713:                       </div>
+Line 2714:                       <div className="flex items-center justify-between mt-1 pt-1.5 border-t border-white/5">
+Line 2715:                         <span className="font-orbitron text-[9.5px] text-sec font-bold tracking-wider">OBJECT DETECTION ENGINE</span>
+Line 2716:                         <button
+Line 2717:                           type="button"
+Line 2718:                           onClick={() => {
+Line 2719:                             const newVal = !detectObjects;
+Line 2720:                             setDetectObjects(newVal);
+Line 2721:                             speakAI(newVal ? "Object detection activated" : "Object detection suspended");
+Line 2722:                           }}
+Line 2723:                           className="text-gold hover:text-gold-accent transition-colors"
+Line 2724:                         >
+Line 2725:                           {detectObjects ? <ToggleRight size={32} /> : <ToggleLeft size={32} className="text-muted" />}
+Line 2726:                         </button>
+Line 2727:                       </div>
+Line 2728:                     </div>
+Line 2729: 
+Line 2730:                     {/* Telegram Credentials */}
+Line 2731:                     <div className="glass-premium p-4 flex flex-col gap-3.5">
+Line 2732:                       <h4 className="font-orbitron text-xs font-bold text-gold tracking-widest uppercase flex items-center gap-2">
+Line 2733:                         <Send size={14} /> SECURE COMMUNICATION HOOK
+Line 2734:                       </h4>
+Line 2735:                       <div className="flex flex-col gap-1.5">
+Line 2736:                         <label className="font-orbitron text-[9px] text-sec font-bold tracking-wider">TELEGRAM BOT TOKEN</label>
+Line 2737:                         <input
+Line 2738:                           type="password"
+Line 2739:                           value={tgBotToken}
+Line 2740:                           onChange={(e) => setTgBotToken(e.target.value)}
+Line 2741:                           className="glass-premium bg-black/50 border border-white/10 text-white font-mono text-xs px-4 py-2.5 rounded-lg outline-none focus:border-gold-accent transition-colors"
+Line 2742:                         />
+Line 2743:                       </div>
+Line 2744:                       <div className="flex flex-col gap-1.5">
+Line 2745:                         <label className="font-orbitron text-[9px] text-sec font-bold tracking-wider">TELEGRAM SECURE CHAT ID</label>
+Line 2746:                         <input
+Line 2747:                           type="text"
+Line 2748:                           value={tgChatId}
+Line 2749:                           onChange={(e) => setTgChatId(e.target.value)}
+Line 2750:                           className="glass-premium bg-black/50 border border-white/10 text-white font-mono text-xs px-4 py-2.5 rounded-lg outline-none focus:border-gold-accent transition-colors"
+Line 2751:                         />
+Line 2752:                       </div>
+Line 2753:                     </div>
+Line 2754: 
+Line 2755:                     {/* Performance UI settings */}
+Line 2756:                     <div className="glass-premium p-4 flex flex-col gap-3.5">
+Line 2757:                       <h4 className="font-orbitron text-xs font-bold text-gold tracking-widest uppercase flex items-center gap-2">
+Line 2758:                         <Sliders size={14} /> SYSTEM PERFORMANCE GRAPHICS
+Line 2759:                       </h4>
+Line 2760:                       <div className="flex items-center justify-between mt-1">
+Line 2761:                         <div>
+Line 2762:                           <span className="font-orbitron text-[9.5px] text-sec font-bold tracking-wider block">GOLD PARTICLE BACKGROUND</span>
+Line 2763:                           <span className="text-[8.5px] text-muted font-inter">Controls custom hardware accelerated particle canvas</span>
+Line 2764:                         </div>
+Line 2765:                         <button
+Line 2766:                           type="button"
+Line 2767:                           onClick={() => setParticlesActive(!particlesActive)}
+Line 2768:                           className="text-gold hover:text-gold-accent transition-colors"
+Line 2769:                         >
+Line 2770:                           {particlesActive ? <ToggleRight size={32} /> : <ToggleLeft size={32} className="text-muted" />}
+Line 2771:                         </button>
+Line 2772:                       </div>
+Line 2773: 
+Line 2774:                       {particlesActive && (
+Line 2775:                         <>
+Line 2776:                           <div className="flex flex-col gap-2 pt-2.5 mt-2 border-t border-white/5">
+Line 2777:                             <div className="flex justify-between items-center">
+Line 2778:                               <span className="font-orbitron text-[9px] text-sec font-bold tracking-wider uppercase">PARTICLE DENSITY</span>
+Line 2779:                               <span className="font-mono text-[10px] text-gold-accent font-bold">{particleDensity} SHARDS</span>
+Line 2780:                             </div>
+Line 2781:                             <input
+Line 2782:                               type="range"
+Line 2783:                               min="20"
+Line 2784:                               max="250"
+Line 2785:                               step="5"
+Line 2786:                               value={particleDensity}
+Line 2787:                               onChange={(e) => {
+Line 2788:                                 const v = parseInt(e.target.value);
+Line 2789:                                 setParticleDensity(v);
+Line 2790:                                 speakAI(`Density set to ${v}`);
+Line 2791:                               }}
+Line 2792:                               className="w-full accent-[#D4AF37] cursor-pointer bg-white/10 h-1 rounded-lg"
+Line 2793:                             />
+Line 2794:                           </div>
+Line 2795: 
+Line 2796:                           <div className="flex flex-col gap-2 pt-2.5 mt-2 border-t border-white/5">
+Line 2797:                             <div className="flex justify-between items-center">
+Line 2798:                               <span className="font-orbitron text-[9px] text-sec font-bold tracking-wider uppercase">PARTICLE BASE SIZE</span>
+Line 2799:                               <span className="font-mono text-[10px] text-gold-accent font-bold">{particleSize.toFixed(1)}px</span>
+Line 2800:                             </div>
+Line 2801:                             <input
+Line 2802:                               type="range"
+Line 2803:                               min="1.0"
+Line 2804:                               max="8.0"
+Line 2805:                               step="0.5"
+Line 2806:                               value={particleSize}
+Line 2807:                               onChange={(e) => {
+Line 2808:                                 setParticleSize(parseFloat(e.target.value));
+Line 2809:                               }}
+Line 2810:                               className="w-full accent-[#D4AF37] cursor-pointer bg-white/10 h-1 rounded-lg"
+Line 2811:                             />
+Line 2812:                           </div>
+Line 2813: 
+Line 2814:                           <div className="flex flex-col gap-2 pt-2.5 mt-2 border-t border-white/5">
+Line 2815:                             <div className="flex justify-between items-center">
+Line 2816:                               <span className="font-orbitron text-[9px] text-sec font-bold tracking-wider uppercase">MESH CONNECTION THICKNESS</span>
+Line 2817:                               <span className="font-mono text-[10px] text-gold-accent font-bold">{meshThickness.toFixed(1)}px</span>
+Line 2818:                             </div>
+Line 2819:                             <input
+Line 2820:                               type="range"
+Line 2821:                               min="0.2"
+
+---

@@ -1,0 +1,12 @@
+Line 971:     @app.post("/api/control/{action}")
+Line 1173:         action_executed = None
+Line 1183:             action_executed = "alarm"
+Line 1193:             action_executed = "export_csv"
+Line 1203:             action_executed = "test_telegram"
+Line 1207:             action_executed = "nav_cameras"
+Line 1211:             action_executed = "nav_settings"
+Line 1215:             action_executed = "nav_analytics"
+Line 1219:             action_executed = "nav_events"
+Line 1223:             action_executed = "open_register_wizard"
+Line 1289:         return JSONResponse({"status": "ok", "response": response_text, "action_executed": action_executed})
+Line 2437:   <p style="margin-top:0.5rem">Then restart main.py to serve the full dashboard</p>

@@ -1,0 +1,81 @@
+Line 105: def save_config_safe(body: dict) -> dict:
+Line 174:         detect_new_ids = safe_bool(body.get("detect_new_ids"), getattr(sv.Config, "DETECT_NEW_IDS", True) if sv else True)
+Line 175:         detect_people = safe_bool(body.get("detect_people"), getattr(sv.Config, "DETECT_PEOPLE", True) if sv else True)
+Line 176:         detect_objects = safe_bool(body.get("detect_objects"), getattr(sv.Config, "DETECT_OBJECTS", True) if sv else True)
+Line 179:         match_threshold = safe_float(body.get("match_threshold"), existing_thresh)
+Line 180:         if not (0.0 <= match_threshold <= 1.0):
+Line 181:             match_threshold = existing_thresh if (0.0 <= existing_thresh <= 1.0) else 0.36
+Line 184:         particle_size = safe_float(body.get("particle_size"), existing_part)
+Line 185:         if particle_size <= 0:
+Line 186:             particle_size = existing_part if (existing_part > 0) else 3.0
+Line 188:         existing_mesh = getattr(sv.Config, "MESH_THICKNESS", 1.0) if sv else 1.0
+Line 189:         mesh_thickness = safe_float(body.get("mesh_thickness"), existing_mesh)
+Line 190:         if mesh_thickness <= 0:
+Line 191:             mesh_thickness = existing_mesh if (existing_mesh > 0) else 1.0
+Line 195:                      f"model={model}, tg_token=***, tg_chat_id=***, detect_new_ids={detect_new_ids}, "
+Line 196:                      f"use_cuda={use_cuda}, detect_people={detect_people}, detect_objects={detect_objects}, "
+Line 197:                      f"match_threshold={match_threshold}, particle_size={particle_size}, mesh_thickness={mesh_thickness}")
+Line 219:         config_data["detection"]["detect_people"] = detect_people
+Line 220:         config_data["detection"]["detect_objects"] = detect_objects
+Line 221:         profile_req = body.get("profile")
+Line 222:         if profile_req in ("LOW", "MEDIUM", "HIGH"):
+Line 223:             config_data["detection"]["profile"] = profile_req
+Line 236:         config_data["face_recognition"]["detect_new_ids"] = detect_new_ids
+Line 237:         config_data["face_recognition"]["match_threshold"] = match_threshold
+Line 240:         config_data["display"]["particle_size"] = particle_size
+Line 241:         config_data["display"]["mesh_thickness"] = mesh_thickness
+Line 373:             sv.Config.DETECT_NEW_IDS = detect_new_ids
+Line 375:             sv.Config.DETECT_PEOPLE = detect_people
+Line 376:             sv.Config.DETECT_OBJECTS = detect_objects
+Line 377:             sv.Config.FACE_MATCH_THRESH = match_threshold
+Line 378:             sv.Config.PARTICLE_SIZE = particle_size
+Line 379:             sv.Config.MESH_THICKNESS = mesh_thickness
+Line 683:                 "profile": getattr(sv, "HW_PROFILE", "LOW"),
+Line 687:                 "detect_new_ids": getattr(sv.Config, "DETECT_NEW_IDS", True),
+Line 689:                 "detect_people": getattr(sv.Config, "DETECT_PEOPLE", True),
+Line 690:                 "detect_objects": getattr(sv.Config, "DETECT_OBJECTS", True),
+Line 691:                 "match_threshold": getattr(sv.Config, "FACE_MATCH_THRESH", 0.36),
+Line 692:                 "particle_size": getattr(sv.Config, "PARTICLE_SIZE", 3.0),
+Line 693:                 "mesh_thickness": getattr(sv.Config, "MESH_THICKNESS", 1.0)
+Line 760:         """Delete/forget a face profile from the database by name."""
+Line 1120:                     sv.speak(f"Subject profile updated. Subject {speak_name} verified.")
+Line 1128:         if action == "save_settings" and body:
+Line 1129:             res = save_config_safe(body)
+Line 1271:                     response_text = f"Secure database holds {len(known_names)} authorized profiles: {', '.join(known_names)}."
+Line 1346:                 sv.save_config_cameras(_cameras)
+Line 1411:             sv.save_config_cameras(_cameras)
+Line 1461:                 sv.save_config_cameras(_cameras)
+Line 1618:             return JSONResponse({"status": "error", "message": "Name is required to save profile"}, status_code=400)
+Line 1679:                 app_log.warning(f"Failed to update ORB cache for saved profile {pid}: {ex}")
+Line 1713:         """Import object profiles from a folder of images."""
+Line 1853:         """Upload base64 encoded object images to register a new object profile."""
+Line 1953:                 app_log.warning(f"Failed to update ORB cache for uploaded profile {pid}: {ex}")
+Line 2046:     @app.delete("/api/enroll/profile/{pid}")
+Line 2048:         """Delete an enrolled object profile."""
+Line 2088:         return JSONResponse({"status": "ok", "message": f"Deleted profile {pid} successfully"})
+Line 2092:         """Export a face profile as JSON."""
+Line 2104:             profile = copy.deepcopy(sv.faces_db[pid])
+Line 2107:         if "encodings" in profile:
+Line 2108:             raw = profile["encodings"]
+Line 2114:         elif "encoding" in profile and profile["encoding"] is not None:
+Line 2115:             e = profile["encoding"]
+Line 2119:             "pid": pid, "name": profile.get("name", "Unknown"),
+Line 2120:             "first_seen": profile.get("first_seen", ""),
+Line 2121:             "last_seen": profile.get("last_seen", ""),
+Line 2122:             "visit_count": profile.get("visit_count", 0),
+Line 2123:             "threat_level": profile.get("threat_level", "GREEN"),
+Line 2129:                         headers={"Content-Disposition": f"attachment; filename=profile_{pid}.json"})
+Line 2131:     @app.post("/api/enroll/import_profile")
+Line 2132:     async def enroll_import_profile(request: Request):
+Line 2133:         """Import a face profile from JSON. (C1+C2+C3+M15 fixes)"""
+Line 2147:             return JSONResponse({"status": "error", "message": "Invalid profile format. Missing pid, name, or encodings."}, status_code=400)
+Line 2203:             app_log.warning(f"SQLite sync error on import_profile: {e}")
+Line 2209:         """Add photos to an existing enrolled profile. (C1+C2+C3 fixes)"""
+Line 2238:             profile = copy.deepcopy(sv.faces_db[pid])
+Line 2239:             name = profile.get("name", "Unknown")
+Line 2250:         # Load existing encodings from the deep-copied profile
+Line 2252:         if "encodings" in profile:
+Line 2253:             for e in profile["encodings"]:
+Line 2258:         elif "encoding" in profile and profile["encoding"] is not None:
+Line 2259:             e = profile["encoding"]
+Line 2262:         # ML-03: Cap at 50 encodings per profile

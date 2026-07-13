@@ -96,7 +96,7 @@ def get_telemetry() -> dict:
         CUDA_AVAILABLE = sv.CUDA_AVAILABLE if sv else False
         CUDA_DEVICE    = sv.CUDA_DEVICE if sv else "CPU"
         YOLO_AVAILABLE = sv.YOLO_AVAILABLE if sv else False
-        FACE_RECOG_AVAILABLE = sv.FACE_RECOG_AVAILABLE if sv else False
+        FACE_RECOG_AVAILABLE = getattr(sv, 'YUNET_AVAILABLE', False) if sv else False
         HW_PROFILE = sv.HW_PROFILE if sv else "LOW"
     except Exception:
         CUDA_AVAILABLE = False
