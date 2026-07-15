@@ -210,7 +210,7 @@ print(f"[✦] Hardware Profile:  {HW_PROFILE}")
 print(f"[✦] CUDA Acceleration: {'ENABLED' if CUDA_AVAILABLE else 'DISABLED'}")
 print(f"[✦] Neural GPU:        {CUDA_DEVICE}")
 print(f"[✦] YOLO Engine:       {'✔ ONLINE (ultralytics)' if YOLO_AVAILABLE else '✘ OFFLINE (pip install ultralytics)'}")
-print(f"[✦] Face Recognition:  {'✔ ONLINE (face_recognition)' if FACE_RECOG_AVAILABLE else '~ YUNET/SFACE DL FALLBACK'}")
+print(f"[✦] Face Recognition:  {'✔ ONLINE (YuNet+SFace)' if globals().get('YUNET_AVAILABLE', False) else '~ INITIALIZING (YuNet/SFace)'}")
 print(f"[✦] System Monitor:    {'✔ ONLINE (psutil)' if PSUTIL_AVAILABLE else '✘ OFFLINE'}")
 print(f"[✦] YAML Config:       {'✔ LOADED (config.yaml)' if YAML_AVAILABLE and _CFG else '~ DEFAULTS'}")
 print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
@@ -2994,7 +2994,8 @@ def camera_thread(cs: CameraState):
                 small   = cv2.resize(raw_frame, (dw, dh), interpolation=cv2.INTER_LINEAR)
                 results = yolo.track(source=small, conf=Config.CONFIDENCE,
                                      device=Config.DEVICE, persist=Config.TRACK_PERSIST,
-                                     verbose=False, half=(Config.DEVICE == "cuda"), imgsz=max(dw, dh))
+                                     verbose=False, half=(Config.DEVICE == "cuda"),
+                                     imgsz=max(dw, dh), tracker="bytetrack.yaml")
                 boxes = results[0].boxes
                 sx = Config.FRAME_W / dw; sy = Config.FRAME_H / dh
 
