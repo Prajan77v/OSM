@@ -1966,7 +1966,8 @@ def preload_known():
             img = cv2.imread(str(fp))
             if img is None: continue
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            by_name = {d["name"].lower(): pid for pid,d in faces_db.items() if d.get("known")}
+            with _fdb_lock:
+                by_name = {d["name"].lower(): pid for pid,d in faces_db.items() if d.get("known")}
 
             if FACE_RECOG_AVAILABLE:
                 rgb  = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
@@ -1974,23 +1975,27 @@ def preload_known():
                 encs = _fr.face_encodings(rgb)
                 if not encs: continue
                 rel_photo = str(fp.relative_to(WORKING_DIR)) if WORKING_DIR in fp.parents else str(fp)
-                if name.lower() in by_name:
-                    pid = by_name[name.lower()]
-                    faces_db[pid]["encoding"] = encs[0]
-                    faces_db[pid]["photo"] = rel_photo
-                else:
-                    pid = _new_pid()
-                    faces_db[pid] = {"name":name,"encoding":encs[0],"first_seen":now,
-                                     "last_seen":now,"visit_count":0,"known":True,
-                                     "photo":rel_photo,"in_scene":False}
+                with _fdb_lock:
+                    if name.lower() in by_name:
+                        pid = by_name[name.lower()]
+                        faces_db[pid]["encoding"] = encs[0]
+                        faces_db[pid]["photo"] = rel_photo
+                    else:
+                        pid = _new_pid()
+                        faces_db[pid] = {"name":name,"encoding":encs[0],"first_seen":now,
+                                         "last_seen":now,"visit_count":0,"known":True,
+                                         "photo":rel_photo,"in_scene":False}
                 loaded.append(name)
             elif YUNET_AVAILABLE:
                 rel_photo = str(fp.relative_to(WORKING_DIR)) if WORKING_DIR in fp.parents else str(fp)
                 pid = by_name.get(name.lower())
                 
                 # OPTIMIZATION: Skip re-encoding if photo and encoding match already in database
-                if pid and faces_db.get(pid, {}).get("photo") == rel_photo and faces_db.get(pid, {}).get("encoding") is not None:
-                    enc = faces_db[pid]["encoding"]
+                with _fdb_lock:
+                    has_photo = pid and faces_db.get(pid, {}).get("photo") == rel_photo and faces_db.get(pid, {}).get("encoding") is not None
+                if has_photo:
+                    with _fdb_lock:
+                        enc = faces_db[pid]["encoding"]
                     with _yunet_lock:
                         if pid not in _yunet_enc_cache:
                             _yunet_enc_cache[pid] = enc
@@ -1999,13 +2004,14 @@ def preload_known():
                 
                 enc = _yunet_encode(img)
                 if enc is None: continue
-                if pid:
-                    faces_db[pid]["encoding"] = enc
-                    faces_db[pid]["photo"] = rel_photo
-                else:
-                    pid = _new_pid()
-                    faces_db[pid] = {"name":name,"encoding":enc,"first_seen":now,"last_seen":now,
-                                     "visit_count":0,"known":True,"photo":rel_photo,"in_scene":False}
+                with _fdb_lock:
+                    if pid:
+                        faces_db[pid]["encoding"] = enc
+                        faces_db[pid]["photo"] = rel_photo
+                    else:
+                        pid = _new_pid()
+                        faces_db[pid] = {"name":name,"encoding":enc,"first_seen":now,"last_seen":now,
+                                         "visit_count":0,"known":True,"photo":rel_photo,"in_scene":False}
                 with _yunet_lock:
                     _yunet_enc_cache[pid] = enc
                 loaded.append(name)
@@ -5389,4 +5395,25 @@ def main():
     app_log.info("OMS fully terminated.")
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        app_log.info("OMS shutdown requested by user.")
+    except Exception as e:
+        app_log.critical(f"OMS crashed with unexpected error: {e}", exc_info=True)
+    finally:
+        try:
+            if '_active_cameras' in globals():
+                for cs in _active_cameras:
+                    try: cs.release()
+                    except: pass
+            try: _save_db_json()
+            except: pass
+            if '_db_conn' in globals() and _db_conn:
+                try: _db_conn.close()
+                except: pass
+            import cv2
+            cv2.destroyAllWindows()
+            app_log.info("OMS fallback cleanup complete.")
+        except Exception as ex:
+            pass
