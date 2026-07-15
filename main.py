@@ -1978,27 +1978,31 @@ def preload_known():
                 with _fdb_lock:
                     if name.lower() in by_name:
                         pid = by_name[name.lower()]
-                        faces_db[pid]["encoding"] = encs[0]
-                        faces_db[pid]["photo"] = rel_photo
+                        # Check engine match to avoid stale/wrong-engine encodings
+                        if faces_db.get(pid, {}).get("engine") != "dlib" or faces_db[pid].get("photo") != rel_photo or faces_db[pid].get("encoding") is None:
+                            faces_db[pid]["encoding"] = encs[0]
+                            faces_db[pid]["photo"] = rel_photo
+                            faces_db[pid]["engine"] = "dlib"
+                            faces_db[pid]["encodings"] = [encs[0]]
                     else:
                         pid = _new_pid()
                         faces_db[pid] = {"name":name,"encoding":encs[0],"first_seen":now,
                                          "last_seen":now,"visit_count":0,"known":True,
-                                         "photo":rel_photo,"in_scene":False}
+                                         "photo":rel_photo,"in_scene":False,"engine":"dlib","encodings":[encs[0]]}
                 loaded.append(name)
             elif YUNET_AVAILABLE:
                 rel_photo = str(fp.relative_to(WORKING_DIR)) if WORKING_DIR in fp.parents else str(fp)
                 pid = by_name.get(name.lower())
                 
-                # OPTIMIZATION: Skip re-encoding if photo and encoding match already in database
+                # Check engine match to avoid stale/wrong-engine encodings
                 with _fdb_lock:
-                    has_photo = pid and faces_db.get(pid, {}).get("photo") == rel_photo and faces_db.get(pid, {}).get("encoding") is not None
+                    has_photo = pid and faces_db.get(pid, {}).get("photo") == rel_photo and faces_db.get(pid, {}).get("encoding") is not None and faces_db.get(pid, {}).get("engine") == "yunet"
                 if has_photo:
                     with _fdb_lock:
                         enc = faces_db[pid]["encoding"]
+                        encs_list = faces_db[pid].get("encodings", [enc])
                     with _yunet_lock:
-                        if pid not in _yunet_enc_cache:
-                            _yunet_enc_cache[pid] = enc
+                        _yunet_enc_cache[pid] = encs_list
                     loaded.append(name)
                     continue
                 
@@ -2008,12 +2012,15 @@ def preload_known():
                     if pid:
                         faces_db[pid]["encoding"] = enc
                         faces_db[pid]["photo"] = rel_photo
+                        faces_db[pid]["engine"] = "yunet"
+                        faces_db[pid]["encodings"] = [enc]
                     else:
                         pid = _new_pid()
                         faces_db[pid] = {"name":name,"encoding":enc,"first_seen":now,"last_seen":now,
-                                         "visit_count":0,"known":True,"photo":rel_photo,"in_scene":False}
+                                         "visit_count":0,"known":True,"photo":rel_photo,"in_scene":False,
+                                         "engine":"yunet","encodings":[enc]}
                 with _yunet_lock:
-                    _yunet_enc_cache[pid] = enc
+                    _yunet_enc_cache[pid] = [enc]
                 loaded.append(name)
         except Exception as e: app_log.error(f"Load face {fp.name}: {e}")
     _mark_db_dirty()  # async — let saver thread flush to disk
