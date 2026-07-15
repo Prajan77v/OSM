@@ -2601,7 +2601,7 @@ class CameraState:
         self.disconnected = False
         try:
             if isinstance(self.source, int):
-                backend  = cv2.CAP_V4L2 if IS_LINUX else cv2.CAP_ANY
+                backend  = cv2.CAP_V4L2 if IS_LINUX else (cv2.CAP_DSHOW if IS_WINDOWS else cv2.CAP_ANY)
                 self.cap = cv2.VideoCapture(self.source, backend)
                 self.cap.set(cv2.CAP_PROP_FRAME_WIDTH,  Config.FRAME_W)
                 self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, Config.FRAME_H)
