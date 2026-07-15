@@ -989,9 +989,12 @@ def _object_match(enc: np.ndarray, img_bgr: Optional[np.ndarray] = None) -> Tupl
                 # Normalize matches: 15+ RANSAC inliers = 1.0
                 pid_orb_score = min(1.0, max_inliers / 15.0)
             
-            # Blend score (CNN 30%, ORB 70% if ORB cache/descriptors exist, else 100% CNN)
+            # Blend score (CNN-dominant: trust CNN completely if strong, else blend 75% CNN / 25% ORB)
             if train_templates and query_desc is not None and len(query_desc) >= 10:
-                hybrid_score = 0.3 * pid_cnn_score + 0.7 * pid_orb_score
+                if pid_cnn_score >= 0.82:
+                    hybrid_score = pid_cnn_score
+                else:
+                    hybrid_score = 0.75 * pid_cnn_score + 0.25 * pid_orb_score
             else:
                 hybrid_score = pid_cnn_score
                 
@@ -2110,7 +2113,8 @@ def async_face(rgb_or_bgr: np.ndarray, is_bgr: bool = False, is_person: bool = T
             if not locs: return None, None, 0.0
             encs = _fr.face_encodings(rgb, locs)
             if not encs: return None, None, 0.0
-            pid, name, _, conf = match_face_dlib(encs[0], face_size=face_size)
+            with _fdb_lock:
+                pid, name, _, conf = match_face_dlib(encs[0], face_size=face_size)
             return pid, name, conf
         except Exception as e: app_log.debug(f"face dlib: {e}"); return None, None, 0.0
     elif YUNET_AVAILABLE:
@@ -2122,19 +2126,20 @@ def async_face(rgb_or_bgr: np.ndarray, is_bgr: bool = False, is_person: bool = T
             if blur_score < 12.0:
                 # Ignore extremely blurry frames to prevent false matches
                 return None, None, 0.0
-            enc = _yunet_encode(bgr)
-            if enc is None: return None, None, 0.0
-            pid, name, is_new, score = _yunet_match_face(enc, face_size=face_size, blur_score=blur_score)
-            if is_new:
-                if Config.DETECT_NEW_IDS:
-                    if face_size is not None and face_size >= 75:
-                        pid, name, _ = _register_face_yunet(enc)
-                        score = 0.5
+            with _yunet_lock:
+                enc = _yunet_encode(bgr)
+                if enc is None: return None, None, 0.0
+                pid, name, is_new, score = _yunet_match_face(enc, face_size=face_size, blur_score=blur_score)
+                if is_new:
+                    if Config.DETECT_NEW_IDS:
+                        if face_size is not None and face_size >= 75:
+                            pid, name, _ = _register_face_yunet(enc)
+                            score = 0.5
+                        else:
+                            return None, None, 0.0
                     else:
                         return None, None, 0.0
-                else:
-                    return None, None, 0.0
-            return pid, name, score
+                return pid, name, score
         except Exception as e: app_log.debug(f"face yunet: {e}"); return None, None, 0.0
     return None, None, 0.0
 
@@ -3033,7 +3038,10 @@ def camera_thread(cs: CameraState):
                 for d in yolo_dets:
                     label = d["label"]; cv_val = d["conf"]
                     x1,y1,x2,y2 = d["box"]; tid = d["tid"]
-                    cur_objs.append(label); pid = None; disp = label.upper()
+                    pid = None; disp = label.upper(); name = None
+                    is_person = (label == "person")
+                    if tid is None and not is_person:
+                        cur_objs.append(label)
 
                     if tid is not None:
                         is_person = (label == "person")
@@ -3178,6 +3186,9 @@ def camera_thread(cs: CameraState):
                                     disp = name.split("-")[0][:12]
                                 else:
                                     disp = f"OBJECT: {name}"[:22]
+                        if not is_person:
+                            effective_lbl = name if (pid and not pid.startswith("Unknown-") and name) else label
+                            cur_objs.append(effective_lbl)
 
                         # Schedule recognition only if not locked
                         is_locked = cs.tid_identity_locked.get(tid, False)
