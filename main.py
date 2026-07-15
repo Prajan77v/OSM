@@ -2218,12 +2218,35 @@ def register_user_face(cameras, username: str = Config.USERNAME):
                                     pid = by_name[username.lower()]
                                     with _fdb_lock:
                                         faces_db[pid]["photo"] = rel_out
+                                        faces_db[pid]["encoding"] = enc
+                                        enc_list = []
+                                        if "encodings" in faces_db[pid]:
+                                            enc_list = faces_db[pid]["encodings"]
+                                            if not isinstance(enc_list, list):
+                                                enc_list = [enc_list]
+                                        elif "encoding" in faces_db[pid] and faces_db[pid]["encoding"] is not None:
+                                            enc_list = [faces_db[pid]["encoding"]]
+                                        
+                                        is_dup = False
+                                        for existing in enc_list:
+                                            existing_np = np.array(existing)
+                                            if existing_np.shape == enc.shape:
+                                                score = float(_sface_recognizer.match(
+                                                    enc.reshape(1,-1), existing_np.reshape(1,-1), cv2.FaceRecognizerSF_FR_COSINE))
+                                                if score >= 0.82:
+                                                    is_dup = True
+                                                    break
+                                        if not is_dup:
+                                            enc_list.append(enc)
+                                        faces_db[pid]["encodings"] = enc_list
                                 else:
                                     pid = _new_pid()
                                     with _fdb_lock:
                                         faces_db[pid] = {"name":username,"first_seen":now,"last_seen":now,
-                                                         "visit_count":0,"known":True,"photo":rel_out,"in_scene":False}
-                                with _yunet_lock: _yunet_enc_cache[pid] = enc
+                                                         "visit_count":0,"known":True,"photo":rel_out,"in_scene":False,
+                                                         "encoding":enc, "encodings":[enc]}
+                                with _yunet_lock:
+                                    _yunet_enc_cache[pid] = faces_db[pid].get("encodings", [enc])
                                 _mark_db_dirty()  # async flush
                                 preload_known()
                                 _enc_dirty = True
