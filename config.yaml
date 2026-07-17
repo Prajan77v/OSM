@@ -1,11 +1,29 @@
 operator:
   username: Prajan
+performance:
+  lightweight_mode: true
 detection:
   confidence: 0.5
   use_cuda: false
   detect_people: true
   detect_objects: true
   profile: LOW
+  frame_w: 512
+  frame_h: 288
+  det_w:
+    LOW: 320
+    MEDIUM: 384
+    HIGH: 512
+  det_h:
+    LOW: 192
+    MEDIUM: 224
+    HIGH: 320
+  process_every_n:
+    LOW: 3
+    MEDIUM: 2
+    HIGH: 2
+  max_detections: 20
+  use_yolo_tracker: true
   model:
     LOW: yolov8n.pt
     MEDIUM: yolov8n.pt
@@ -17,12 +35,18 @@ threat:
   tg_token: '********oken'
   tg_chat_id: '99999'
 display:
-  particle_size: 2.5
-  mesh_thickness: 1.5
+  target_fps:
+    LOW: 20
+    MEDIUM: 24
+    HIGH: 28
+  stream_fps: 20
+  stream_jpeg_quality: 72
+  particle_size: 2.0
+  mesh_thickness: 1.0
   headless: true
 haae:
   enabled: true
-  emotion_frame_interval: 8
+  emotion_frame_interval: 24
   emotion_alert_cooldown: 300
   running_speed_threshold: 120.0
   running_alert_cooldown: 60

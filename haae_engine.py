@@ -346,18 +346,21 @@ class HumanActivityExpressionEngine:
     def submit_emotion(self, pid: str, face_crop: np.ndarray,
                        frame_n: int, pool: ThreadPoolExecutor):
         """Submit async emotion analysis if gating allows. Non-blocking."""
-        if not HAAE_ENABLED or not DEEPFACE_AVAILABLE:
+        if not self.should_submit_emotion(pid, frame_n):
             return
         rec = self.get(pid)
-        # Gate: only analyze every HAAE_EMOTION_FRAME_INTERVAL frames
-        if frame_n - rec.last_emotion_frame < HAAE_EMOTION_FRAME_INTERVAL:
-            return
-        # Don't queue if previous future is still running
-        if rec._emotion_future is not None and not rec._emotion_future.done():
-            return
         rec.last_emotion_frame = frame_n
         crop_copy = face_crop.copy()
         rec._emotion_future = pool.submit(self._emotion_analyzer.analyze, crop_copy)
+
+    def should_submit_emotion(self, pid: str, frame_n: int) -> bool:
+        """Cheap preflight so callers can avoid cropping/copying when gated."""
+        if not HAAE_ENABLED or not DEEPFACE_AVAILABLE:
+            return False
+        rec = self.get(pid)
+        if frame_n - rec.last_emotion_frame < HAAE_EMOTION_FRAME_INTERVAL:
+            return False
+        return rec._emotion_future is None or rec._emotion_future.done()
 
     def collect_emotion(self, pid: str) -> Optional[Tuple[str, float]]:
         """Poll completed emotion Future (non-blocking). Returns result if ready."""

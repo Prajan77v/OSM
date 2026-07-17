@@ -441,6 +441,26 @@ export default function Dashboard() {
   const [matchThresh, setMatchThresh] = useState(0.36);
   const [particleSize, setParticleSize] = useState(3.0);
   const [meshThickness, setMeshThickness] = useState(1.0);
+  const [showCamSettings, setShowCamSettings] = useState(false);
+  const [camSettings, setCamSettings] = useState<any>({
+    brightness: 50,
+    contrast: 50,
+    saturation: 50,
+    gamma: 1.0,
+    sharpness: 0,
+    noise_reduction: 0,
+    exposure: -6,
+    auto_exposure: true,
+    auto_white_balance: true,
+    mirror: false,
+    fps: 30,
+    width: 1280,
+    height: 720,
+    active_width: 0,
+    active_height: 0,
+    active_fps: 0,
+    active_codec: "MJPG"
+  });
 
   const lastActivePidRef = useRef<string>("");
   const [cropKey, setCropKey] = useState<string>("");
@@ -614,6 +634,7 @@ export default function Dashboard() {
         safeFetch(`${API}/api/summary`),
         safeFetch(`${API}/api/faces`),
         safeFetch(`${API}/api/activity`),
+        safeFetch(`${API}/api/camera/${activeCam}/settings`),
       ]);
 
       const camRes = results[0].status === 'fulfilled' ? results[0].value : null;
@@ -622,6 +643,11 @@ export default function Dashboard() {
       const sumRes = results[3].status === 'fulfilled' ? results[3].value : null;
       const facRes = results[4].status === 'fulfilled' ? results[4].value : null;
       const actRes = results[5].status === 'fulfilled' ? results[5].value : null;
+      const settingsRes = results[6].status === 'fulfilled' ? results[6].value : null;
+
+      if (settingsRes && !settingsRes.status) {
+        setCamSettings(settingsRes);
+      }
 
       if (camRes) {
         setCameras(camRes);
@@ -1543,96 +1569,262 @@ export default function Dashboard() {
               <div className="flex-1 flex flex-col gap-3 min-h-0 min-w-0 h-full">
                 
                 {/* Cinematic camera viewport */}
-                <div ref={viewportRef} className="glass-premium flex-1 relative flex items-center justify-center min-h-0 overflow-hidden bg-black/40">
-                  {activeCamInfo?.online ? (
-                    <div className={`relative overflow-hidden flex items-center justify-center border border-gold/10 shadow-2xl transition-all duration-300 ${isFullscreen ? "w-full h-full aspect-video rounded-none" : "h-full aspect-square rounded-xl"}`}>
-                      <img
-                        src={`${API}/api/stream/${activeCam}`}
-                        alt="AI Visual Target"
-                        className="w-full h-full object-cover"
-                      />
-                      {isFaceUnlocked && (
-                        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                          <div className="w-[150px] h-[150px] border border-gold-accent/40 rounded-full animate-spin" style={{ borderStyle: "dashed", animationDuration: "12s" }} />
-                          <div className="absolute w-[170px] h-[170px] border-2 border-gold/60 rounded-xl" />
-                          <div className="absolute top-[38%] font-orbitron text-[9px] font-black text-gold-accent bg-black/60 px-2 py-0.5 rounded tracking-widest">
-                            AI IDENTIFIED: {summary?.operator || opName}
+                <div ref={viewportRef} className="glass-premium flex-1 relative flex flex-row min-h-0 overflow-hidden bg-black/40">
+                  <div className="flex-1 relative flex items-center justify-center h-full min-w-0">
+                    {activeCamInfo?.online ? (
+                      <div className={`relative overflow-hidden flex items-center justify-center border border-gold/10 shadow-2xl transition-all duration-300 ${isFullscreen ? "w-full h-full aspect-video rounded-none" : "h-full aspect-video rounded-xl"}`}>
+                        <img
+                          src={`${API}/api/stream/${activeCam}`}
+                          alt="AI Visual Target"
+                          className="w-full h-full object-cover"
+                        />
+
+                        {/* Corner Sights & grid scan overlay */}
+                        <div className="corner-hud tl" />
+                        <div className="corner-hud tr" />
+                        <div className="corner-hud bl" />
+                        <div className="corner-hud br" />
+
+                        {/* Top floating badges */}
+                        <div className="absolute top-4 left-4 flex gap-2 pointer-events-none z-10">
+                          <span className="glass-premium px-3 py-1 flex items-center gap-1.5 text-[10px] font-orbitron font-bold text-green-oms">
+                            <span className="w-1.5 h-1.5 rounded-full bg-green-oms animate-ping" />
+                            LIVE
+                          </span>
+                          <span className="glass-premium px-3 py-1 text-[10px] font-orbitron font-black text-gold-accent">
+                            CAM {activeCam + 1}
+                          </span>
+                        </div>
+
+                        <div className="absolute top-4 right-4 flex gap-2 z-10">
+                          <span className="glass-premium px-3 py-1 flex items-center gap-1.5 text-[10px] font-orbitron font-bold text-red-500">
+                            <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+                            REC
+                          </span>
+                          <button 
+                            onClick={() => setShowCamSettings(prev => !prev)}
+                            className={`glass-premium p-1.5 transition-all duration-300 ${showCamSettings ? "text-gold-accent bg-gold-accent/15 border-gold-accent/40" : "text-[#FFFFFF] hover:text-gold-accent"}`}
+                            title="Open Live Camera Control Panel"
+                          >
+                            <Sliders size={12} />
+                          </button>
+                          <button 
+                            onClick={toggleFullscreen}
+                            className="glass-premium p-1.5 text-[#FFFFFF] hover:text-gold-accent transition-colors z-20"
+                            title={isFullscreen ? "Exit fullscreen preview mode" : "Enter true fullscreen preview mode"}
+                          >
+                            {isFullscreen ? (
+                              <Minimize2 size={12} className="text-gold-accent animate-pulse" />
+                            ) : (
+                              <Maximize2 size={12} />
+                            )}
+                          </button>
+                        </div>
+
+                        {/* Uptime and location badges */}
+                        <div className="absolute bottom-4 left-4 glass-premium px-4 py-2.5 flex flex-col gap-1 pointer-events-none z-10">
+                          <span className="font-orbitron text-[9px] font-black text-gold tracking-widest">AI VISION TELEMETRY</span>
+                          <div className="grid grid-cols-2 gap-x-4 text-[10px]">
+                            <span className="text-sec">STATUS:</span>
+                            <span className="font-mono text-green-oms font-bold">ONLINE</span>
+                            <span className="text-sec">FPS RATE:</span>
+                            <span className="font-mono text-gold-accent font-bold">{(activeCamInfo?.fps || 0.0).toFixed(1)} FPS</span>
+                            <span className="text-sec">RESOLUTION:</span>
+                            <span className="font-mono text-gold-accent font-bold">
+                              {camSettings?.active_width ? `${camSettings.active_width}x${camSettings.active_height}` : "1280x720"}
+                            </span>
+                            <span className="text-sec">CODEC / LATENCY:</span>
+                            <span className="font-mono text-gold-accent font-bold">
+                              {camSettings?.active_codec || "MJPG"} / 12ms
+                            </span>
                           </div>
                         </div>
-                      )}
 
-                      {/* Corner Sights & grid scan overlay */}
-                      <div className="corner-hud tl" />
-                      <div className="corner-hud tr" />
-                      <div className="corner-hud bl" />
-                      <div className="corner-hud br" />
-                      <div className="face-scan-grid" />
-                      <div className="hud-scan-line" />
-
-                      {/* Top floating badges */}
-                      <div className="absolute top-4 left-4 flex gap-2 pointer-events-none z-10">
-                        <span className="glass-premium px-3 py-1 flex items-center gap-1.5 text-[10px] font-orbitron font-bold text-green-oms">
-                          <span className="w-1.5 h-1.5 rounded-full bg-green-oms animate-ping" />
-                          LIVE
-                        </span>
-                        <span className="glass-premium px-3 py-1 text-[10px] font-orbitron font-black text-gold-accent">
-                          CAM {activeCam + 1}
-                        </span>
-                      </div>
-
-                      <div className="absolute top-4 right-4 flex gap-2 z-10">
-                        <span className="glass-premium px-3 py-1 flex items-center gap-1.5 text-[10px] font-orbitron font-bold text-red-500">
-                          <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
-                          REC
-                        </span>
-                        <button 
-                          onClick={() => doControl("toggle_hud")}
-                          disabled={btnLoading["toggle_hud"]}
-                          className="glass-premium p-1.5 text-[#FFFFFF] hover:text-gold-accent transition-colors"
-                          title="Toggle System HUD overlay borders"
-                        >
-                          {btnLoading["toggle_hud"] ? (
-                            <RefreshCw size={12} className="animate-spin text-gold-accent" />
-                          ) : (
-                            <Sliders size={12} />
-                          )}
-                        </button>
-                        <button 
-                          onClick={toggleFullscreen}
-                          className="glass-premium p-1.5 text-[#FFFFFF] hover:text-gold-accent transition-colors z-20"
-                          title={isFullscreen ? "Exit fullscreen preview mode" : "Enter true fullscreen preview mode"}
-                        >
-                          {isFullscreen ? (
-                            <Minimize2 size={12} className="text-gold-accent animate-pulse" />
-                          ) : (
-                            <Maximize2 size={12} />
-                          )}
-                        </button>
-                      </div>
-
-                      {/* Uptime and location badges */}
-                      <div className="absolute bottom-4 left-4 glass-premium px-4 py-2.5 flex flex-col gap-1 pointer-events-none z-10">
-                        <span className="font-orbitron text-[9px] font-black text-gold tracking-widest">AI VISION TELEMETRY</span>
-                        <div className="grid grid-cols-2 gap-x-4 text-[10px]">
-                          <span className="text-sec">FPS RATE:</span>
-                          <span className="font-mono text-gold-accent font-bold">{activeCamInfo?.fps || 0.0} FPS</span>
-                          <span className="text-sec">ACCURACY:</span>
-                          <span className="font-mono text-green-oms font-bold">98.4%</span>
+                        <div className="absolute bottom-4 right-4 glass-premium px-3 py-1 flex items-center gap-2 text-[10px] text-sec pointer-events-none z-10">
+                          <MapPin size={11} className="text-gold" />
+                          {activeCamInfo?.location || "Sector Grid"}
                         </div>
                       </div>
+                    ) : (
+                      <div className={`relative flex flex-col items-center justify-center gap-3 bg-[#0d0d11]/80 border border-gold/10 shadow-2xl transition-all duration-300 ${isFullscreen ? "w-full h-full aspect-video rounded-none" : "h-full aspect-video rounded-xl"}`}>
+                        <div className="w-16 h-16 rounded-full border-2 border-gold-accent/25 border-dashed flex items-center justify-center animate-spin" style={{ animationDuration: "15s" }}>
+                          <Crosshair size={24} className="text-gold-dim" />
+                        </div>
+                        <div className="font-orbitron text-xs font-bold text-gold-accent tracking-widest">CAMERA OFFLINE</div>
+                        <div className="font-inter text-[10px] text-sec">Awaiting authorization feedback node...</div>
+                      </div>
+                    )}
+                  </div>
+                  {showCamSettings && (
+                    <div className="w-[285px] h-full border-l border-gold/10 bg-black/70 p-4 flex flex-col gap-4 overflow-y-auto z-20 animate-slide-up" style={{ minWidth: 285 }}>
+                      <div className="flex items-center justify-between border-b border-gold/15 pb-2">
+                        <span className="font-orbitron text-[10px] font-black text-gold-accent tracking-widest uppercase">CAMERA ADJUSTMENT PANEL</span>
+                        <button onClick={() => setShowCamSettings(false)} className="text-sec hover:text-gold-accent transition-colors">
+                          <X size={14} />
+                        </button>
+                      </div>
 
-                      <div className="absolute bottom-4 right-4 glass-premium px-3 py-1 flex items-center gap-2 text-[10px] text-sec pointer-events-none z-10">
-                        <MapPin size={11} className="text-gold" />
-                        {activeCamInfo?.location || "Sector Grid"}
+                      {/* Controls list */}
+                      <div className="flex flex-col gap-4 text-[10px] font-inter">
+                        
+                        {/* Resolution */}
+                        <div className="flex flex-col gap-1.5">
+                          <label className="font-orbitron text-[8.5px] text-sec font-bold tracking-wider uppercase">Active Resolution</label>
+                          <div className="grid grid-cols-2 gap-1.5">
+                            {["1920x1080", "1280x720", "640x480", "640x360"].map((res) => (
+                              <button
+                                key={res}
+                                onClick={async () => {
+                                  const r = await fetch(`${API}/api/camera/${activeCam}/settings`, {
+                                    method: "POST",
+                                    headers: { "Content-Type": "application/json" },
+                                    body: JSON.stringify({ resolution: res })
+                                  });
+                                  const d = await r.json();
+                                  if (d.status === "ok") {
+                                    setCamSettings((prev: any) => ({ ...prev, resolution: res }));
+                                  }
+                                }}
+                                className={`py-1.5 px-2 text-[8px] font-mono rounded border transition-all ${
+                                  (camSettings?.width === parseInt(res.split("x")[0]) || (res === "1280x720" && !camSettings?.width))
+                                    ? "bg-gold/15 border-gold text-gold-accent"
+                                    : "border-white/5 bg-white/5 text-sec hover:border-gold/30 hover:bg-gold/5"
+                                }`}
+                              >
+                                {res}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* FPS */}
+                        <div className="flex flex-col gap-1.5">
+                          <label className="font-orbitron text-[8.5px] text-sec font-bold tracking-wider uppercase">Frame Rate Target</label>
+                          <div className="grid grid-cols-2 gap-1.5">
+                            {[30, 60].map((fps) => (
+                              <button
+                                key={fps}
+                                onClick={async () => {
+                                  const r = await fetch(`${API}/api/camera/${activeCam}/settings`, {
+                                    method: "POST",
+                                    headers: { "Content-Type": "application/json" },
+                                    body: JSON.stringify({ fps })
+                                  });
+                                  const d = await r.json();
+                                  if (d.status === "ok") {
+                                    setCamSettings((prev: any) => ({ ...prev, fps }));
+                                  }
+                                }}
+                                className={`py-1.5 px-2 text-[8px] font-mono rounded border transition-all ${
+                                  (camSettings?.fps === fps || (fps === 30 && !camSettings?.fps))
+                                    ? "bg-gold/15 border-gold text-gold-accent"
+                                    : "border-white/5 bg-white/5 text-sec hover:border-gold/30 hover:bg-gold/5"
+                                }`}
+                              >
+                                {fps} FPS
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* Toggles */}
+                        <div className="flex flex-col gap-2.5 bg-white/5 p-3 rounded-lg border border-white/5">
+                          <div className="flex items-center justify-between">
+                            <span className="font-orbitron text-[8px] text-sec tracking-wider font-bold">AUTO EXPOSURE</span>
+                            <button
+                              onClick={async () => {
+                                const newVal = !camSettings?.auto_exposure;
+                                const r = await fetch(`${API}/api/camera/${activeCam}/settings`, {
+                                  method: "POST",
+                                  headers: { "Content-Type": "application/json" },
+                                  body: JSON.stringify({ auto_exposure: newVal })
+                                });
+                                if ((await r.json()).status === "ok") {
+                                  setCamSettings((prev: any) => ({ ...prev, auto_exposure: newVal }));
+                                }
+                              }}
+                              className="text-gold-accent hover:opacity-80 transition-opacity"
+                            >
+                              {camSettings?.auto_exposure ? <ToggleRight size={20} /> : <ToggleLeft size={20} className="text-sec" />}
+                            </button>
+                          </div>
+
+                          <div className="flex items-center justify-between">
+                            <span className="font-orbitron text-[8px] text-sec tracking-wider font-bold">AUTO WHITE BALANCE</span>
+                            <button
+                              onClick={async () => {
+                                const newVal = !camSettings?.auto_white_balance;
+                                const r = await fetch(`${API}/api/camera/${activeCam}/settings`, {
+                                  method: "POST",
+                                  headers: { "Content-Type": "application/json" },
+                                  body: JSON.stringify({ auto_white_balance: newVal })
+                                });
+                                if ((await r.json()).status === "ok") {
+                                  setCamSettings((prev: any) => ({ ...prev, auto_white_balance: newVal }));
+                                }
+                              }}
+                              className="text-gold-accent hover:opacity-80 transition-opacity"
+                            >
+                              {camSettings?.auto_white_balance ? <ToggleRight size={20} /> : <ToggleLeft size={20} className="text-sec" />}
+                            </button>
+                          </div>
+
+                          <div className="flex items-center justify-between">
+                            <span className="font-orbitron text-[8px] text-sec tracking-wider font-bold">MIRROR STREAM</span>
+                            <button
+                              onClick={async () => {
+                                const newVal = !camSettings?.mirror;
+                                const r = await fetch(`${API}/api/camera/${activeCam}/settings`, {
+                                  method: "POST",
+                                  headers: { "Content-Type": "application/json" },
+                                  body: JSON.stringify({ mirror: newVal })
+                                });
+                                if ((await r.json()).status === "ok") {
+                                  setCamSettings((prev: any) => ({ ...prev, mirror: newVal }));
+                                }
+                              }}
+                              className="text-gold-accent hover:opacity-80 transition-opacity"
+                            >
+                              {camSettings?.mirror ? <ToggleRight size={20} /> : <ToggleLeft size={20} className="text-sec" />}
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Sliders */}
+                        {[
+                          { label: "Brightness", key: "brightness", min: 0, max: 100 },
+                          { label: "Contrast", key: "contrast", min: 0, max: 100 },
+                          { label: "Saturation", key: "saturation", min: 0, max: 100 },
+                          { label: "Gamma", key: "gamma", min: 0.5, max: 2.5, step: 0.1 },
+                          { label: "Sharpness", key: "sharpness", min: 0, max: 10 },
+                          { label: "Noise Reduction", key: "noise_reduction", min: 0, max: 10 },
+                          ...(camSettings?.auto_exposure ? [] : [{ label: "Exposure Hardware", key: "exposure", min: -13, max: -1 }])
+                        ].map((sl) => (
+                          <div key={sl.key} className="flex flex-col gap-1">
+                            <div className="flex items-center justify-between text-[8px] font-mono text-sec uppercase tracking-wider font-bold">
+                              <span>{sl.label}</span>
+                              <span className="text-gold-accent">{camSettings?.[sl.key] ?? (sl.key === "gamma" ? 1.0 : 50)}</span>
+                            </div>
+                            <input
+                              type="range"
+                              min={sl.min}
+                              max={sl.max}
+                              step={sl.step || 1}
+                              value={camSettings?.[sl.key] ?? (sl.key === "gamma" ? 1.0 : (sl.key === "exposure" ? -6 : 50))}
+                              onChange={async (e) => {
+                                const val = parseFloat(e.target.value);
+                                setCamSettings((prev: any) => ({ ...prev, [sl.key]: val }));
+                                await fetch(`${API}/api/camera/${activeCam}/settings`, {
+                                  method: "POST",
+                                  headers: { "Content-Type": "application/json" },
+                                  body: JSON.stringify({ [sl.key]: val })
+                                });
+                              }}
+                              className="w-full accent-gold bg-black/60 border border-white/5 rounded h-1 cursor-pointer"
+                            />
+                          </div>
+                        ))}
                       </div>
-                    </div>
-                  ) : (
-                    <div className={`relative flex flex-col items-center justify-center gap-3 bg-[#0d0d11]/80 border border-gold/10 shadow-2xl transition-all duration-300 ${isFullscreen ? "w-full h-full aspect-video rounded-none" : "h-full aspect-square rounded-xl"}`}>
-                      <div className="w-16 h-16 rounded-full border-2 border-gold-accent/25 border-dashed flex items-center justify-center animate-spin" style={{ animationDuration: "15s" }}>
-                        <Crosshair size={24} className="text-gold-dim" />
-                      </div>
-                      <div className="font-orbitron text-xs font-bold text-gold-accent tracking-widest">CAMERA OFFLINE</div>
-                      <div className="font-inter text-[10px] text-sec">Awaiting authorization feedback node...</div>
                     </div>
                   )}
                 </div>

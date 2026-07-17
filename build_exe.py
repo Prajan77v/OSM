@@ -118,7 +118,7 @@ print("  [OK] Frontend built/verified -> " + str(frontend_out))
 # STEP 2  -- Install Python dependencies
 # ---------------------------------------------------------------------------
 print("\n[STEP 2] Installing Python dependencies ...")
-run([sys.executable, "-m", "pip", "install", "-r", "requirements.txt", "--quiet", "--break-system-packages"])
+run([sys.executable, "-m", "pip", "install", "-r", "requirements_build.txt", "--quiet", "--break-system-packages"])
 
 # ---------------------------------------------------------------------------
 # STEP 3  -- Clean previous build artefacts

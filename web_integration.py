@@ -17,7 +17,9 @@ def _get_sv():
     try:
         import main as sv
         return sv
-    except Exception:
+    except Exception as e:
+        import traceback
+        print(f"[INTEGRATION] Failed to import main: {e}\n{traceback.format_exc()}", file=sys.stderr)
         return None
 
 # ─── psutil for system metrics ────────────────────────────────────────────────

@@ -78,7 +78,13 @@ def _get_sv():
             import main as sv
             _sv_cache = sv
             return _sv_cache
-        except Exception:
+        except Exception as e:
+            import traceback
+            logger = logging.getLogger("uvicorn") if "logging" in sys.modules else None
+            if logger:
+                logger.error(f"[SV] Failed to import main: {e}\n{traceback.format_exc()}")
+            else:
+                print(f"[SV] Failed to import main: {e}\n{traceback.format_exc()}", file=sys.stderr)
             return None
 
 # ─── Global references injected by main.py ───────────────────────────
@@ -503,11 +509,9 @@ def create_app() -> "FastAPI":
         t = time.time()
         pulse = (np.sin(t * 4) + 1) / 2
 
-        # CS-04: Use actual config resolution, not hardcoded 640×360
-        fw = getattr(sv.Config, "FRAME_W", 640) if sv else 640
-        fh = getattr(sv.Config, "FRAME_H", 360) if sv else 360
-        sx = W / fw
-        sy = H / fh
+        # Coordinates are already scaled to the native frame size in main.py
+        sx = 1.0
+        sy = 1.0
 
         for det in dets:
             x1, y1, x2, y2 = det["box"]
@@ -522,37 +526,39 @@ def create_app() -> "FastAPI":
             pid = det.get("pid")
 
             if label == "person":
-                # H9: Use pre-computed snapshot, no lock acquisition here
                 is_known = pid in known_pids if pid else False
                 col = (120, 255, 0) if is_known else (60, 60, 255)
-                lw = max(1, int(1 + pulse))
             else:
-                col = (55, 175, 212)
-                lw = 1
+                col = (55, 175, 212) # Gold
 
-            cv2.rectangle(frame, (x1, y1), (x2, y2), col, lw, cv2.LINE_AA)
+            # 1. Soft semi-transparent background fill
+            overlay = frame.copy()
+            cv2.rectangle(overlay, (x1, y1), (x2, y2), col, -1)
+            cv2.addWeighted(overlay, 0.08, frame, 0.92, 0, frame)
 
-            L = 12
-            for (cx, cy, dx, dy) in [(x1,y1,1,1),(x2,y1,-1,1),(x1,y2,1,-1),(x2,y2,-1,-1)]:
-                cv2.line(frame, (cx,cy), (cx+dx*L, cy), col, 2, cv2.LINE_AA)
-                cv2.line(frame, (cx,cy), (cx, cy+dy*L), col, 2, cv2.LINE_AA)
+            # 2. Thin bounding box
+            cv2.rectangle(frame, (x1, y1), (x2, y2), col, 1, cv2.LINE_AA)
 
+            # 3. Outer sub-pixel tactical corner brackets
+            cl = min(15, (x2 - x1) // 4)
+            if cl > 2:
+                for (cx, cy, dx, dy) in [(x1,y1,1,1),(x2,y1,-1,1),(x1,y2,1,-1),(x2,y2,-1,-1)]:
+                    cv2.line(frame, (cx,cy), (cx+dx*cl, cy), col, 2, cv2.LINE_AA)
+                    cv2.line(frame, (cx,cy), (cx, cy+dy*cl), col, 2, cv2.LINE_AA)
+
+            # 4. Anti-aliased text chip
             chip = f"{disp.upper()} {conf:.0%}"
-            (tw, th), _ = cv2.getTextSize(chip, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
-            ly = max(y1-4, th+4)
-            cv2.rectangle(frame, (x1, ly-th-4), (x1+tw+8, ly+2), (0, 0, 0), -1)
-            cv2.rectangle(frame, (x1, ly-th-4), (x1+tw+8, ly+2), col, 1)
-            cv2.putText(frame, chip, (x1+4, ly-2), cv2.FONT_HERSHEY_SIMPLEX, 0.4, col, 1, cv2.LINE_AA)
+            (tw, th), _ = cv2.getTextSize(chip, cv2.FONT_HERSHEY_SIMPLEX, 0.38, 1)
+            ly = max(y1-4, th+6)
+            cv2.rectangle(frame, (x1, ly-th-4), (x1+tw+8, ly+2), col, -1)
+            cv2.putText(frame, chip, (x1+4, ly-2), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (0, 0, 0) if label == "person" and is_known else (255, 255, 255), 1, cv2.LINE_AA)
 
-        scan_y = int((t * 80) % H)
-        cv2.line(frame, (0, scan_y), (W, scan_y), (55, 175, 212), 1)
-        scan_y2 = int((t * 80 + H/2) % H)
-        cv2.line(frame, (0, scan_y2), (W, scan_y2), (55, 175, 212), 1)
-
+        # Draw clean golden corner ticks for the entire viewport
         for (cx, cy, dx, dy) in [(0,0,1,1),(W,0,-1,1),(0,H,1,-1),(W,H,-1,-1)]:
             cv2.line(frame, (cx,cy), (cx+dx*20, cy), (55,175,212), 2, cv2.LINE_AA)
             cv2.line(frame, (cx,cy), (cx, cy+dy*20), (55,175,212), 2, cv2.LINE_AA)
 
+        # Draw anti-aliased millisecond timestamp in corner
         ts = datetime.now().strftime("%H:%M:%S.%f")[:12]
         cv2.putText(frame, ts, (W-110, H-10), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (55,175,212), 1, cv2.LINE_AA)
 
@@ -885,6 +891,94 @@ def create_app() -> "FastAPI":
                 "uptime":       getattr(cs, "uptime_str", "00:00:00"),
             })
         return JSONResponse(result)
+
+    @app.get("/api/camera/{cam_id}/settings")
+    async def get_camera_settings(cam_id: int):
+        """Query live capture and enhancement settings for a camera channel."""
+        try:
+            sv = _get_sv()
+            with _cameras_lock:
+                cam_count = len(_cameras)
+            if not sv or cam_id < 0 or cam_id >= cam_count:
+                return JSONResponse({"status": "error", "message": "Camera not found"}, status_code=404)
+            
+            with _cameras_lock:
+                cs = _cameras[cam_id]
+            mgr = cs.manager
+            return JSONResponse({
+                "brightness": mgr.brightness,
+                "contrast": mgr.contrast,
+                "saturation": mgr.saturation,
+                "gamma": mgr.gamma,
+                "sharpness": mgr.sharpness,
+                "noise_reduction": mgr.noise_reduction,
+                "exposure": mgr.exposure,
+                "auto_exposure": mgr.auto_exposure,
+                "auto_white_balance": mgr.auto_white_balance,
+                "mirror": mgr.mirror,
+                "fps": mgr.fps,
+                "width": mgr.width,
+                "height": mgr.height,
+                "active_width": mgr.active_width,
+                "active_height": mgr.active_height,
+                "active_fps": mgr.active_fps,
+                "active_codec": mgr.active_codec
+            })
+        except Exception as e:
+            return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+    @app.post("/api/camera/{cam_id}/settings")
+    async def update_camera_settings(cam_id: int, request: Request):
+        """Update live capture and enhancement settings for a camera channel."""
+        try:
+            sv = _get_sv()
+            with _cameras_lock:
+                cam_count = len(_cameras)
+            if not sv or cam_id < 0 or cam_id >= cam_count:
+                return JSONResponse({"status": "error", "message": "Camera not found"}, status_code=404)
+            
+            with _cameras_lock:
+                cs = _cameras[cam_id]
+            mgr = cs.manager
+            
+            body = await request.json()
+            
+            if "brightness" in body:
+                mgr.brightness = max(0, min(100, int(body["brightness"])))
+            if "contrast" in body:
+                mgr.contrast = max(0, min(100, int(body["contrast"])))
+            if "saturation" in body:
+                mgr.saturation = max(0, min(100, int(body["saturation"])))
+            if "gamma" in body:
+                mgr.gamma = max(0.1, min(3.0, float(body["gamma"])))
+            if "sharpness" in body:
+                mgr.sharpness = max(0, min(10, int(body["sharpness"])))
+            if "noise_reduction" in body:
+                mgr.noise_reduction = max(0, min(10, int(body["noise_reduction"])))
+            if "exposure" in body:
+                mgr.exposure = max(-13, min(-1, int(body["exposure"])))
+            if "auto_exposure" in body:
+                mgr.auto_exposure = bool(body["auto_exposure"])
+            if "auto_white_balance" in body:
+                mgr.auto_white_balance = bool(body["auto_white_balance"])
+            if "mirror" in body:
+                mgr.mirror = bool(body["mirror"])
+                
+            if "resolution" in body:
+                res_str = str(body["resolution"])
+                if "x" in res_str:
+                    w_s, h_s = res_str.split("x")
+                    mgr.pending_width = int(w_s)
+                    mgr.pending_height = int(h_s)
+            if "fps" in body:
+                mgr.pending_fps = max(10, min(60, int(body["fps"])))
+                
+            return JSONResponse({
+                "status": "ok",
+                "message": "Settings updated successfully"
+            })
+        except Exception as e:
+            return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
     @app.get("/api/crop/{pid}")
     async def get_pid_crop(pid: str):

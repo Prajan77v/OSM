@@ -2569,6 +2569,316 @@ class PersonInfo:
     absent_cycles: int             = 0
     last_box:      Optional[Tuple] = None
 
+class CameraManager:
+    def __init__(self, cs):
+        self.cs = cs
+        self.cap = None
+        self.frame_queue = queue.Queue(maxsize=3)
+        self.running = False
+        self.thread = None
+        self.reconnect_attempts = 0
+        
+        # Sliders (0-100 defaults to 50, gamma defaults to 1.0)
+        self.brightness = 50
+        self.contrast = 50
+        self.saturation = 50
+        self.gamma = 1.0
+        self.sharpness = 0
+        self.noise_reduction = 0
+        self.exposure = -6
+        self.auto_exposure = True
+        self.auto_white_balance = True
+        self.mirror = False
+        self.fps = 30
+        self.width = 1280
+        self.height = 720
+        self.active_width = 0
+        self.active_height = 0
+        self.active_fps = 0
+        self.active_codec = "NONE"
+        
+        # Pending changes
+        self.pending_width = None
+        self.pending_height = None
+        self.pending_fps = None
+
+    def start(self):
+        if self.running:
+            return
+        self.running = True
+        self.thread = threading.Thread(target=self._capture_loop, name=f"CameraCapture-{self.cs.cam_id}", daemon=True)
+        self.thread.start()
+
+    def stop(self):
+        self.running = False
+        if self.thread:
+            self.thread.join(timeout=1.0)
+            self.thread = None
+        if self.cap:
+            try: self.cap.release()
+            except: pass
+            self.cap = None
+
+    def connect_device(self) -> bool:
+        if self.cap:
+            try: self.cap.release()
+            except: pass
+            self.cap = None
+            
+        source_val = self.cs.source
+        if isinstance(source_val, str) and source_val.isdigit():
+            source_val = int(source_val)
+
+        if str(source_val).upper() == "NONE":
+            self.cs.disconnected = True
+            self.cs.online = False
+            return False
+            
+        self.cs.disconnected = False
+        try:
+            if isinstance(source_val, int):
+                backend = cv2.CAP_DSHOW if IS_WINDOWS else (cv2.CAP_V4L2 if IS_LINUX else cv2.CAP_ANY)
+                self.cap = cv2.VideoCapture(source_val, backend)
+                if not self.cap.isOpened():
+                    self.cap = cv2.VideoCapture(source_val, cv2.CAP_ANY)
+            else:
+                self.cap = cv2.VideoCapture(str(source_val), cv2.CAP_FFMPEG)
+                
+            if not self.cap or not self.cap.isOpened():
+                return False
+                
+            # If physical camera, auto-probe resolution
+            if isinstance(source_val, int):
+                resolutions = [
+                    (1920, 1080),
+                    (1600, 900),
+                    (1280, 720),
+                    (640, 480),
+                    (640, 360)
+                ]
+                success = False
+                target_w = self.pending_width or self.width
+                target_h = self.pending_height or self.height
+                
+                probe_list = [(target_w, target_h)] + [r for r in resolutions if r != (target_w, target_h)]
+                for w, h in probe_list:
+                    self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, w)
+                    self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
+                    act_w = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                    act_h = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                    if act_w == w and act_h == h:
+                        self.width = w
+                        self.height = h
+                        success = True
+                        break
+                
+                if not success:
+                    self.width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                    self.height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                    
+                if IS_WINDOWS:
+                    self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+                    self.active_codec = "MJPG"
+                else:
+                    self.active_codec = "YUYV"
+                    
+                target_fps = self.pending_fps or self.fps
+                self.cap.set(cv2.CAP_PROP_FPS, target_fps)
+                self.fps = int(self.cap.get(cv2.CAP_PROP_FPS))
+                
+                self.active_width = self.width
+                self.active_height = self.height
+                self.active_fps = self.fps
+                
+                self.apply_live_properties(force=True)
+                
+            self.cs.online = True
+            return True
+        except Exception as e:
+            app_log.error(f"[{self.cs.name}] connect_device error: {e}")
+            self.cs.online = False
+            return False
+
+    def apply_live_properties(self, force=False):
+        if not self.cap or not self.cap.isOpened():
+            return
+        source_val = self.cs.source
+        if isinstance(source_val, str) and source_val.isdigit():
+            source_val = int(source_val)
+        if not isinstance(source_val, int):
+            return
+            
+        try:
+            if self.auto_exposure:
+                self.cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 3)
+            else:
+                self.cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)
+                self.cap.set(cv2.CAP_PROP_EXPOSURE, self.exposure)
+                
+            if self.auto_white_balance:
+                self.cap.set(cv2.CAP_PROP_AUTO_WB, 1)
+            else:
+                self.cap.set(cv2.CAP_PROP_AUTO_WB, 0)
+                
+            self.cap.set(cv2.CAP_PROP_BRIGHTNESS, self.brightness * 2.55)
+            self.cap.set(cv2.CAP_PROP_CONTRAST, self.contrast * 2.55)
+            self.cap.set(cv2.CAP_PROP_SATURATION, self.saturation * 2.55)
+        except Exception:
+            pass
+
+    def _capture_loop(self):
+        read_fails = 0
+        while self.running:
+            if self.cs.disconnected:
+                time.sleep(0.5)
+                continue
+                
+            if not self.cap or not self.cap.isOpened():
+                success = self.connect_device()
+                if not success:
+                    reconnect_attempts = self.reconnect_attempts
+                    delay = min(30.0, 3.0 * (2 ** min(reconnect_attempts, 3)))
+                    self.reconnect_attempts += 1
+                    time.sleep(delay)
+                    continue
+                else:
+                    self.reconnect_attempts = 0
+                    read_fails = 0
+                    
+            if self.pending_width is not None and self.pending_height is not None:
+                self.width = self.pending_width
+                self.height = self.pending_height
+                self.pending_width = None
+                self.pending_height = None
+                self.connect_device()
+                continue
+                
+            if self.pending_fps is not None:
+                self.fps = self.pending_fps
+                self.pending_fps = None
+                self.cap.set(cv2.CAP_PROP_FPS, self.fps)
+                self.active_fps = int(self.cap.get(cv2.CAP_PROP_FPS))
+                
+            self.apply_live_properties()
+            
+            try:
+                ret, frame = self.cap.read()
+            except Exception:
+                ret, frame = False, None
+                
+            if not ret or frame is None:
+                read_fails += 1
+                if read_fails >= 5:
+                    self.cs.online = False
+                    if self.cap:
+                        try: self.cap.release()
+                        except: pass
+                        self.cap = None
+                time.sleep(0.02)
+                continue
+                
+            read_fails = 0
+            self.cs.online = True
+            
+            if self.frame_queue.full():
+                try: self.frame_queue.get_nowait()
+                except queue.Empty: pass
+            self.frame_queue.put(frame)
+
+class FrameProcessor:
+    @staticmethod
+    def process(frame: np.ndarray, settings: CameraManager, face_boxes: List[Tuple[int,int,int,int]] = []) -> np.ndarray:
+        if frame is None or frame.size == 0:
+            return frame
+            
+        try:
+            # 1. Convert to LAB and apply CLAHE first to establish a balanced baseline
+            lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
+            l, a, b = cv2.split(lab)
+            
+            clahe = cv2.createCLAHE(clipLimit=1.5, tileGridSize=(8, 8))
+            l = clahe.apply(l)
+            
+            # 2. Apply auto-exposure if enabled
+            if settings.auto_exposure:
+                mean_l = np.mean(l)
+                target_mean = 127.0
+                if mean_l > 0:
+                    gain = target_mean / mean_l
+                    gain = max(0.7, min(1.6, gain))
+                    l = cv2.convertScaleAbs(l, alpha=gain, beta=0)
+            
+            # 3. Apply manual brightness and contrast adjustments on the L channel
+            b_offset = (settings.brightness - 50) * 1.5
+            c_factor = 1.0 + (settings.contrast - 50) * 0.015
+            if b_offset != 0 or c_factor != 1.0:
+                l = cv2.convertScaleAbs(l, alpha=c_factor, beta=b_offset)
+                
+            lab = cv2.merge((l, a, b))
+            frame = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+            
+            # 4. Soft auto white balance (Gray World) with tight clamping to prevent muddy color shifts
+            if settings.auto_white_balance:
+                b_mean, g_mean, r_mean = cv2.mean(frame)[:3]
+                mean_all = (b_mean + g_mean + r_mean) / 3.0
+                if b_mean > 0 and g_mean > 0 and r_mean > 0:
+                    b_scale = max(0.9, min(1.11, mean_all / b_mean))
+                    g_scale = max(0.9, min(1.11, mean_all / g_mean))
+                    r_scale = max(0.9, min(1.11, mean_all / r_mean))
+                    
+                    b_ch, g_ch, r_ch = cv2.split(frame)
+                    b_ch = cv2.convertScaleAbs(b_ch, alpha=b_scale, beta=0)
+                    g_ch = cv2.convertScaleAbs(g_ch, alpha=g_scale, beta=0)
+                    r_ch = cv2.convertScaleAbs(r_ch, alpha=r_scale, beta=0)
+                    frame = cv2.merge((b_ch, g_ch, r_ch))
+                    
+            # 5. Apply manual saturation adjustment in HSV space
+            if settings.saturation != 50:
+                hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+                h, s, v_hsv = cv2.split(hsv)
+                s_factor = settings.saturation / 50.0
+                s = cv2.convertScaleAbs(s, alpha=s_factor, beta=0)
+                hsv = cv2.merge((h, s, v_hsv))
+                frame = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+                
+            # 6. Apply manual gamma adjustment
+            if settings.gamma != 1.0:
+                invGamma = 1.0 / settings.gamma
+                table = np.array([((i / 255.0) ** invGamma) * 255 for i in np.arange(0, 256)]).astype("uint8")
+                frame = cv2.LUT(frame, table)
+                
+            # 7. Noise reduction
+            if settings.noise_reduction > 0:
+                d_val = 3 + settings.noise_reduction
+                frame = cv2.bilateralFilter(frame, d_val, 50, 50)
+                
+            # 8. Face sharpness enhancement
+            if face_boxes:
+                for box in face_boxes:
+                    fx1, fy1, fx2, fy2 = box
+                    fh_h, fh_w = frame.shape[:2]
+                    fx1, fy1 = max(0, fx1), max(0, fy1)
+                    fx2, fy2 = min(fh_w-1, fx2), min(fh_h-1, fy2)
+                    if fx2 > fx1 and fy2 > fy1:
+                        face_crop = frame[fy1:fy2, fx1:fx2]
+                        blurred = cv2.GaussianBlur(face_crop, (5, 5), 1.0)
+                        sharpened = cv2.addWeighted(face_crop, 1.4, blurred, -0.4, 0)
+                        frame[fy1:fy2, fx1:fx2] = sharpened
+                        
+            # 9. Frame-level sharpness enhancement
+            if settings.sharpness > 0:
+                factor = settings.sharpness / 12.0
+                blurred = cv2.GaussianBlur(frame, (5, 5), 1.0)
+                frame = cv2.addWeighted(frame, 1.0 + factor, blurred, -factor, 0)
+                
+            # 10. Mirroring
+            if settings.mirror:
+                frame = cv2.flip(frame, 1)
+        except Exception as e:
+            app_log.warning(f"FrameProcessor error: {e}")
+            
+        return frame
+
 class CameraState:
     def __init__(self, cam_id: int, cfg: dict):
         self.cam_id   = cam_id
@@ -2576,7 +2886,6 @@ class CameraState:
         self.name     = cfg["name"]
         self.location = cfg.get("location", "Monitored Sector")
         self.enabled  = cfg.get("enabled", True)
-        self.cap: Optional[cv2.VideoCapture] = None
         self.online      = False
         self.disconnected= str(self.source).upper() == "NONE"
         self.frame_cnt   = 0
@@ -2624,41 +2933,28 @@ class CameraState:
         self._reconnect_attempts = 0
         # HAAE — Human Activity & Expression Analysis Engine (per-camera instance)
         self.haae = HumanActivityExpressionEngine()
+        self.manager = CameraManager(self)
+
+    @property
+    def cap(self):
+        return self.manager.cap
 
     def connect(self) -> bool:
-        if str(self.source).upper() == "NONE":
-            self.disconnected = True; self.online = False; return True
-        self.disconnected = False
-        try:
-            if isinstance(self.source, int):
-                backend  = cv2.CAP_V4L2 if IS_LINUX else (cv2.CAP_DSHOW if IS_WINDOWS else cv2.CAP_ANY)
-                self.cap = cv2.VideoCapture(self.source, backend)
-                self.cap.set(cv2.CAP_PROP_FRAME_WIDTH,  Config.FRAME_W)
-                self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, Config.FRAME_H)
-                self.cap.set(cv2.CAP_PROP_FPS, 30)
-            else:
-                os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|buffer_size;1048576|stimeout;5000000"
-                self.cap = cv2.VideoCapture(str(self.source), cv2.CAP_FFMPEG)
-            if self.cap:
-                self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-                self.online = self.cap.isOpened()
-                if self.online:
-                    ret, frame = self.cap.read()
-                    if not ret or frame is None: self.online = False
-            if not self.online:
-                app_log.warning(f"[{self.name}] Could not open source")
-            return True
-        except Exception as e:
-            app_log.error(f"[{self.name}] connect: {e}"); self.online = False; return True
+        self.manager.start()
+        return True
 
     def reconnect_to(self, new_source):
-        if self.cap: self.cap.release(); self.cap = None
-        self.source = new_source; self.disconnected = False
-        self.online = False; self.baseline_saved = False
-        self.startup_time = time.time(); self.connect()
+        self.manager.stop()
+        self.source = new_source
+        self.disconnected = False
+        self.online = False
+        self.baseline_saved = False
+        self.startup_time = time.time()
+        self.manager.connect_device()
+        self.manager.start()
 
     def release(self):
-        if self.cap: self.cap.release(); self.cap = None
+        self.manager.stop()
 
     @property
     def uptime_str(self):
@@ -2933,30 +3229,15 @@ def camera_thread(cs: CameraState):
             if cs.disconnected:
                 time.sleep(1.0); continue
             if not cs.online:
-                reconnect_attempts = getattr(cs, "_reconnect_attempts", 0)
-                delay = min(60.0, 3.0 * (2 ** min(reconnect_attempts, 4)))
-                app_log.info(f"[{cs.name}] Reconnecting in {delay} seconds (attempt {reconnect_attempts + 1})...")
-                time.sleep(delay)
-                cs.release()
-                cs.connect()
-                if cs.online:
-                    cs._reconnect_attempts = 0
-                    read_fails = 0
-                    log_event("CAM_RECONNECT", camera=cs.name)
-                else:
-                    cs._reconnect_attempts = reconnect_attempts + 1
+                time.sleep(0.5)
                 continue
 
-            ret, raw_frame = cs.cap.read()
-            if not ret or raw_frame is None:
-                read_fails += 1
-                if read_fails >= 5:
-                    # Only declare offline after 5 consecutive failures (transient drops ignored)
-                    cs.online = False
-                    read_fails = 0
-                time.sleep(0.02)  # Small back-off to avoid spinning on a broken stream
+            try:
+                raw_frame = cs.manager.frame_queue.get(timeout=0.1)
+            except queue.Empty:
+                if not cs.online:
+                    time.sleep(0.05)
                 continue
-            read_fails = 0  # Reset on successful read
 
             # Motion detection is extremely cheap when run on raw_frame because has_motion resizes directly to 160x90
             has_motion = cs.motion.has_motion(raw_frame)
@@ -2965,9 +3246,12 @@ def camera_thread(cs: CameraState):
             idle   = (time.time() - cs.last_motion) > 3.0 and not has_motion
             skip_n = adaptive.skip_n + (Config.IDLE_SKIP_EXTRA if idle else 0)
 
-            # Defer main frame resizing to Config.FRAME_W, Config.FRAME_H
+            # Defer main frame processing
             if cs.frame_cnt % skip_n != 0:
-                frame = cv2.resize(raw_frame, (Config.FRAME_W, Config.FRAME_H), interpolation=cv2.INTER_LINEAR)
+                face_boxes = []
+                if cs.latest_dets:
+                    face_boxes = [d["box"] for d in cs.latest_dets if d.get("label") == "person"]
+                frame = FrameProcessor.process(raw_frame, cs.manager, face_boxes)
                 with cs.frame_lock: cs.latest_frame = frame; cs.tile_dirty = has_motion
                 cs.frame_cnt += 1; cs._fps_cnt += 1
                 t = time.perf_counter(); e = t - cs._fps_t
@@ -2987,7 +3271,10 @@ def camera_thread(cs: CameraState):
             time.sleep(2.0)
             continue
 
-        frame = cv2.resize(raw_frame, (Config.FRAME_W, Config.FRAME_H), interpolation=cv2.INTER_LINEAR)
+        face_boxes = []
+        if cs.latest_dets:
+            face_boxes = [d["box"] for d in cs.latest_dets if d.get("label") == "person"]
+        frame = FrameProcessor.process(raw_frame, cs.manager, face_boxes)
         cs.frame_cnt += 1; cs._fps_cnt += 1
         t = time.perf_counter(); e = t - cs._fps_t
         if e >= 1.0:
@@ -3038,7 +3325,8 @@ def camera_thread(cs: CameraState):
                                      verbose=False, half=(Config.DEVICE == "cuda"),
                                      imgsz=max(dw, dh), tracker="bytetrack.yaml")
                 boxes = results[0].boxes
-                sx = Config.FRAME_W / dw; sy = Config.FRAME_H / dh
+                fh_h, fh_w = frame.shape[:2]
+                sx = fh_w / dw; sy = fh_h / dh
 
                 yolo_dets = []
                 for box in boxes:
@@ -3051,7 +3339,7 @@ def camera_thread(cs: CameraState):
                         if not Config.DETECT_OBJECTS: continue
                     bx1,by1,bx2,by2 = box.xyxy[0]
                     x1 = int(max(0, bx1*sx)); y1 = int(max(0, by1*sy))
-                    x2 = int(min(Config.FRAME_W-1, bx2*sx)); y2 = int(min(Config.FRAME_H-1, by2*sy))
+                    x2 = int(min(fh_w-1, bx2*sx)); y2 = int(min(fh_h-1, by2*sy))
                     w_box = x2 - x1
                     h_box = y2 - y1
                     if label == "person":
@@ -3271,7 +3559,8 @@ def camera_thread(cs: CameraState):
 
                             # Zone check
                             cx_p = (x1+x2)//2; cy_p = (y1+y2)//2
-                            zones_in = [z.name for z in ZONES if z.contains(cx_p, cy_p, Config.FRAME_W, Config.FRAME_H)]
+                            fh_h, fh_w = frame.shape[:2]
+                            zones_in = [z.name for z in ZONES if z.contains(cx_p, cy_p, fh_w, fh_h)]
                             for z in ZONES:
                                 if z.name in zones_in and z.threat_level not in ("GREEN",):
                                     on_zone_intrusion(cs, pid, name, z.name, z.threat_level)
@@ -3771,11 +4060,11 @@ def _aspect_crop_to_fill(feed, dets, target_w, target_h):
     new_dets = []
     for d in dets:
         bx1, by1, bx2, by2 = d["box"]
-        # Map original coords back to actual ch, cw
-        bx1_act = bx1 * (cw / Config.FRAME_W)
-        bx2_act = bx2 * (cw / Config.FRAME_W)
-        by1_act = by1 * (ch / Config.FRAME_H)
-        by2_act = by2 * (ch / Config.FRAME_H)
+        # Map original coords back to actual ch, cw (already in frame space)
+        bx1_act = bx1
+        bx2_act = bx2
+        by1_act = by1
+        by2_act = by2
         
         # Shift to crop coordinates and scale
         x1_c = bx1_act - crop_x0
@@ -3908,8 +4197,10 @@ def _draw_detection_overlays(tile, dets, tile_w, tile_h, cs=None):
     """
     if not dets:
         return
-    sx_s = tile_w / max(1, Config.FRAME_W)
-    sy_s = tile_h / max(1, Config.FRAME_H)
+    fw = cs.latest_frame.shape[1] if (cs is not None and cs.latest_frame is not None) else Config.FRAME_W
+    fh = cs.latest_frame.shape[0] if (cs is not None and cs.latest_frame is not None) else Config.FRAME_H
+    sx_s = tile_w / max(1, fw)
+    sy_s = tile_h / max(1, fh)
 
     # H3: Snapshot known_pids once to avoid lock contention
     known_pids = set()

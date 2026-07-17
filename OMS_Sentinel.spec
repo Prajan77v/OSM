@@ -85,6 +85,7 @@ hidden_imports = [
     "PIL.ImageDraw",
     # Ultralytics / YOLO
     "ultralytics",
+    "sympy",
     # PyWin32
     "win32gui",
     "win32con",
@@ -111,7 +112,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["scipy", "pandas", "matplotlib", "h5py", "sympy", "IPython", "notebook", "jinja2", "sklearn", "scikit-learn", "tensorflow", "tensorboard", "keras", "PyQt5", "PySide2", "PySide6", "boto3", "botocore", "cryptography", "sqlalchemy", "numpy.tests"],
+    excludes=["pandas", "h5py", "sympy", "IPython", "notebook", "jinja2", "sklearn", "scikit-learn", "tensorflow", "tensorboard", "keras", "PyQt5", "PySide2", "PySide6", "boto3", "botocore", "cryptography", "sqlalchemy", "numpy.tests"],
     noarchive=False,
     optimize=0,
 )
