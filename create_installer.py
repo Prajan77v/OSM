@@ -223,7 +223,8 @@ class OMSInstaller:
         faces_src = base_path / "faces"
         frontend_src = base_path / "frontend" / "out"
         models_src = base_path / "models"
-        yolo_src = base_path / "yolov8s.pt"
+        yolon_src = base_path / "yolov8n.pt"
+        yolos_src = base_path / "yolov8s.pt"
 
         # Fallback to local files if run directly in dev env
         if not main_src.exists():
@@ -236,7 +237,8 @@ class OMSInstaller:
             faces_src = Path(__file__).parent / "faces"
             frontend_src = Path(__file__).parent / "frontend" / "out"
             models_src = Path(__file__).parent / "models"
-            yolo_src = Path(__file__).parent / "yolov8s.pt"
+            yolon_src = Path(__file__).parent / "yolov8n.pt"
+            yolos_src = Path(__file__).parent / "yolov8s.pt"
 
         if not main_src.exists():
             raise FileNotFoundError("Source engine code 'main.py' not found in bundle.")
@@ -251,8 +253,10 @@ class OMSInstaller:
         shutil.copy2(req_src, target / "requirements.txt")
         if cfg_src.exists():
             shutil.copy2(cfg_src, target / "config.yaml")
-        if yolo_src.exists():
-            shutil.copy2(yolo_src, target / "yolov8s.pt")
+        if yolon_src.exists():
+            shutil.copy2(yolon_src, target / "yolov8n.pt")
+        if yolos_src.exists():
+            shutil.copy2(yolos_src, target / "yolov8s.pt")
             
         # Copy models directory
         if models_src.exists():

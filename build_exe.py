@@ -191,12 +191,13 @@ if models_src.exists():
     shutil.copytree(models_src, models_dst)
     print("  [OK] Copied models/ to " + str(models_dst))
 
-print("\n[STEP 5d] Copying yolov8s.pt weight to dist/ ...")
-yolo_src = ROOT / "yolov8s.pt"
-yolo_dst = DIST / "yolov8s.pt"
-if yolo_src.exists():
-    shutil.copy2(yolo_src, yolo_dst)
-    print("  [OK] Copied yolov8s.pt to " + str(yolo_dst))
+print("\n[STEP 5d] Copying YOLO weights to dist/ ...")
+for m_name in ["yolov8n.pt", "yolov8s.pt"]:
+    y_src = ROOT / m_name
+    y_dst = DIST / m_name
+    if y_src.exists():
+        shutil.copy2(y_src, y_dst)
+        print(f"  [OK] Copied {m_name} to " + str(y_dst))
 
 # ---------------------------------------------------------------------------
 # STEP 6 -- Generate Portable ZIP and Standalone Installer
@@ -209,8 +210,9 @@ print(f"  Creating portable archive: {portable_zip_path.name}...")
 try:
     with zipfile.ZipFile(portable_zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
         zipf.write(DIST / "OMS_Sentinel.exe", "OMS_Sentinel.exe")
-        if (DIST / "yolov8s.pt").exists():
-            zipf.write(DIST / "yolov8s.pt", "yolov8s.pt")
+        for m_name in ["yolov8n.pt", "yolov8s.pt"]:
+            if (DIST / m_name).exists():
+                zipf.write(DIST / m_name, m_name)
         if (ROOT / "config.yaml").exists():
             zipf.write(ROOT / "config.yaml", "config.yaml")
         if (ROOT / ".env.example").exists():
@@ -251,6 +253,7 @@ try:
         "--add-data=faces;faces",
         "--add-data=objects;objects",
         "--add-data=models;models",
+        "--add-data=yolov8n.pt;.",
         "--add-data=yolov8s.pt;.",
         "--add-data=config.yaml;.",
         "--add-data=frontend/out;frontend/out",
