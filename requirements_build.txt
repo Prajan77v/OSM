@@ -11,3 +11,9 @@ Pillow>=10.0.0
 python-dotenv>=1.0.0
 pyinstaller>=6.0.0
 sympy>=1.12
+torch
+torchvision
+deepface>=0.0.90
+tf-keras>=2.15.0
+tensorflow
+

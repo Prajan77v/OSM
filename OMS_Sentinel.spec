@@ -100,6 +100,11 @@ hidden_imports = [
     "email.mime.text",
     "email.mime.multipart",
     "dotenv",
+    "deepface",
+    "tf_keras",
+    "tensorflow",
+    "torch",
+    "torchvision",
 ]
 
 # ── Analysis ──────────────────────────────────────────────────────────────────
