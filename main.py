@@ -2788,61 +2788,8 @@ class CameraManager:
 class FrameProcessor:
     @staticmethod
     def process(frame: np.ndarray, settings: CameraManager, face_boxes: List[Tuple[int,int,int,int]] = []) -> np.ndarray:
-        if frame is None or frame.size == 0:
-            return frame
-            
-        try:
-            # 1. Apply manual brightness and contrast adjustments if changed from default (50)
-            b_offset = (settings.brightness - 50) * 1.5
-            c_factor = 1.0 + (settings.contrast - 50) * 0.015
-            if b_offset != 0 or c_factor != 1.0:
-                frame = cv2.convertScaleAbs(frame, alpha=c_factor, beta=b_offset)
-            
-            # 2. Apply manual saturation adjustment if changed from default (50)
-            if settings.saturation != 50:
-                hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-                h, s, v = cv2.split(hsv)
-                s_factor = settings.saturation / 50.0
-                s = cv2.convertScaleAbs(s, alpha=s_factor, beta=0)
-                hsv = cv2.merge((h, s, v))
-                frame = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
-                
-            # 3. Apply manual gamma adjustment if changed from default (1.0)
-            if settings.gamma != 1.0:
-                invGamma = 1.0 / settings.gamma
-                table = np.array([((i / 255.0) ** invGamma) * 255 for i in np.arange(0, 256)]).astype("uint8")
-                frame = cv2.LUT(frame, table)
-                
-            # 4. Noise reduction
-            if settings.noise_reduction > 0:
-                d_val = 3 + settings.noise_reduction
-                frame = cv2.bilateralFilter(frame, d_val, 50, 50)
-                
-            # 5. Face sharpness enhancement
-            if face_boxes:
-                for box in face_boxes:
-                    fx1, fy1, fx2, fy2 = box
-                    fh_h, fh_w = frame.shape[:2]
-                    fx1, fy1 = max(0, fx1), max(0, fy1)
-                    fx2, fy2 = min(fh_w-1, fx2), min(fh_h-1, fy2)
-                    if fx2 > fx1 and fy2 > fy1:
-                        face_crop = frame[fy1:fy2, fx1:fx2]
-                        blurred = cv2.GaussianBlur(face_crop, (5, 5), 1.0)
-                        sharpened = cv2.addWeighted(face_crop, 1.4, blurred, -0.4, 0)
-                        frame[fy1:fy2, fx1:fx2] = sharpened
-                        
-            # 6. Frame-level sharpness enhancement
-            if settings.sharpness > 0:
-                factor = settings.sharpness / 12.0
-                blurred = cv2.GaussianBlur(frame, (5, 5), 1.0)
-                frame = cv2.addWeighted(frame, 1.0 + factor, blurred, -factor, 0)
-                
-            # 7. Mirroring
-            if settings.mirror:
-                frame = cv2.flip(frame, 1)
-        except Exception as e:
-            app_log.warning(f"FrameProcessor error: {e}")
-            
+        if frame is not None and settings.mirror:
+            return cv2.flip(frame, 1)
         return frame
 
 class CameraState:
