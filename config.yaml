@@ -43,7 +43,7 @@ display:
   stream_jpeg_quality: 72
   particle_size: 2.0
   mesh_thickness: 1.0
-  headless: true
+  headless: false
 haae:
   enabled: true
   emotion_frame_interval: 24

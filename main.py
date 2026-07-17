@@ -2792,67 +2792,33 @@ class FrameProcessor:
             return frame
             
         try:
-            # 1. Convert to LAB and apply CLAHE first to establish a balanced baseline
-            lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
-            l, a, b = cv2.split(lab)
-            
-            clahe = cv2.createCLAHE(clipLimit=1.5, tileGridSize=(8, 8))
-            l = clahe.apply(l)
-            
-            # 2. Apply auto-exposure if enabled
-            if settings.auto_exposure:
-                mean_l = np.mean(l)
-                target_mean = 127.0
-                if mean_l > 0:
-                    gain = target_mean / mean_l
-                    gain = max(0.7, min(1.6, gain))
-                    l = cv2.convertScaleAbs(l, alpha=gain, beta=0)
-            
-            # 3. Apply manual brightness and contrast adjustments on the L channel
+            # 1. Apply manual brightness and contrast adjustments if changed from default (50)
             b_offset = (settings.brightness - 50) * 1.5
             c_factor = 1.0 + (settings.contrast - 50) * 0.015
             if b_offset != 0 or c_factor != 1.0:
-                l = cv2.convertScaleAbs(l, alpha=c_factor, beta=b_offset)
-                
-            lab = cv2.merge((l, a, b))
-            frame = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+                frame = cv2.convertScaleAbs(frame, alpha=c_factor, beta=b_offset)
             
-            # 4. Soft auto white balance (Gray World) with tight clamping to prevent muddy color shifts
-            if settings.auto_white_balance:
-                b_mean, g_mean, r_mean = cv2.mean(frame)[:3]
-                mean_all = (b_mean + g_mean + r_mean) / 3.0
-                if b_mean > 0 and g_mean > 0 and r_mean > 0:
-                    b_scale = max(0.9, min(1.11, mean_all / b_mean))
-                    g_scale = max(0.9, min(1.11, mean_all / g_mean))
-                    r_scale = max(0.9, min(1.11, mean_all / r_mean))
-                    
-                    b_ch, g_ch, r_ch = cv2.split(frame)
-                    b_ch = cv2.convertScaleAbs(b_ch, alpha=b_scale, beta=0)
-                    g_ch = cv2.convertScaleAbs(g_ch, alpha=g_scale, beta=0)
-                    r_ch = cv2.convertScaleAbs(r_ch, alpha=r_scale, beta=0)
-                    frame = cv2.merge((b_ch, g_ch, r_ch))
-                    
-            # 5. Apply manual saturation adjustment in HSV space
+            # 2. Apply manual saturation adjustment if changed from default (50)
             if settings.saturation != 50:
                 hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-                h, s, v_hsv = cv2.split(hsv)
+                h, s, v = cv2.split(hsv)
                 s_factor = settings.saturation / 50.0
                 s = cv2.convertScaleAbs(s, alpha=s_factor, beta=0)
-                hsv = cv2.merge((h, s, v_hsv))
+                hsv = cv2.merge((h, s, v))
                 frame = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
                 
-            # 6. Apply manual gamma adjustment
+            # 3. Apply manual gamma adjustment if changed from default (1.0)
             if settings.gamma != 1.0:
                 invGamma = 1.0 / settings.gamma
                 table = np.array([((i / 255.0) ** invGamma) * 255 for i in np.arange(0, 256)]).astype("uint8")
                 frame = cv2.LUT(frame, table)
                 
-            # 7. Noise reduction
+            # 4. Noise reduction
             if settings.noise_reduction > 0:
                 d_val = 3 + settings.noise_reduction
                 frame = cv2.bilateralFilter(frame, d_val, 50, 50)
                 
-            # 8. Face sharpness enhancement
+            # 5. Face sharpness enhancement
             if face_boxes:
                 for box in face_boxes:
                     fx1, fy1, fx2, fy2 = box
@@ -2865,13 +2831,13 @@ class FrameProcessor:
                         sharpened = cv2.addWeighted(face_crop, 1.4, blurred, -0.4, 0)
                         frame[fy1:fy2, fx1:fx2] = sharpened
                         
-            # 9. Frame-level sharpness enhancement
+            # 6. Frame-level sharpness enhancement
             if settings.sharpness > 0:
                 factor = settings.sharpness / 12.0
                 blurred = cv2.GaussianBlur(frame, (5, 5), 1.0)
                 frame = cv2.addWeighted(frame, 1.0 + factor, blurred, -factor, 0)
                 
-            # 10. Mirroring
+            # 7. Mirroring
             if settings.mirror:
                 frame = cv2.flip(frame, 1)
         except Exception as e:

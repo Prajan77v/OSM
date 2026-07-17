@@ -108,6 +108,118 @@ def init_web_server(cameras, get_telemetry_fn, get_events_fn, get_summary_fn, co
     _get_sv()
 
 
+class StandaloneCameraState:
+    """Minimal camera state for standalone web-only playback."""
+    def __init__(self, cam_id, source, name="CAM"):
+        self.cam_id = cam_id
+        self.source = source
+        self.name = name
+        self.location = "Local Camera"
+        self.enabled = True
+        self.online = False
+        self.disconnected = False
+        self.latest_frame = None
+        self.latest_dets = []
+        self.frame_lock = threading.Lock()
+        self.cap = None
+        self.thread = None
+        self.removed = False
+
+
+def _start_standalone_camera(cs: StandaloneCameraState):
+    if cs.cap:
+        try:
+            cs.cap.release()
+        except Exception:
+            pass
+        cs.cap = None
+
+    source_val = cs.source
+    if isinstance(source_val, str) and source_val.isdigit():
+        source_val = int(source_val)
+
+    try:
+        cs.cap = cv2.VideoCapture(source_val)
+        if not cs.cap or not cs.cap.isOpened():
+            app_log.warning(f"[StandaloneCamera] Failed to open source: {source_val}")
+            cs.online = False
+            cs.disconnected = True
+            return
+        cs.online = True
+        cs.disconnected = False
+    except Exception as e:
+        app_log.warning(f"[StandaloneCamera] Error opening source {source_val}: {e}")
+        cs.online = False
+        cs.disconnected = True
+        return
+
+    def _capture_loop():
+        read_fails = 0
+        while not getattr(cs, "removed", False):
+            if not cs.cap or not cs.cap.isOpened():
+                cs.online = False
+                time.sleep(0.5)
+                continue
+
+            try:
+                ret, frame = cs.cap.read()
+            except Exception:
+                ret, frame = False, None
+
+            if not ret or frame is None or getattr(frame, "size", 0) == 0:
+                read_fails += 1
+                if read_fails >= 5:
+                    cs.online = False
+                time.sleep(0.05)
+                continue
+
+            read_fails = 0
+            if frame.ndim == 2:
+                frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+            elif frame.ndim == 3 and frame.shape[2] == 1:
+                frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+
+            with cs.frame_lock:
+                cs.latest_frame = frame
+                cs.latest_dets = []
+
+            cs.online = True
+            time.sleep(0.03)
+
+        try:
+            if cs.cap:
+                cs.cap.release()
+        except Exception:
+            pass
+
+    cs.thread = threading.Thread(target=_capture_loop, daemon=True, name=f"StandaloneCam-{cs.cam_id}")
+    cs.thread.start()
+
+
+def start_web_server_only(host="0.0.0.0", port=8000, camera_sources=None, open_browser=False):
+    """Start the web server with a minimal standalone camera capture pipeline."""
+    if camera_sources is None:
+        camera_sources = [0]
+    cameras = []
+    for idx, source in enumerate(camera_sources):
+        if isinstance(source, str) and source.isdigit():
+            source_val = int(source)
+        else:
+            source_val = source
+        cs = StandaloneCameraState(cam_id=idx, source=source_val, name=f"CAM {idx+1}")
+        cameras.append(cs)
+        _start_standalone_camera(cs)
+
+    init_web_server(
+        cameras,
+        lambda: {"cpu": 0, "ram": 0, "uptime": "0s"},
+        lambda: [],
+        lambda: {"cameras": len(cameras)},
+        {},
+    )
+    return start_server(host=host, port=port, open_browser=open_browser)
+
+
 def save_config_safe(body: dict) -> dict:
     import traceback
     import yaml
