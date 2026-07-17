@@ -2792,18 +2792,20 @@ class FrameProcessor:
             return frame
             
         try:
-            # 1. Apply brightness and contrast adjustments with baseline boosts (+15 brightness offset, 1.08x contrast)
-            b_offset = (settings.brightness - 50) * 1.5 + 15.0
-            c_factor = (1.0 + (settings.contrast - 50) * 0.015) * 1.08
-            frame = cv2.convertScaleAbs(frame, alpha=c_factor, beta=b_offset)
+            # 1. Apply manual brightness and contrast adjustments if changed from default (50)
+            b_offset = (settings.brightness - 50) * 1.5
+            c_factor = 1.0 + (settings.contrast - 50) * 0.015
+            if b_offset != 0 or c_factor != 1.0:
+                frame = cv2.convertScaleAbs(frame, alpha=c_factor, beta=b_offset)
             
-            # 2. Apply saturation adjustment with baseline boost (1.25x saturation to add rich color)
-            hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-            h, s, v = cv2.split(hsv)
-            s_factor = (settings.saturation / 50.0) * 1.25
-            s = cv2.convertScaleAbs(s, alpha=s_factor, beta=0)
-            hsv = cv2.merge((h, s, v))
-            frame = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+            # 2. Apply manual saturation adjustment if changed from default (50)
+            if settings.saturation != 50:
+                hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+                h, s, v = cv2.split(hsv)
+                s_factor = settings.saturation / 50.0
+                s = cv2.convertScaleAbs(s, alpha=s_factor, beta=0)
+                hsv = cv2.merge((h, s, v))
+                frame = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
                 
             # 3. Apply manual gamma adjustment if changed from default (1.0)
             if settings.gamma != 1.0:
