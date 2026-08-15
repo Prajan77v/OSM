@@ -1,36 +1,26 @@
 operator:
   username: Prajan
 cameras:
-- id: 0
-  source: 0
-  name: LOCAL CAM
-  enabled: true
-  location: Main Entrance Sector
-- id: 1
-  source: NONE
-  name: CCTV NODE-2
-  enabled: false
-  location: Office Sector B
-- id: 2
-  source: NONE
-  name: CCTV NODE-3
-  enabled: false
-  location: Restricted Storage Area
-- id: 3
-  source: NONE
-  name: PHONE / IP CAM
-  enabled: false
-  location: Mobile Sector D
-- id: 4
-  source: rtsp://admin:abcd1234@192.168.1.200:554/Streaming/Channels/101
-  name: CAMM
-  enabled: true
-  location: open
-- id: 5
-  source: rtsp://admin:abcd1234@192.168.1.200:554/Streaming/Channels/102
-  name: '22'
-  enabled: true
-  location: open
+  - source: 0
+    name: "LOCAL WEBCAM"
+    enabled: true
+    location: "Command Desk"
+  - source: "rtsp://admin:abcd1234@192.168.1.200:554/Streaming/Channels/101"
+    name: "NVR CAM 1 - MAIN ENTRANCE"
+    enabled: true
+    location: "Entrance Gate"
+  - source: "rtsp://admin:abcd1234@192.168.1.200:554/Streaming/Channels/201"
+    name: "NVR CAM 2 - CORRIDOR"
+    enabled: true
+    location: "Main Hallway"
+  - source: "rtsp://admin:abcd1234@192.168.1.200:554/Streaming/Channels/301"
+    name: "NVR CAM 3 - PERIMETER"
+    enabled: true
+    location: "Perimeter Sector"
+  - source: "rtsp://admin:abcd1234@192.168.1.200:554/Streaming/Channels/401"
+    name: "NVR CAM 4 - PARKING"
+    enabled: true
+    location: "Parking Area"
 performance:
   lightweight_mode: false
 detection:
