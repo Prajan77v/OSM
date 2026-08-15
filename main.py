@@ -129,6 +129,17 @@ except Exception as e:
 # Statically disabled dlib face_recognition to prevent CUDA loading freezes on Windows. Falling back to stable YuNet/SFace.
 FACE_RECOG_AVAILABLE = False
 
+# ── InsightFace engine import (graceful — disabled if face_engine.py missing) ──
+try:
+    from face_engine import face_engine as _global_face_engine, FaceEngine, FaceResult, INSIGHTFACE_AVAILABLE
+except Exception as _fe_err:
+    _global_face_engine = None
+    INSIGHTFACE_AVAILABLE = False
+    class FaceResult: pass
+    class FaceEngine: pass
+    import logging as _flog
+    _flog.getLogger("OMS").warning(f"[FaceEngine] face_engine.py not loaded: {_fe_err}")
+
 try:
     import win32gui
     WIN32_AVAILABLE = True
@@ -646,6 +657,9 @@ _yunet_detector         = None
 _sface_recognizer       = None
 _yunet_enc_cache: Dict[str, any] = {}  # pid -> face embedding list
 
+# InsightFace engine availability (set during _init_yunet)
+FACE_ENGINE_AVAILABLE   = False
+
 OBJECT_ENGINE_AVAILABLE = False
 _obj_model              = None    # MobileNetV2 model
 _obj_transform          = None    # torchvision transform pipeline
@@ -687,29 +701,43 @@ def _download_model(url: str, path: str):
         return False
 
 def _init_yunet():
-    """Initialize both Face engine (YuNet+SFace) and Object engine (MobileNetV2)."""
+    """Initialize Face engine (InsightFace preferred, YuNet+SFace fallback) and Object engine."""
     global YUNET_AVAILABLE, _yunet_detector, _sface_recognizer
     global OBJECT_ENGINE_AVAILABLE, _obj_model, _obj_transform
+    global FACE_ENGINE_AVAILABLE
 
-    # ── 1. Initialize Face Engine ──────────────────────────────────────────────
-    try:
-        yu_ok = _download_model(Config.YUNET_MODEL_URL, Config.YUNET_MODEL_PATH)
-        sf_ok = _download_model(Config.SFACE_MODEL_URL, Config.SFACE_MODEL_PATH)
-        if not yu_ok:
-            app_log.error(f"[FACE] YuNet model unavailable: {Config.YUNET_MODEL_PATH}")
-        if not sf_ok:
-            app_log.error(f"[FACE] SFace model unavailable: {Config.SFACE_MODEL_PATH}")
-        if yu_ok and sf_ok:
-            _yunet_detector   = cv2.FaceDetectorYN.create(Config.YUNET_MODEL_PATH, "", (320, 320), 0.45)
-            _sface_recognizer = cv2.FaceRecognizerSF.create(Config.SFACE_MODEL_PATH, "")
-            YUNET_AVAILABLE   = True
-            print("[OMS] \u2714 Face Recognition Engine ONLINE (YuNet+SFace)")
-            app_log.info("[FACE] YuNet+SFace Neural Face Engine ONLINE")
-    except Exception as e:
-        import traceback
-        app_log.error(f"[YUNET] Init failed: {e}")
-        app_log.error(f"[YUNET] Traceback: {traceback.format_exc()}")
-        YUNET_AVAILABLE = False
+    # ── 0. Try InsightFace first (preferred) ───────────────────────────────────
+    if _global_face_engine is not None and INSIGHTFACE_AVAILABLE:
+        try:
+            ok = _global_face_engine.init(
+                cuda=(CUDA_AVAILABLE and Config.USE_CUDA)
+            )
+            if ok:
+                FACE_ENGINE_AVAILABLE = True
+                app_log.info("[FACE] InsightFace ArcFace Engine ONLINE — YuNet/SFace skipped")
+        except Exception as _fe_init_err:
+            app_log.warning(f"[FACE] InsightFace init failed: {_fe_init_err}")
+
+    # ── 1. Initialize YuNet+SFace fallback (if InsightFace not available) ──────
+    if not FACE_ENGINE_AVAILABLE:
+        try:
+            yu_ok = _download_model(Config.YUNET_MODEL_URL, Config.YUNET_MODEL_PATH)
+            sf_ok = _download_model(Config.SFACE_MODEL_URL, Config.SFACE_MODEL_PATH)
+            if not yu_ok:
+                app_log.error(f"[FACE] YuNet model unavailable: {Config.YUNET_MODEL_PATH}")
+            if not sf_ok:
+                app_log.error(f"[FACE] SFace model unavailable: {Config.SFACE_MODEL_PATH}")
+            if yu_ok and sf_ok:
+                _yunet_detector   = cv2.FaceDetectorYN.create(Config.YUNET_MODEL_PATH, "", (320, 320), 0.45)
+                _sface_recognizer = cv2.FaceRecognizerSF.create(Config.SFACE_MODEL_PATH, "")
+                YUNET_AVAILABLE   = True
+                print("[OMS] \u2714 Face Recognition Engine ONLINE (YuNet+SFace fallback)")
+                app_log.info("[FACE] YuNet+SFace Neural Face Engine ONLINE (fallback)")
+        except Exception as e:
+            import traceback
+            app_log.error(f"[YUNET] Init failed: {e}")
+            app_log.error(f"[YUNET] Traceback: {traceback.format_exc()}")
+            YUNET_AVAILABLE = False
 
     # ── 2. Initialize Object Engine ────────────────────────────────────────────
     try:
@@ -745,7 +773,7 @@ def _init_yunet():
             ])
 
         OBJECT_ENGINE_AVAILABLE = True
-        print("[OMS] ✔ Object Recognition Engine ONLINE (ResNet50 CNN)")
+        print("[OMS] \u2714 Object Recognition Engine ONLINE (ResNet50 CNN)")
         app_log.info("[OBJ] ResNet50 CNN Object Recognition ONLINE")
         return
     except Exception as e:
@@ -1644,7 +1672,8 @@ class NotificationQueue:
             except Exception as e: app_log.error(f"TG worker: {e}")
 
     def _dispatch(self, n: Notification):
-        if not REQUESTS_AVAILABLE: return
+        if not REQUESTS_AVAILABLE or not Config.BOT_TOKEN or not Config.CHAT_ID or "********" in str(Config.BOT_TOKEN) or len(str(Config.BOT_TOKEN)) < 10:
+            return
         for attempt in range(1, Config.TG_MAX_RETRIES + 1):
             try:
                 if n.kind == "message":
@@ -1762,7 +1791,17 @@ def update_db_counts():
     _unknown_count = u
 
 def deduplicate_profiles():
-    """Scan faces_db and merge/delete duplicate face profiles based on SFace embedding similarity."""
+    """Scan faces_db and merge/delete duplicate face profiles using ArcFace / SFace similarity."""
+    if FACE_ENGINE_AVAILABLE and _global_face_engine is not None and _global_face_engine.available:
+        try:
+            merged = _global_face_engine.deduplicate(faces_db, _fdb_lock)
+            if merged:
+                app_log.info(f"[DEDUP] Merged {len(merged)} duplicate face profiles: {merged}")
+                _mark_db_dirty()
+            return
+        except Exception as e:
+            app_log.warning(f"[DEDUP] FaceEngine deduplicate error: {e}")
+
     if not YUNET_AVAILABLE or _sface_recognizer is None:
         return
     with _fdb_lock, _yunet_lock:
@@ -1779,7 +1818,6 @@ def deduplicate_profiles():
                     continue
                 enc2 = _yunet_enc_cache[pid2]
                 try:
-                    # Support both single arrays and lists of arrays for multi-embedding profiles
                     encs1 = enc1 if isinstance(enc1, list) else [enc1]
                     encs2 = enc2 if isinstance(enc2, list) else [enc2]
                     
@@ -1797,7 +1835,6 @@ def deduplicate_profiles():
                         known1 = faces_db[pid1].get("known", False)
                         known2 = faces_db[pid2].get("known", False)
                         if known1 and known2:
-                            # Keep both known/authorized profiles to support multi-embedding and multi-angle matching
                             continue
                         if known1 and not known2:
                             older, newer = pid1, pid2
@@ -1861,6 +1898,11 @@ def _load_db_json():
                         _obj_enc_cache[pid] = enc_arr
         faces_db = db
         update_db_counts()
+        if FACE_ENGINE_AVAILABLE and _global_face_engine is not None and _global_face_engine.available:
+            try:
+                _global_face_engine.load_from_faces_db(faces_db)
+            except Exception as _fe_load_err:
+                app_log.warning(f"FaceEngine load_from_faces_db error: {_fe_load_err}")
         
         # Build ORB cache for all physical objects to speed up hybrid matching, and dynamically update legacy embeddings
         for pid in list(faces_db.keys()):
@@ -1906,6 +1948,11 @@ def _mark_db_dirty():
 
 def _save_db_json():
     deduplicate_profiles()
+    if FACE_ENGINE_AVAILABLE and _global_face_engine is not None and _global_face_engine.available:
+        try:
+            _global_face_engine.sync_to_faces_db(faces_db, _fdb_lock)
+        except Exception as _fe_sync_err:
+            app_log.debug(f"FaceEngine sync error: {_fe_sync_err}")
     out = {}
     with _fdb_lock:
         for pid, d in faces_db.items():
@@ -1955,7 +2002,7 @@ def _new_pid() -> str:
         return p
 
 def preload_known():
-    if not FACE_RECOG_AVAILABLE and not YUNET_AVAILABLE: return
+    if not FACE_ENGINE_AVAILABLE and not FACE_RECOG_AVAILABLE and not YUNET_AVAILABLE: return
     loaded = []
     p = Path(Config.KNOWN_FACES_DIR)
     if not p.exists(): return
@@ -1969,7 +2016,28 @@ def preload_known():
             with _fdb_lock:
                 by_name = {d["name"].lower(): pid for pid,d in faces_db.items() if d.get("known")}
 
-            if FACE_RECOG_AVAILABLE:
+            if FACE_ENGINE_AVAILABLE and _global_face_engine is not None and _global_face_engine.available:
+                rel_photo = str(fp.relative_to(WORKING_DIR)) if WORKING_DIR in fp.parents else str(fp)
+                pid = by_name.get(name.lower())
+                results = _global_face_engine.detect_and_embed(img, min_det_score=0.45, min_size=30)
+                if not results: continue
+                best = max(results, key=lambda f: f.det_score)
+                enc = best.embedding
+                with _fdb_lock:
+                    if pid:
+                        faces_db[pid]["encoding"] = enc
+                        faces_db[pid]["photo"] = rel_photo
+                        faces_db[pid]["engine"] = "insightface"
+                        faces_db[pid]["encodings"] = [enc]
+                        faces_db[pid]["known"] = True
+                    else:
+                        pid = _new_pid()
+                        faces_db[pid] = {"name":name,"encoding":enc,"first_seen":now,"last_seen":now,
+                                         "visit_count":0,"known":True,"photo":rel_photo,"in_scene":False,
+                                         "engine":"insightface","encodings":[enc]}
+                _global_face_engine.register(pid, name, enc, known=True)
+                loaded.append(name)
+            elif FACE_RECOG_AVAILABLE:
                 rgb  = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
                 import face_recognition as _fr
                 encs = _fr.face_encodings(rgb)
@@ -2098,6 +2166,20 @@ def _register_face_yunet(enc):
     _mark_db_dirty()  # async — avoids blocking the camera detection thread
     return pid, name, True
 
+def _register_face_insightface(enc):
+    with _fdb_lock:
+        pid  = _new_pid(); name = f"Intruder-{pid}"
+        now  = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        faces_db[pid] = {"name":name,"encoding":enc,"first_seen":now,"last_seen":now,
+                         "visit_count":0,"known":False,"photo":None,"in_scene":False,
+                         "engine":"insightface","encodings":[enc]}
+    if _global_face_engine is not None:
+        _global_face_engine.register(pid, name, enc, known=False)
+    _mark_db_dirty()
+    return pid, name, True
+
+_face_registration_lock = threading.Lock()
+
 def async_face(rgb_or_bgr: np.ndarray, is_bgr: bool = False, is_person: bool = True):
     """Returns (pid, name, conf) or (None, None, 0.0) for one face or object from a crop."""
     h_crop, w_crop = rgb_or_bgr.shape[:2]
@@ -2116,7 +2198,37 @@ def async_face(rgb_or_bgr: np.ndarray, is_bgr: bool = False, is_person: bool = T
                 app_log.debug(f"object match async error: {e}")
         return None, None, 0.0
 
-    if FACE_RECOG_AVAILABLE:
+    if FACE_ENGINE_AVAILABLE and _global_face_engine is not None and _global_face_engine.available:
+        try:
+            bgr = rgb_or_bgr if is_bgr else cv2.cvtColor(rgb_or_bgr, cv2.COLOR_RGB2BGR)
+            results = _global_face_engine.detect_and_embed(bgr)
+            if not results:
+                return None, None, 0.0
+            best_face = max(results, key=lambda f: f.det_score)
+            pid, name, is_new, score = _global_face_engine.match(best_face.embedding)
+            if is_new:
+                if Config.DETECT_NEW_IDS:
+                    if face_size is None or face_size >= 40:
+                        with _face_registration_lock:
+                            # Re-match inside lock to prevent parallel thread race conditions
+                            pid, name, is_new, score = _global_face_engine.match(best_face.embedding)
+                            if is_new:
+                                pid, name, _ = _register_face_insightface(best_face.embedding)
+                                score = 0.5
+                    else:
+                        return None, None, 0.0
+                else:
+                    return None, None, 0.0
+            else:
+                # Dynamic Multi-Pose Learning: accumulate high-quality face poses into existing profile
+                if best_face.det_score >= 0.70:
+                    known_status = _global_face_engine._meta.get(pid, {}).get("known", False)
+                    _global_face_engine.register(pid, name, best_face.embedding, known=known_status)
+            return pid, name, score
+        except Exception as e:
+            app_log.debug(f"face insightface: {e}")
+            return None, None, 0.0
+    elif FACE_RECOG_AVAILABLE:
         try:
             import face_recognition as _fr
             rgb = cv2.cvtColor(rgb_or_bgr, cv2.COLOR_BGR2RGB) if is_bgr else rgb_or_bgr
@@ -2639,42 +2751,25 @@ class CameraManager:
             if isinstance(source_val, int):
                 backend = cv2.CAP_DSHOW if IS_WINDOWS else (cv2.CAP_V4L2 if IS_LINUX else cv2.CAP_ANY)
                 self.cap = cv2.VideoCapture(source_val, backend)
-                if not self.cap.isOpened():
-                    self.cap = cv2.VideoCapture(source_val, cv2.CAP_ANY)
+                if not self.cap or not self.cap.isOpened():
+                    for fallback_idx in [0, 1, 2]:
+                        self.cap = cv2.VideoCapture(fallback_idx, backend)
+                        if self.cap and self.cap.isOpened():
+                            break
             else:
                 self.cap = cv2.VideoCapture(str(source_val), cv2.CAP_FFMPEG)
                 
             if not self.cap or not self.cap.isOpened():
                 return False
                 
-            # If physical camera, auto-probe resolution
+            # If physical camera, set target resolution directly
             if isinstance(source_val, int):
-                resolutions = [
-                    (1920, 1080),
-                    (1600, 900),
-                    (1280, 720),
-                    (640, 480),
-                    (640, 360)
-                ]
-                success = False
-                target_w = self.pending_width or self.width
-                target_h = self.pending_height or self.height
-                
-                probe_list = [(target_w, target_h)] + [r for r in resolutions if r != (target_w, target_h)]
-                for w, h in probe_list:
-                    self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, w)
-                    self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
-                    act_w = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-                    act_h = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                    if act_w == w and act_h == h:
-                        self.width = w
-                        self.height = h
-                        success = True
-                        break
-                
-                if not success:
-                    self.width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-                    self.height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                target_w = self.pending_width or self.width or 640
+                target_h = self.pending_height or self.height or 480
+                self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, target_w)
+                self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, target_h)
+                self.width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or target_w
+                self.height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or target_h
                     
                 if IS_WINDOWS:
                     self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
@@ -2710,9 +2805,9 @@ class CameraManager:
             
         try:
             if self.auto_exposure:
-                self.cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 3)
+                self.cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.75 if IS_WINDOWS else 3)
             else:
-                self.cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)
+                self.cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25 if IS_WINDOWS else 1)
                 self.cap.set(cv2.CAP_PROP_EXPOSURE, self.exposure)
                 
             if self.auto_white_balance:
@@ -3374,14 +3469,24 @@ def camera_thread(cs: CameraState):
                             candidates = []
                             for l_tid, (l_pid, l_box, l_time) in cs.lost_tracks.items():
                                 if l_pid not in currently_visible_pids:
-                                    candidates.append((l_tid, l_pid, l_box))
+                                    is_known_profile = False
+                                    with _fdb_lock:
+                                        if l_pid in faces_db:
+                                            is_known_profile = faces_db[l_pid].get("known", False)
+                                    if not is_known_profile:
+                                        candidates.append((l_tid, l_pid, l_box))
                             for active_tid, active_pid in cs.track_to_pid.items():
                                 if active_tid not in tid_seen and active_tid in cs.last_track_boxes:
                                     if active_pid not in currently_visible_pids:
-                                        candidates.append((active_tid, active_pid, cs.last_track_boxes[active_tid]))
+                                        is_known_profile = False
+                                        with _fdb_lock:
+                                            if active_pid in faces_db:
+                                                is_known_profile = faces_db[active_pid].get("known", False)
+                                        if not is_known_profile:
+                                            candidates.append((active_tid, active_pid, cs.last_track_boxes[active_tid]))
                             
                             cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
-                            best_dist = 160.0
+                            best_dist = 80.0
                             for c_tid, c_pid, c_box in candidates:
                                 cx1, cy1, cx2, cy2 = c_box
                                 ccx, ccy = (cx1 + cx2) / 2.0, (cy1 + cy2) / 2.0
@@ -3435,11 +3540,11 @@ def camera_thread(cs: CameraState):
                                 x1f, y1f, x2f, y2f = d["box"]
                                 h_img, w_img = frame.shape[:2]
                                 if is_person:
-                                    # Crop top half of person for YuNet face detector context
+                                    # Crop top 70% of person bounding box with generous padding for face detection
                                     head_y1 = y1f
-                                    head_y2 = y1f + (y2f - y1f) // 2
-                                    pad_y = int((y2f - y1f) * 0.1)
-                                    pad_x = int((x2f - x1f) * 0.2)
+                                    head_y2 = y1f + int((y2f - y1f) * 0.70)
+                                    pad_y = int((y2f - y1f) * 0.15)
+                                    pad_x = int((x2f - x1f) * 0.15)
                                     crop_y1 = max(0, head_y1 - pad_y)
                                     crop_y2 = min(h_img, head_y2 + pad_y)
                                     crop_x1 = max(0, x1f - pad_x)
@@ -3456,7 +3561,7 @@ def camera_thread(cs: CameraState):
                                 crop = frame[crop_y1:crop_y2, crop_x1:crop_x2]
                                 if crop.size > 0:
                                     cs.pending_futures[tid] = face_pool.submit(async_face, crop.copy(), True, is_person)
-                                cs.tid_face_cd[tid] = 10
+                                cs.tid_face_cd[tid] = 45
                             else:
                                 cs.tid_face_cd[tid] = max(0, fr_cd - 1)
 
@@ -3601,8 +3706,24 @@ def camera_thread(cs: CameraState):
                     if t not in cs.track_to_pid: cs.tid_face_votes.pop(t, None)
                 for t in list(cs.tid_identity_locked.keys()):
                     if t not in cs.track_to_pid: cs.tid_identity_locked.pop(t, None)
-                for t in list(cs.tid_face_cd.keys()):
-                    if t not in cs.track_to_pid: cs.tid_face_cd.pop(t, None)
+                # ── Frame-Level Unique PID Deduplication ───────────────────────
+                # Guarantee that no two bounding boxes in the exact same frame display the same registered PID/Name
+                pid_seen_map = {}
+                for d in new_dets:
+                    p_id = d.get("pid")
+                    if p_id and not p_id.startswith("Unknown-"):
+                        c_val = d.get("conf", 0.5)
+                        if p_id in pid_seen_map:
+                            prev_d = pid_seen_map[p_id]
+                            if c_val > prev_d.get("conf", 0.5):
+                                prev_d["pid"] = f"Unknown-{prev_d.get('disp', '1')}"
+                                prev_d["disp"] = "Unknown"
+                                pid_seen_map[p_id] = d
+                            else:
+                                d["pid"] = f"Unknown-{d.get('disp', '1')}"
+                                d["disp"] = "Unknown"
+                        else:
+                            pid_seen_map[p_id] = d
 
                 with cs.frame_lock:
                     cs.latest_frame = frame; cs.latest_dets = new_dets; cs.tile_dirty = True

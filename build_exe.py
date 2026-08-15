@@ -182,9 +182,22 @@ if objects_src.exists():
 else:
     print("  [WARNING] 'objects/' folder not found in project root.")
 
-print("\n[STEP 5c] Copying models/ folder to dist/ ...")
+print("\n[STEP 5c] Preparing and copying models/ folder to dist/ ...")
 models_src = ROOT / "models"
 models_dst = DIST / "models"
+models_src.mkdir(exist_ok=True)
+
+emotion_model_path = models_src / "emotion-ferplus-8.onnx"
+if not emotion_model_path.exists():
+    print(f"  [INFO] Downloading emotion-ferplus-8.onnx from Hugging Face...")
+    try:
+        import urllib.request
+        url = "https://huggingface.co/onnxmodelzoo/emotion-ferplus-8/resolve/main/emotion-ferplus-8.onnx"
+        urllib.request.urlretrieve(url, emotion_model_path)
+        print("  [OK] Emotion model downloaded successfully.")
+    except Exception as e:
+        print(f"  [WARNING] Failed to download emotion model: {e}")
+
 if models_src.exists():
     if models_dst.exists():
         shutil.rmtree(models_dst)

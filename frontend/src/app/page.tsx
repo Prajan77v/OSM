@@ -10,7 +10,7 @@ import {
   Database, Bot, Download, Upload, Volume2, RefreshCw, Maximize2, Minimize2,
   Mic, Play, Pause, Square, CheckCircle, Info, XCircle,
   UserPlus, Award, Check, Save, ToggleLeft, ToggleRight,
-  Sliders, SlidersHorizontal, SlidersVertical, Edit2, X, Trash, Plus
+  Sliders, SlidersHorizontal, SlidersVertical, Edit2, X, Trash, Plus, Grid, Camera
 } from "lucide-react";
 
 // ─── API base URL (proxied in dev, same-origin in prod) ──────────────────────
@@ -68,8 +68,6 @@ const NAV = [
   { id: "overview",    icon: LayoutDashboard, label: "OVERVIEW" },
   { id: "cameras",     icon: Video,           label: "CAMERAS" },
   { id: "detection",   icon: Crosshair,       label: "DETECTION" },
-  { id: "activity",    icon: Activity,        label: "ACTIVITY INTEL" },
-  { id: "tactical",    icon: Radar,           label: "TACTICAL" },
   { id: "analytics",   icon: BarChart3,       label: "ANALYTICS" },
   { id: "events",      icon: AlertTriangle,   label: "EVENTS" },
   { id: "comms",       icon: MessageSquare,   label: "COMMUNICATION" },
@@ -513,11 +511,7 @@ export default function Dashboard() {
   const [newCamLocation, setNewCamLocation] = useState("");
 
   // Memory database state
-  const [knownUsers, setKnownUsers] = useState<EnrolledUser[]>([
-    { name: "Prajan", visitCount: 142, lastSeen: "Today 08:01", accuracy: 98.4, role: "System Administrator", status: "AUTHORIZED" },
-    { name: "Dev Team", visitCount: 84, lastSeen: "Yesterday 18:24", accuracy: 96.1, role: "Core Developer", status: "VERIFIED" },
-    { name: "Support AI", visitCount: 210, lastSeen: "Today 05:00", accuracy: 99.8, role: "Autonomous Agent", status: "ACTIVE" }
-  ]);
+  const [knownUsers, setKnownUsers] = useState<EnrolledUser[]>([]);
   const [imgErrors, setImgErrors] = useState<Record<string, boolean>>({});
 
   // Advanced Face Enrollment States
@@ -547,6 +541,10 @@ export default function Dashboard() {
   // Real-time inline profile renaming states
   const [editingPid, setEditingPid] = useState<string | null>(null);
   const [editNameValue, setEditNameValue] = useState("");
+  const [dbFilterTab, setDbFilterTab] = useState<"all" | "intruders" | "authorized">("all");
+  const [dbSearchQuery, setDbSearchQuery] = useState("");
+  const [selectedUserPid, setSelectedUserPid] = useState<string | null>(null);
+  const [cameraLayoutMode, setCameraLayoutMode] = useState<"single" | "grid">("single");
 
   // Fullscreen Preview state & ref
   const viewportRef = useRef<HTMLDivElement>(null);
@@ -667,9 +665,7 @@ export default function Dashboard() {
 
           if (camRes.length > 0) {
             const activeSubject = camRes[activeCam]?.active_subjects?.[0];
-            const currentPid = activeSubject?.pid || "";
-            if (currentPid && currentPid !== lastActivePidRef.current) {
-              lastActivePidRef.current = currentPid;
+            if (activeSubject && activeSubject.pid) {
               setCropKey(Date.now().toString());
             }
           }
@@ -742,7 +738,10 @@ export default function Dashboard() {
   // ── Real-time Inline Profile Renaming & Subject Promotion ────────────────
   const handleRenameSave = async (pid: string, newName: string) => {
     const trimmed = newName.trim();
-    if (!trimmed) return;
+    if (!trimmed) {
+      alert("Please enter a valid subject name.");
+      return;
+    }
     try {
       setBtnLoading(prev => ({ ...prev, rename_subject: true }));
       const r = await fetch(`${API}/api/control/rename_subject`, {
@@ -752,8 +751,10 @@ export default function Dashboard() {
       });
       const res = await r.json();
       if (res.status === "ok") {
+        speakAI(`Subject profile saved as ${trimmed}`);
         setEditingPid(null);
-        await fetchAll(); // Re-fetch active camera information immediately
+        setCropKey(Date.now().toString());
+        await fetchAll();
       } else {
         alert("Verification Error: " + (res.message || "Could not complete operation"));
       }
@@ -1021,6 +1022,7 @@ export default function Dashboard() {
       setBtnLoading(prev => ({ ...prev, [`remove_cam_${idx}`]: false }));
     }
   };
+
 
   // ── Forget registered face profile ───────────────────────────────────────
   const forgetFace = async (name: string) => {
@@ -1567,360 +1569,204 @@ export default function Dashboard() {
             
             {activeNav === "overview" && (
               <div className="flex-1 flex flex-col gap-3 min-h-0 min-w-0 h-full">
-                
-                {/* Cinematic camera viewport */}
-                <div ref={viewportRef} className="glass-premium flex-1 relative flex flex-row min-h-0 overflow-hidden bg-black/40">
-                  <div className="flex-1 relative flex items-center justify-center h-full min-w-0">
-                    {activeCamInfo?.online ? (
-                      <div className={`relative overflow-hidden flex items-center justify-center border border-gold/10 shadow-2xl transition-all duration-300 ${isFullscreen ? "w-full h-full aspect-video rounded-none" : "h-full aspect-video rounded-xl"}`}>
-                        <img
-                          src={`${API}/api/stream/${activeCam}`}
-                          alt="AI Visual Target"
-                          className="w-full h-full object-cover"
-                        />
-
-                        {/* Corner Sights & grid scan overlay */}
-                        <div className="corner-hud tl" />
-                        <div className="corner-hud tr" />
-                        <div className="corner-hud bl" />
-                        <div className="corner-hud br" />
-
-                        {/* Top floating badges */}
-                        <div className="absolute top-4 left-4 flex gap-2 pointer-events-none z-10">
-                          <span className="glass-premium px-3 py-1 flex items-center gap-1.5 text-[10px] font-orbitron font-bold text-green-oms">
-                            <span className="w-1.5 h-1.5 rounded-full bg-green-oms animate-ping" />
-                            LIVE
-                          </span>
-                          <span className="glass-premium px-3 py-1 text-[10px] font-orbitron font-black text-gold-accent">
-                            CAM {activeCam + 1}
-                          </span>
-                        </div>
-
-                        <div className="absolute top-4 right-4 flex gap-2 z-10">
-                          <span className="glass-premium px-3 py-1 flex items-center gap-1.5 text-[10px] font-orbitron font-bold text-red-500">
-                            <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
-                            REC
-                          </span>
-                          <button 
-                            onClick={() => setShowCamSettings(prev => !prev)}
-                            className={`glass-premium p-1.5 transition-all duration-300 ${showCamSettings ? "text-gold-accent bg-gold-accent/15 border-gold-accent/40" : "text-[#FFFFFF] hover:text-gold-accent"}`}
-                            title="Open Live Camera Control Panel"
-                          >
-                            <Sliders size={12} />
-                          </button>
-                          <button 
-                            onClick={toggleFullscreen}
-                            className="glass-premium p-1.5 text-[#FFFFFF] hover:text-gold-accent transition-colors z-20"
-                            title={isFullscreen ? "Exit fullscreen preview mode" : "Enter true fullscreen preview mode"}
-                          >
-                            {isFullscreen ? (
-                              <Minimize2 size={12} className="text-gold-accent animate-pulse" />
-                            ) : (
-                              <Maximize2 size={12} />
-                            )}
-                          </button>
-                        </div>
-
-                        {/* Uptime and location badges */}
-                        <div className="absolute bottom-4 left-4 glass-premium px-4 py-2.5 flex flex-col gap-1 pointer-events-none z-10">
-                          <span className="font-orbitron text-[9px] font-black text-gold tracking-widest">AI VISION TELEMETRY</span>
-                          <div className="grid grid-cols-2 gap-x-4 text-[10px]">
-                            <span className="text-sec">STATUS:</span>
-                            <span className="font-mono text-green-oms font-bold">ONLINE</span>
-                            <span className="text-sec">FPS RATE:</span>
-                            <span className="font-mono text-gold-accent font-bold">{(activeCamInfo?.fps || 0.0).toFixed(1)} FPS</span>
-                            <span className="text-sec">RESOLUTION:</span>
-                            <span className="font-mono text-gold-accent font-bold">
-                              {camSettings?.active_width ? `${camSettings.active_width}x${camSettings.active_height}` : "1280x720"}
-                            </span>
-                            <span className="text-sec">CODEC / LATENCY:</span>
-                            <span className="font-mono text-gold-accent font-bold">
-                              {camSettings?.active_codec || "MJPG"} / 12ms
-                            </span>
-                          </div>
-                        </div>
-
-                        <div className="absolute bottom-4 right-4 glass-premium px-3 py-1 flex items-center gap-2 text-[10px] text-sec pointer-events-none z-10">
-                          <MapPin size={11} className="text-gold" />
-                          {activeCamInfo?.location || "Sector Grid"}
-                        </div>
-                      </div>
-                    ) : (
-                      <div className={`relative flex flex-col items-center justify-center gap-3 bg-[#0d0d11]/80 border border-gold/10 shadow-2xl transition-all duration-300 ${isFullscreen ? "w-full h-full aspect-video rounded-none" : "h-full aspect-video rounded-xl"}`}>
-                        <div className="w-16 h-16 rounded-full border-2 border-gold-accent/25 border-dashed flex items-center justify-center animate-spin" style={{ animationDuration: "15s" }}>
-                          <Crosshair size={24} className="text-gold-dim" />
-                        </div>
-                        <div className="font-orbitron text-xs font-bold text-gold-accent tracking-widest">CAMERA OFFLINE</div>
-                        <div className="font-inter text-[10px] text-sec">Awaiting authorization feedback node...</div>
-                      </div>
-                    )}
+                {/* Mode Switcher Bar */}
+                <div className="flex items-center justify-between px-3 py-1.5 glass-premium rounded-xl flex-shrink-0">
+                  <div className="flex items-center gap-2">
+                    <Video className="text-gold-accent" size={14} />
+                    <span className="font-orbitron text-[10px] font-bold text-gold-accent tracking-widest uppercase">
+                      LIVE CAMERA FEEDS GRID ({cameras.length} CHANNELS)
+                    </span>
                   </div>
-                  {showCamSettings && (
-                    <div className="w-[285px] h-full border-l border-gold/10 bg-black/70 p-4 flex flex-col gap-4 overflow-y-auto z-20 animate-slide-up" style={{ minWidth: 285 }}>
-                      <div className="flex items-center justify-between border-b border-gold/15 pb-2">
-                        <span className="font-orbitron text-[10px] font-black text-gold-accent tracking-widest uppercase">CAMERA ADJUSTMENT PANEL</span>
-                        <button onClick={() => setShowCamSettings(false)} className="text-sec hover:text-gold-accent transition-colors">
-                          <X size={14} />
-                        </button>
-                      </div>
+                  <div className="flex items-center gap-1.5 bg-black/40 p-0.5 rounded-lg border border-white/5">
+                    <button
+                      onClick={() => setCameraLayoutMode("single")}
+                      className={`py-1 px-2.5 rounded font-orbitron text-[8.5px] font-bold transition-all flex items-center gap-1.5 ${
+                        cameraLayoutMode === "single"
+                          ? "bg-gold/20 text-gold-accent border border-gold/40 shadow-gold-glow"
+                          : "text-sec/60 hover:text-white"
+                      }`}
+                    >
+                      <Maximize2 size={10} />
+                      SINGLE FOCUS
+                    </button>
+                    <button
+                      onClick={() => setCameraLayoutMode("grid")}
+                      className={`py-1 px-2.5 rounded font-orbitron text-[8.5px] font-bold transition-all flex items-center gap-1.5 ${
+                        cameraLayoutMode === "grid"
+                          ? "bg-gold/20 text-gold-accent border border-gold/40 shadow-gold-glow"
+                          : "text-sec/60 hover:text-white"
+                      }`}
+                    >
+                      <Grid size={10} />
+                      MULTI-CAM GRID (2x2)
+                    </button>
+                  </div>
+                </div>
+                
+                {/* Camera Viewport (Single or Grid mode) */}
+                <div ref={viewportRef} className="flex-1 relative flex flex-row min-h-0 overflow-hidden rounded-xl border border-gold/10 bg-black/20 p-1">
+                  {cameraLayoutMode === "single" ? (
+                    <div className="flex-1 relative flex items-center justify-center h-full min-w-0">
+                      {activeCamInfo?.online ? (
+                        <div className={`relative overflow-hidden flex items-center justify-center border border-gold/10 shadow-2xl transition-all duration-300 ${isFullscreen ? "w-full h-full aspect-video rounded-none" : "h-full aspect-video rounded-xl"}`}>
+                          <img
+                            src={`${API}/api/stream/${activeCam}`}
+                            alt="AI Visual Target"
+                            className="w-full h-full object-contain"
+                          />
 
-                      {/* Controls list */}
-                      <div className="flex flex-col gap-4 text-[10px] font-inter">
-                        
-                        {/* Resolution */}
-                        <div className="flex flex-col gap-1.5">
-                          <label className="font-orbitron text-[8.5px] text-sec font-bold tracking-wider uppercase">Active Resolution</label>
-                          <div className="grid grid-cols-2 gap-1.5">
-                            {["1920x1080", "1280x720", "640x480", "640x360"].map((res) => (
-                              <button
-                                key={res}
-                                onClick={async () => {
-                                  const r = await fetch(`${API}/api/camera/${activeCam}/settings`, {
-                                    method: "POST",
-                                    headers: { "Content-Type": "application/json" },
-                                    body: JSON.stringify({ resolution: res })
-                                  });
-                                  const d = await r.json();
-                                  if (d.status === "ok") {
-                                    setCamSettings((prev: any) => ({ ...prev, resolution: res }));
-                                  }
-                                }}
-                                className={`py-1.5 px-2 text-[8px] font-mono rounded border transition-all ${
-                                  (camSettings?.width === parseInt(res.split("x")[0]) || (res === "1280x720" && !camSettings?.width))
-                                    ? "bg-gold/15 border-gold text-gold-accent"
-                                    : "border-white/5 bg-white/5 text-sec hover:border-gold/30 hover:bg-gold/5"
-                                }`}
-                              >
-                                {res}
-                              </button>
-                            ))}
+                          {/* Corner Sights & grid scan overlay */}
+                          <div className="corner-hud tl" />
+                          <div className="corner-hud tr" />
+                          <div className="corner-hud bl" />
+                          <div className="corner-hud br" />
+
+                          {/* Top floating badges */}
+                          <div className="absolute top-4 left-4 flex gap-2 pointer-events-none z-10">
+                            <span className="glass-premium px-3 py-1 flex items-center gap-1.5 text-[10px] font-orbitron font-bold text-green-oms">
+                              <span className="w-1.5 h-1.5 rounded-full bg-green-oms animate-ping" />
+                              LIVE
+                            </span>
+                            <span className="glass-premium px-3 py-1 text-[10px] font-orbitron font-black text-gold-accent">
+                              CAM {activeCam + 1}
+                            </span>
                           </div>
-                        </div>
 
-                        {/* FPS */}
-                        <div className="flex flex-col gap-1.5">
-                          <label className="font-orbitron text-[8.5px] text-sec font-bold tracking-wider uppercase">Frame Rate Target</label>
-                          <div className="grid grid-cols-2 gap-1.5">
-                            {[30, 60].map((fps) => (
-                              <button
-                                key={fps}
-                                onClick={async () => {
-                                  const r = await fetch(`${API}/api/camera/${activeCam}/settings`, {
-                                    method: "POST",
-                                    headers: { "Content-Type": "application/json" },
-                                    body: JSON.stringify({ fps })
-                                  });
-                                  const d = await r.json();
-                                  if (d.status === "ok") {
-                                    setCamSettings((prev: any) => ({ ...prev, fps }));
-                                  }
-                                }}
-                                className={`py-1.5 px-2 text-[8px] font-mono rounded border transition-all ${
-                                  (camSettings?.fps === fps || (fps === 30 && !camSettings?.fps))
-                                    ? "bg-gold/15 border-gold text-gold-accent"
-                                    : "border-white/5 bg-white/5 text-sec hover:border-gold/30 hover:bg-gold/5"
-                                }`}
-                              >
-                                {fps} FPS
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-
-                        {/* Toggles */}
-                        <div className="flex flex-col gap-2.5 bg-white/5 p-3 rounded-lg border border-white/5">
-                          <div className="flex items-center justify-between">
-                            <span className="font-orbitron text-[8px] text-sec tracking-wider font-bold">AUTO EXPOSURE</span>
+                          <div className="absolute top-4 right-4 flex gap-2 z-10">
+                            <span className="glass-premium px-3 py-1 flex items-center gap-1.5 text-[10px] font-orbitron font-bold text-red-500">
+                              <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+                              REC
+                            </span>
                             <button
-                              onClick={async () => {
-                                const newVal = !camSettings?.auto_exposure;
-                                const r = await fetch(`${API}/api/camera/${activeCam}/settings`, {
-                                  method: "POST",
-                                  headers: { "Content-Type": "application/json" },
-                                  body: JSON.stringify({ auto_exposure: newVal })
-                                });
-                                if ((await r.json()).status === "ok") {
-                                  setCamSettings((prev: any) => ({ ...prev, auto_exposure: newVal }));
-                                }
+                              onClick={() => {
+                                const snapUrl = `${API}/api/camera/${activeCam}/snapshot?t=${Date.now()}`;
+                                window.open(snapUrl, "_blank");
                               }}
-                              className="text-gold-accent hover:opacity-80 transition-opacity"
+                              className="glass-premium p-1.5 text-[#FFFFFF] hover:text-gold-accent transition-colors z-20"
+                              title="Download camera snapshot"
                             >
-                              {camSettings?.auto_exposure ? <ToggleRight size={20} /> : <ToggleLeft size={20} className="text-sec" />}
+                              <Camera size={12} />
+                            </button>
+                            <button 
+                              onClick={toggleFullscreen}
+                              className="glass-premium p-1.5 text-[#FFFFFF] hover:text-gold-accent transition-colors z-20"
+                              title={isFullscreen ? "Exit fullscreen preview mode" : "Enter true fullscreen preview mode"}
+                            >
+                              {isFullscreen ? (
+                                <Minimize2 size={12} className="text-gold-accent animate-pulse" />
+                              ) : (
+                                <Maximize2 size={12} />
+                              )}
                             </button>
                           </div>
 
-                          <div className="flex items-center justify-between">
-                            <span className="font-orbitron text-[8px] text-sec tracking-wider font-bold">AUTO WHITE BALANCE</span>
-                            <button
-                              onClick={async () => {
-                                const newVal = !camSettings?.auto_white_balance;
-                                const r = await fetch(`${API}/api/camera/${activeCam}/settings`, {
-                                  method: "POST",
-                                  headers: { "Content-Type": "application/json" },
-                                  body: JSON.stringify({ auto_white_balance: newVal })
-                                });
-                                if ((await r.json()).status === "ok") {
-                                  setCamSettings((prev: any) => ({ ...prev, auto_white_balance: newVal }));
-                                }
-                              }}
-                              className="text-gold-accent hover:opacity-80 transition-opacity"
-                            >
-                              {camSettings?.auto_white_balance ? <ToggleRight size={20} /> : <ToggleLeft size={20} className="text-sec" />}
-                            </button>
-                          </div>
-
-                          <div className="flex items-center justify-between">
-                            <span className="font-orbitron text-[8px] text-sec tracking-wider font-bold">MIRROR STREAM</span>
-                            <button
-                              onClick={async () => {
-                                const newVal = !camSettings?.mirror;
-                                const r = await fetch(`${API}/api/camera/${activeCam}/settings`, {
-                                  method: "POST",
-                                  headers: { "Content-Type": "application/json" },
-                                  body: JSON.stringify({ mirror: newVal })
-                                });
-                                if ((await r.json()).status === "ok") {
-                                  setCamSettings((prev: any) => ({ ...prev, mirror: newVal }));
-                                }
-                              }}
-                              className="text-gold-accent hover:opacity-80 transition-opacity"
-                            >
-                              {camSettings?.mirror ? <ToggleRight size={20} /> : <ToggleLeft size={20} className="text-sec" />}
-                            </button>
-                          </div>
-                        </div>
-
-                        {/* Sliders */}
-                        {[
-                          { label: "Brightness", key: "brightness", min: 0, max: 100 },
-                          { label: "Contrast", key: "contrast", min: 0, max: 100 },
-                          { label: "Saturation", key: "saturation", min: 0, max: 100 },
-                          { label: "Gamma", key: "gamma", min: 0.5, max: 2.5, step: 0.1 },
-                          { label: "Sharpness", key: "sharpness", min: 0, max: 10 },
-                          { label: "Noise Reduction", key: "noise_reduction", min: 0, max: 10 },
-                          ...(camSettings?.auto_exposure ? [] : [{ label: "Exposure Hardware", key: "exposure", min: -13, max: -1 }])
-                        ].map((sl) => (
-                          <div key={sl.key} className="flex flex-col gap-1">
-                            <div className="flex items-center justify-between text-[8px] font-mono text-sec uppercase tracking-wider font-bold">
-                              <span>{sl.label}</span>
-                              <span className="text-gold-accent">{camSettings?.[sl.key] ?? (sl.key === "gamma" ? 1.0 : 50)}</span>
+                          {/* Uptime and location badges */}
+                          <div className="absolute bottom-4 left-4 glass-premium px-4 py-2.5 flex flex-col gap-1 pointer-events-none z-10">
+                            <span className="font-orbitron text-[9px] font-black text-gold tracking-widest">AI VISION TELEMETRY</span>
+                            <div className="grid grid-cols-2 gap-x-4 text-[10px]">
+                              <span className="text-sec">STATUS:</span>
+                              <span className="font-mono text-green-oms font-bold">ONLINE</span>
+                              <span className="text-sec">FPS RATE:</span>
+                              <span className="font-mono text-gold-accent font-bold">{(activeCamInfo?.fps || 0.0).toFixed(1)} FPS</span>
+                              <span className="text-sec">RESOLUTION:</span>
+                              <span className="font-mono text-gold-accent font-bold">
+                                {camSettings?.active_width ? `${camSettings.active_width}x${camSettings.active_height}` : "1280x720"}
+                              </span>
+                              <span className="text-sec">CODEC / LATENCY:</span>
+                              <span className="font-mono text-gold-accent font-bold">
+                                {camSettings?.active_codec || "MJPG"} / 12ms
+                              </span>
                             </div>
-                            <input
-                              type="range"
-                              min={sl.min}
-                              max={sl.max}
-                              step={sl.step || 1}
-                              value={camSettings?.[sl.key] ?? (sl.key === "gamma" ? 1.0 : (sl.key === "exposure" ? -6 : 50))}
-                              onChange={async (e) => {
-                                const val = parseFloat(e.target.value);
-                                setCamSettings((prev: any) => ({ ...prev, [sl.key]: val }));
-                                await fetch(`${API}/api/camera/${activeCam}/settings`, {
-                                  method: "POST",
-                                  headers: { "Content-Type": "application/json" },
-                                  body: JSON.stringify({ [sl.key]: val })
-                                });
-                              }}
-                              className="w-full accent-gold bg-black/60 border border-white/5 rounded h-1 cursor-pointer"
-                            />
                           </div>
-                        ))}
-                      </div>
+
+                          <div className="absolute bottom-4 right-4 glass-premium px-3 py-1 flex items-center gap-2 text-[10px] text-sec pointer-events-none z-10">
+                            <MapPin size={11} className="text-gold" />
+                            {activeCamInfo?.location || "Sector Grid"}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className={`relative flex flex-col items-center justify-center gap-3 bg-[#0d0d11]/80 border border-gold/10 shadow-2xl transition-all duration-300 ${isFullscreen ? "w-full h-full aspect-video rounded-none" : "h-full aspect-video rounded-xl"}`}>
+                          <div className="w-16 h-16 rounded-full border-2 border-gold-accent/25 border-dashed flex items-center justify-center animate-spin" style={{ animationDuration: "15s" }}>
+                            <Crosshair size={24} className="text-gold-dim" />
+                          </div>
+                          <div className="font-orbitron text-xs font-bold text-gold-accent tracking-widest">CAMERA OFFLINE</div>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    /* Multi-Cam 2x2 Grid View */
+                    <div className="w-full h-full grid grid-cols-2 gap-2 p-1 overflow-y-auto">
+                      {cameras.map((cam, idx) => {
+                        const isActive = idx === activeCam;
+                        return (
+                          <div
+                            key={cam.id || idx}
+                            onClick={() => {
+                              setActiveCam(idx);
+                              setCameraLayoutMode("single");
+                              speakAI("Focused camera channel " + (idx + 1));
+                            }}
+                            className={`relative rounded-xl overflow-hidden border cursor-pointer group transition-all duration-300 flex items-center justify-center bg-black ${
+                              isActive ? "border-gold ring-2 ring-gold/40 shadow-gold-glow" : "border-white/10 hover:border-gold/50"
+                            }`}
+                          >
+                            {cam.online ? (
+                              <img
+                                src={`${API}/api/stream/${idx}`}
+                                alt={cam.name}
+                                className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                              />
+                            ) : (
+                              <div className="flex flex-col items-center gap-2 text-muted">
+                                <Video size={20} className="text-muted/40" />
+                                <span className="font-orbitron text-[9px] tracking-widest">OFFLINE</span>
+                              </div>
+                            )}
+
+                            {/* Corner overlay */}
+                            <div className="absolute top-2 left-2 flex items-center gap-1.5 z-10">
+                              <span className="glass-premium px-2 py-0.5 text-[8.5px] font-orbitron font-black text-gold-accent">
+                                CAM {idx + 1}
+                              </span>
+                              <span className="glass-premium px-2 py-0.5 text-[8.5px] font-orbitron text-white truncate max-w-[120px]">
+                                {cam.name}
+                              </span>
+                            </div>
+
+                            <div className="absolute top-2 right-2 flex items-center gap-1 z-10">
+                              <span className={`status-indicator ${cam.online ? "text-green-oms bg-green-oms animate-pulse" : "text-muted bg-white/10"}`} />
+                              <span className="font-orbitron text-[8px] font-bold text-white glass-premium px-1.5 py-0.5">
+                                {cam.online ? "LIVE" : "OFF"}
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
 
-                {/* AI Assistant Core energy sphere centerpiece */}
-                <div className="glass-premium px-6 py-5 flex items-center gap-6 flex-shrink-0" style={{ height: 160 }}>
-                  <div className="relative w-24 h-24 flex-shrink-0 flex items-center justify-center">
-                    <motion.div
-                      animate={{
-                        scale: aiState === "speaking" ? [1, 1.15, 1] : aiState === "listening" ? [1, 1.25, 1] : [1, 1.05, 1],
-                        rotate: 360
-                      }}
-                      transition={{ repeat: Infinity, duration: aiState === "processing" ? 1.5 : 6, ease: "linear" }}
-                      className="absolute inset-0 rounded-full bg-gradient-to-tr from-gold to-gold-accent/40 blur-xl opacity-20 pointer-events-none"
-                    />
-                    <svg viewBox="0 0 100 100" className="w-20 h-20">
-                      <motion.circle
-                        cx="50" cy="50" r="42"
-                        stroke="#D4AF37" strokeWidth="1" strokeDasharray="5,15"
-                        fill="none"
-                        animate={{ rotate: -360 }}
-                        transition={{ repeat: Infinity, duration: 15, ease: "linear" }}
-                      />
-                      <motion.circle
-                        cx="50" cy="50" r="34"
-                        stroke="#FFD700" strokeWidth="1" strokeDasharray="30,10"
-                        fill="none"
-                        animate={{ rotate: 360 }}
-                        transition={{ repeat: Infinity, duration: 8, ease: "linear" }}
-                      />
-                      <motion.circle
-                        cx="50" cy="50" r="16"
-                        fill="url(#goldGrad)"
-                        animate={{ r: aiState === "speaking" ? [15, 20, 15] : aiState === "listening" ? [15, 23, 15] : [15, 17, 15] }}
-                        transition={{ repeat: Infinity, duration: 1.5, ease: "easeInOut" }}
-                      />
-                    </svg>
-                    {aiState !== "idle" && <span className="absolute w-2 h-2 bg-gold-accent rounded-full animate-ping pointer-events-none" />}
-                  </div>
-
-                  <div className="flex-1 flex flex-col gap-1.5 justify-center min-w-0">
-                    <div className="flex items-center justify-between">
-                      <h4 className="font-orbitron text-xs font-black text-gold-accent tracking-wider uppercase">AI CORE ENERGY CENTERPIECE</h4>
-                      <span className="font-mono text-[9px] text-sec uppercase font-bold">{aiState}</span>
-                    </div>
-                    <div className="h-[70px] glass-premium bg-black/40 border border-white/5 rounded-xl px-4 flex items-center justify-between gap-4">
-                      <div className="flex-1 min-w-0">
-                        <p className="font-mono text-[10px] text-sec leading-tight uppercase truncate">{aiSubText}</p>
-                        <p className="font-inter text-xs text-white leading-normal font-medium mt-1 truncate-2 h-8">
-                          {speechOutput || "AI Ready. Activate microphone to transmit secure vocal command protocols..."}
-                        </p>
-                      </div>
-                      <div className="w-[180px] h-[50px] flex items-center justify-center">
-                        <VoiceVisualizer state={aiState} />
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="flex flex-col items-center justify-center gap-1.5 flex-shrink-0">
-                    <button
-                      onClick={triggerVoiceAssistant}
-                      className={`w-16 h-16 rounded-full flex items-center justify-center transition-all duration-300 relative border outline-none
-                        ${aiState === "listening" ? "bg-[#FFD700]/20 border-[#FFD700] shadow-gold-glow-strong animate-pulse" : 
-                          aiState === "processing" ? "bg-cyan-500/10 border-cyan-400 animate-spin" : 
-                          "bg-gold/10 border-[#D4AF37]/30 hover:border-[#D4AF37] hover:bg-gold/20"}`}
-                      style={{ animationDuration: aiState === "processing" ? "3s" : "1.5s" }}
-                      title="Tap to interact with AI Voice assistant"
-                    >
-                      <Mic size={24} className={aiState === "listening" ? "text-gold-accent animate-bounce" : "text-[#FFFFFF]"} />
-                      {aiState === "listening" && <div className="ripple-voice" />}
-                    </button>
-                    <span className="font-orbitron text-[9px] font-bold text-sec tracking-widest">TAP MIC</span>
-                  </div>
-                </div>
-
                 {/* Switcher bar */}
-                <div className="flex gap-4 justify-center items-center flex-shrink-0" style={{ height: 80 }}>
+                <div className="flex gap-3 justify-center items-center flex-shrink-0" style={{ height: 84 }}>
                   {cameras.map((cam, idx) => (
                     <div
-                      key={cam.id}
+                      key={cam.id || idx}
                       onClick={() => {
                         setActiveCam(idx);
                         speakAI("Switched to camera channel " + (idx + 1));
                       }}
-                      className={`w-[80px] h-[80px] aspect-square relative cursor-pointer glass-premium overflow-hidden transition-all duration-300 group flex-shrink-0
-                        ${idx === activeCam ? "glass-gold-active border-gold ring-1 ring-gold shadow-gold-glow scale-[1.02]" : "hover:scale-[1.01] hover:border-white/10"}`}
+                      className={`w-[84px] h-[84px] aspect-square relative cursor-pointer glass-premium overflow-hidden transition-all duration-300 group flex-shrink-0
+                        ${idx === activeCam ? "glass-gold-active border-2 border-gold ring-1 ring-gold shadow-gold-glow scale-[1.03]" : "hover:scale-[1.02] hover:border-white/20 border border-white/5"}`}
                       style={{ borderRadius: 14 }}
                     >
                       {cam.online ? (
                         <img
                           src={`${API}/api/camera/${idx}/snapshot?t=${telemetry?.uptime_secs || 0}`}
                           alt={cam.name}
-                          className="w-full h-full object-cover opacity-65 group-hover:opacity-90 transition-opacity"
+                          className="w-full h-full object-cover opacity-70 group-hover:opacity-100 transition-opacity"
                         />
                       ) : (
-                        <div className="absolute inset-0 flex flex-col items-center justify-center gap-0.5 bg-black/50">
+                        <div className="absolute inset-0 flex flex-col items-center justify-center gap-0.5 bg-black/60">
                           <Video size={14} className="text-muted" />
                           <span className="font-orbitron text-[7px] text-muted tracking-widest">OFFLINE</span>
                         </div>
@@ -2181,133 +2027,7 @@ export default function Dashboard() {
               </motion.div>
             )}
 
-            {/* FULLY FUNCTIONAL DYNAMIC TACTICAL SONAR */}
-            {activeNav === "tactical" && (
-              <motion.div
-                initial={{ opacity: 0, scale: 0.98 }}
-                animate={{ opacity: 1, scale: 1 }}
-                className="glass-premium flex-1 p-6 flex flex-col min-h-0 h-full overflow-hidden"
-              >
-                <div className="flex items-center justify-between border-b border-white/5 pb-4 mb-4 flex-shrink-0">
-                  <div className="flex items-center gap-3">
-                    <Radar className="text-gold-accent animate-pulse" size={20} />
-                    <h2 className="font-orbitron text-base font-black text-gold-accent tracking-widest uppercase">
-                      OMS TACTICAL SONAR MATRIX
-                    </h2>
-                  </div>
-                  <span className="font-orbitron text-xs font-bold text-red-500 bg-red-950/20 border border-red-500/20 px-3 py-1 rounded tracking-widest animate-pulse">
-                    SECURE CONNECTION
-                  </span>
-                </div>
 
-                <div className="flex-1 grid grid-cols-2 gap-5 min-h-0">
-                  {/* Left Side: Circular SVG Radar scanning animation */}
-                  <div className="glass-premium p-4 flex flex-col items-center justify-center bg-black/20 relative overflow-hidden" style={{ borderRadius: 16 }}>
-                    <h4 className="font-orbitron text-xs font-bold text-gold tracking-widest uppercase flex items-center gap-2 border-b border-white/5 pb-2 mb-3 w-full flex-shrink-0">
-                      <Crosshair size={14} /> SONAR GRID RADAR SCAN
-                    </h4>
-                    
-                    <div className="relative w-64 h-64 flex items-center justify-center border border-gold-dim/15 rounded-full my-auto shadow-2xl">
-                      {/* Radar sweep background circles */}
-                      <div className="absolute w-48 h-48 border border-dashed border-gold-dim/10 rounded-full" />
-                      <div className="absolute w-32 h-32 border border-solid border-gold-dim/10 rounded-full" />
-                      <div className="absolute w-16 h-16 border border-dashed border-gold-dim/10 rounded-full" />
-                      
-                      {/* Scanning sweeping arm */}
-                      <div className="absolute inset-0 rounded-full overflow-hidden pointer-events-none">
-                        <div 
-                          className="w-1/2 h-full bg-gradient-to-r from-transparent to-gold-accent/15 origin-right animate-spin" 
-                          style={{ animationDuration: "4s", animationTimingFunction: "linear" }}
-                        />
-                      </div>
-                      
-                      {/* Radar blips (targets) */}
-                      {cameras.map((cam, i) => {
-                        if (!cam.online) return null;
-                        const angle = (i * 90 + 45) * (Math.PI / 180);
-                        const radius = 80;
-                        const x = Math.cos(angle) * radius;
-                        const y = Math.sin(angle) * radius;
-                        const hasPerson = cam.persons > 0;
-                        return (
-                          <div 
-                            key={i}
-                            className={`absolute w-3 h-3 rounded-full flex items-center justify-center transition-all duration-300
-                              ${hasPerson ? "bg-red-500 shadow-red-glow" : "bg-green-oms shadow-gold-glow"}`}
-                            style={{ 
-                              transform: `translate(${x}px, ${y}px)`,
-                              animation: hasPerson ? "ping 1.5s infinite" : "none"
-                            }}
-                            title={`CAM ${cam.id + 1}: ${cam.name}`}
-                          >
-                            <span className="absolute text-[8px] font-orbitron font-bold text-[#FFFFFF] bg-black/80 px-1 py-0.5 rounded -top-5 whitespace-nowrap">
-                              CAM {cam.id + 1}
-                            </span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  {/* Right Side: Zone Status & Threat Level Indicator */}
-                  <div className="glass-premium p-4 flex flex-col min-h-0 bg-black/20 gap-4" style={{ borderRadius: 16 }}>
-                    <h4 className="font-orbitron text-xs font-bold text-gold tracking-widest uppercase flex items-center gap-2 border-b border-white/5 pb-2 mb-1 flex-shrink-0">
-                      <AlertTriangle size={14} /> SECURITY THREAT MATRIX
-                    </h4>
-
-                    {/* Threat level panel */}
-                    <div className="glass-premium bg-black/40 p-4 rounded-xl flex items-center justify-between border border-white/5" style={{ borderRadius: 12 }}>
-                      <div>
-                        <span className="font-orbitron text-[9.5px] text-sec font-bold tracking-wider block">CURRENT THREAT LEVEL</span>
-                        <span className={`font-orbitron text-xl font-black tracking-widest uppercase block mt-1
-                          ${telemetry?.threat_level === "RED" ? "text-red-500 animate-pulse" : 
-                            telemetry?.threat_level === "AMBER" ? "text-amber-500" : "text-green-oms"}`}
-                        >
-                          {telemetry?.threat_level || "GREEN"} STATE
-                        </span>
-                      </div>
-                      <div className="flex gap-2">
-                        <button 
-                          onClick={() => doControl("alarm")}
-                          className="btn-gold-luxury border-red-500/20 text-red-400 hover:text-red-300 hover:bg-red-500/10 py-2 px-3 text-[9px] uppercase tracking-widest font-orbitron"
-                        >
-                          ALARM
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Active Zones Grid */}
-                    <div className="flex-1 flex flex-col min-h-0">
-                      <span className="font-orbitron text-[9px] text-sec font-bold tracking-wider mb-2 uppercase block">PROTECTED ZONES MATRIX</span>
-                      <div className="flex-1 overflow-y-auto pr-1 flex flex-col gap-2">
-                        {cameras.map((cam, i) => {
-                          const hasPerson = cam.persons > 0;
-                          return (
-                            <div key={i} className="glass-premium bg-black/30 p-3 flex items-center justify-between gap-3 border border-white/5" style={{ borderRadius: 12 }}>
-                              <div>
-                                <span className="font-orbitron text-xs font-bold text-gold tracking-widest uppercase block">
-                                  {cam.location || `SECTOR ZONE ${i + 1}`}
-                                </span>
-                                <span className="font-inter text-[9.5px] text-sec block mt-0.5">
-                                  Linked Sensor: {cam.name}
-                                </span>
-                              </div>
-                              <span className={`font-orbitron text-[9px] font-black px-2.5 py-1 rounded tracking-widest leading-none border
-                                ${hasPerson ? 
-                                  "text-red-500 bg-red-950/20 border-red-500/20 animate-pulse" : 
-                                  "text-green-oms bg-green-950/20 border-green-500/20"}`}
-                              >
-                                {hasPerson ? "INTRUSION" : "SECURE"}
-                              </span>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </motion.div>
-            )}
 
             {/* FULLY FUNCTIONAL DYNAMIC ADVANCED FACE ENROLLMENT MATRIX */}
             {activeNav === "enrollment" && (
@@ -2948,35 +2668,7 @@ export default function Dashboard() {
                         </button>
                       </div>
 
-                      {/* CONFIDENCE THRESHOLD SLIDER */}
-                      <div className="flex flex-col gap-2 pt-2.5 mt-1 border-t border-white/5">
-                        <div className="flex justify-between items-center">
-                          <span className="font-orbitron text-[9px] text-sec font-bold tracking-wider uppercase">DETECTION CONFIDENCE</span>
-                          <span className="font-mono text-[10px] text-gold-accent font-bold">{(confThresh * 100).toFixed(0)}%</span>
-                        </div>
-                        <input
-                          type="range" min="0.1" max="0.95" step="0.01"
-                          value={confThresh}
-                          onChange={(e) => setConfThresh(parseFloat(e.target.value))}
-                          className="w-full accent-[#D4AF37] cursor-pointer bg-white/10 h-1 rounded-lg"
-                        />
-                        <span className="text-[8px] text-muted font-inter">Low values = more sensitive but more false positives. High = stricter.</span>
-                      </div>
 
-                      {/* FACE MATCH THRESHOLD SLIDER */}
-                      <div className="flex flex-col gap-2 pt-2 border-t border-white/5">
-                        <div className="flex justify-between items-center">
-                          <span className="font-orbitron text-[9px] text-sec font-bold tracking-wider uppercase">FACE MATCH STRICTNESS</span>
-                          <span className="font-mono text-[10px] text-gold-accent font-bold">{(matchThresh * 100).toFixed(0)}%</span>
-                        </div>
-                        <input
-                          type="range" min="0.1" max="0.8" step="0.01"
-                          value={matchThresh}
-                          onChange={(e) => setMatchThresh(parseFloat(e.target.value))}
-                          className="w-full accent-[#D4AF37] cursor-pointer bg-white/10 h-1 rounded-lg"
-                        />
-                        <span className="text-[8px] text-muted font-inter">Lower = match more faces as known. Higher = stricter identity matching.</span>
-                      </div>
                     </div>
 
                     {/* Telegram Credentials */}
@@ -3597,6 +3289,9 @@ export default function Dashboard() {
                               src={`${API}/api/crop/${activeSubject.pid}?t=${cropKey}`}
                               alt="Active Subject Crop"
                               className="w-full h-full object-cover"
+                              onError={(e) => {
+                                (e.target as HTMLImageElement).src = `https://api.dicebear.com/7.x/bottts/svg?seed=${activeSubject.pid}`;
+                              }}
                             />
                           ) : (
                             <div className="w-full h-full flex items-center justify-center bg-black/40">
@@ -3715,66 +3410,233 @@ export default function Dashboard() {
             </div>
 
             {/* Smart Memory database */}
-            <div className="glass-premium px-5 py-4 flex-1 min-h-0 flex flex-col" style={{ borderRadius: 20 }}>
-              <div className="flex items-center justify-between mb-3 flex-shrink-0">
-                <span className="font-orbitron text-xs font-black text-gold-accent tracking-widest uppercase">MEMORY DATABASE</span>
-                <span className="font-mono text-[9px] text-sec uppercase font-bold">Total: {knownUsers.length}</span>
+            <div className="glass-premium px-4 py-3 flex-1 min-h-0 flex flex-col" style={{ borderRadius: 20 }}>
+              <div className="flex flex-col gap-2 mb-2 flex-shrink-0">
+                <div className="flex items-center justify-between">
+                  <span className="font-orbitron text-xs font-black text-gold-accent tracking-widest uppercase">MEMORY DATABASE</span>
+                  <span className="font-mono text-[9px] text-sec uppercase font-bold">Total: {knownUsers.length}</span>
+                </div>
+                
+                {/* Search Box */}
+                <div className="relative">
+                  <input
+                    type="text"
+                    placeholder="🔍 Search intruder or ID (e.g. P64)..."
+                    value={dbSearchQuery}
+                    onChange={(e) => setDbSearchQuery(e.target.value)}
+                    className="w-full bg-black/60 border border-white/10 text-[10px] text-white rounded-lg px-2.5 py-1 focus:ring-1 focus:ring-gold-accent focus:border-gold outline-none font-mono"
+                  />
+                  {dbSearchQuery && (
+                    <button
+                      onClick={() => setDbSearchQuery("")}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-sec/60 hover:text-white text-[10px]"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+
+                {/* Filter Tabs */}
+                <div className="flex items-center gap-1 bg-black/40 p-1 rounded-lg border border-white/5">
+                  <button
+                    onClick={() => setDbFilterTab("all")}
+                    className={`flex-1 py-1 px-1.5 rounded font-orbitron text-[8.5px] font-bold transition-all ${
+                      dbFilterTab === "all" ? "bg-gold/20 text-gold-accent border border-gold/40 shadow-gold-glow" : "text-sec/60 hover:text-white"
+                    }`}
+                  >
+                    ALL ({knownUsers.length})
+                  </button>
+                  <button
+                    onClick={() => setDbFilterTab("intruders")}
+                    className={`flex-1 py-1 px-1.5 rounded font-orbitron text-[8.5px] font-bold transition-all ${
+                      dbFilterTab === "intruders" ? "bg-red-950/60 text-red-400 border border-red-500/50 shadow-red-glow" : "text-sec/60 hover:text-red-400"
+                    }`}
+                  >
+                    INTRUDERS ({knownUsers.filter(u => u.status === "INTRUDER" || u.status === "UNAUTHORIZED").length})
+                  </button>
+                  <button
+                    onClick={() => setDbFilterTab("authorized")}
+                    className={`flex-1 py-1 px-1.5 rounded font-orbitron text-[8.5px] font-bold transition-all ${
+                      dbFilterTab === "authorized" ? "bg-green-oms/20 text-green-oms border border-green-500/40" : "text-sec/60 hover:text-green-400"
+                    }`}
+                  >
+                    AUTH ({knownUsers.filter(u => u.status !== "INTRUDER" && u.status !== "UNAUTHORIZED").length})
+                  </button>
+                </div>
               </div>
 
-              <div className="flex-1 overflow-y-auto pr-1 flex flex-col gap-2.5">
-                {knownUsers.map((user, i) => (
-                  <div 
-                    key={i} 
-                    className="glass-premium bg-black/20 border border-white/5 hover:border-gold-dim/20 hover:bg-gold/5 p-3 transition-all duration-300 animate-fade-in"
-                    style={{ borderRadius: 12 }}
-                  >
-                    <div className="flex items-center justify-between mb-1.5">
+              {/* Selected Subject Inspector Box */}
+              {selectedUserPid && (() => {
+                const selUser = knownUsers.find(u => (u.pid || u.name) === selectedUserPid);
+                if (!selUser) return null;
+                const isSelIntruder = selUser.status === "INTRUDER" || selUser.status === "UNAUTHORIZED";
+
+                return (
+                  <div className="mb-2 p-2.5 bg-black/90 border-2 border-gold rounded-xl shadow-gold-glow animate-fade-in flex flex-col gap-2 flex-shrink-0">
+                    <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
-                        <div className="w-8 h-8 rounded-full overflow-hidden border border-gold-dim flex-shrink-0 bg-gold/10 flex items-center justify-center relative">
-                          {user.photo && !imgErrors[user.name] ? (
-                            <img
-                              src={`${API}/${user.photo.replace(/\\/g, '/')}`}
-                              alt={user.name}
-                              className="w-full h-full object-cover"
-                              onError={() => {
-                                setImgErrors(prev => ({ ...prev, [user.name]: true }));
-                              }}
-                            />
-                          ) : (
-                            <span className="font-orbitron text-[9px] text-gold font-bold">
-                              {user.name.slice(0, 2).toUpperCase()}
-                            </span>
-                          )}
-                        </div>
-                        <div>
-                          <h4 className="font-orbitron text-xs font-bold text-[#FFFFFF] leading-none">{user.name}</h4>
-                          <span className="font-inter text-[8.5px] text-sec leading-none">{user.role}</span>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={() => forgetFace(user.name)}
-                          className="text-[#FFFFFF]/40 hover:text-red-500 transition-colors p-1"
-                          title={`Forget face profile '${user.name}'`}
-                        >
-                          <Trash size={12} />
-                        </button>
-                        <span className="font-orbitron text-[8px] font-bold text-green-oms bg-green-oms/10 px-1.5 py-0.5 rounded">
-                          {user.status}
+                        <span className="font-orbitron text-[9px] font-black text-gold-accent uppercase">SELECTED SUBJECT INSPECTOR</span>
+                        <span className={`font-orbitron text-[7.5px] font-bold px-1.5 py-0.5 rounded ${
+                          isSelIntruder ? "text-red-400 bg-red-950/60 border border-red-500/40 animate-pulse" : "text-green-oms bg-green-oms/20 border border-green-500/30"
+                        }`}>
+                          {selUser.status}
                         </span>
+                      </div>
+                      <button
+                        onClick={() => {
+                          setSelectedUserPid(null);
+                          setEditingPid(null);
+                        }}
+                        className="text-sec/60 hover:text-white p-0.5"
+                      >
+                        <X size={13} />
+                      </button>
+                    </div>
+
+                    <div className="flex items-center gap-3">
+                      <img
+                        src={`${API}/api/crop/${selectedUserPid}?t=${cropKey}`}
+                        alt={selUser.name}
+                        className={`w-12 h-12 rounded-lg object-cover border-2 flex-shrink-0 ${
+                          isSelIntruder ? "border-red-500 shadow-red-glow" : "border-gold"
+                        }`}
+                        onError={(e) => {
+                          (e.target as HTMLImageElement).src = `https://api.dicebear.com/7.x/bottts/svg?seed=${selectedUserPid}`;
+                        }}
+                      />
+                      <div className="flex-1 min-w-0">
+                        <div className="font-orbitron text-xs font-bold text-white truncate">{selUser.name}</div>
+                        <div className="font-mono text-[8px] text-sec">ID: {selectedUserPid} | Visits: {selUser.visitCount}</div>
+                        <div className="font-mono text-[8px] text-sec">Last Seen: {selUser.lastSeen}</div>
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-y-0.5 border-t border-white/5 pt-2 text-[9px] font-mono text-sec">
-                      <span>INTERACTIONS:</span>
-                      <span className="text-[#FFFFFF] text-right font-bold">{user.visitCount} visits</span>
-                      <span>LAST RECOGNIZED:</span>
-                      <span className="text-[#FFFFFF] text-right">{user.lastSeen}</span>
-                      <span>SUCCESS RATE:</span>
-                      <span className="text-gold-accent text-right font-bold">{user.accuracy}%</span>
+                    {/* Change Name Input */}
+                    <div className="flex items-center gap-1.5 mt-1">
+                      <input
+                        type="text"
+                        placeholder="Type new name (e.g. John Doe)..."
+                        value={editNameValue}
+                        onChange={(e) => {
+                          setEditingPid(selectedUserPid);
+                          setEditNameValue(e.target.value);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" && editNameValue.trim()) {
+                            handleRenameSave(selectedUserPid, editNameValue.trim());
+                          }
+                        }}
+                        className="flex-1 bg-black border border-gold/60 text-xs text-white rounded-lg px-2.5 py-1.5 focus:ring-1 focus:ring-gold-accent outline-none font-mono"
+                        autoFocus
+                      />
+                      <button
+                        onClick={() => {
+                          const n = editNameValue.trim() || (selUser.name.startsWith("Intruder") ? "" : selUser.name);
+                          if (!n) {
+                            alert("Please enter a name for this subject.");
+                            return;
+                          }
+                          handleRenameSave(selectedUserPid, n);
+                        }}
+                        className="py-1.5 px-3 bg-green-500/20 text-green-400 border border-green-500/50 hover:bg-green-500/40 rounded-lg text-xs font-orbitron font-bold flex-shrink-0"
+                      >
+                        ✔ SAVE & AUTHORIZE
+                      </button>
+                      <button
+                        onClick={() => forgetFace(selUser.name)}
+                        className="p-1.5 bg-red-500/20 text-red-400 border border-red-500/30 hover:bg-red-500/40 rounded-lg flex-shrink-0"
+                        title="Delete Profile"
+                      >
+                        <Trash size={12} />
+                      </button>
                     </div>
                   </div>
-                ))}
+                );
+              })()}
+
+              {/* Subject Rows List */}
+              <div className="flex-1 overflow-y-auto pr-1 flex flex-col gap-1.5">
+                {knownUsers
+                  .filter(user => {
+                    const isIntruderUser = user.status === "INTRUDER" || user.status === "UNAUTHORIZED";
+                    if (dbFilterTab === "intruders") return isIntruderUser;
+                    if (dbFilterTab === "authorized") return !isIntruderUser;
+                    return true;
+                  })
+                  .filter(user => {
+                    if (!dbSearchQuery.trim()) return true;
+                    const q = dbSearchQuery.toLowerCase().trim();
+                    const uPid = (user.pid || "").toLowerCase();
+                    const uName = (user.name || "").toLowerCase();
+                    return uPid.includes(q) || uName.includes(q);
+                  })
+                  .map((user, i) => {
+                    const userPid = user.pid || user.name;
+                    const isIntruderUser = user.status === "INTRUDER" || user.status === "UNAUTHORIZED";
+                    const isSelected = selectedUserPid === userPid;
+
+                    return (
+                      <div 
+                        key={userPid + "_" + i}
+                        onClick={() => {
+                          setSelectedUserPid(userPid);
+                          setEditingPid(userPid);
+                          setEditNameValue(user.name.startsWith("Intruder") ? "" : user.name);
+                        }}
+                        className={`p-2 rounded-xl transition-all duration-200 cursor-pointer flex items-center justify-between gap-2.5 border ${
+                          isSelected
+                            ? "bg-gold/15 border-gold shadow-gold-glow scale-[1.01]"
+                            : isIntruderUser
+                            ? "bg-red-950/30 border-red-500/20 hover:border-red-500/50 hover:bg-red-950/50"
+                            : "bg-black/40 border-white/5 hover:border-gold-dim/30 hover:bg-gold/5"
+                        }`}
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                          <div className={`w-8 h-8 rounded-full overflow-hidden border flex-shrink-0 bg-black flex items-center justify-center relative ${
+                            isIntruderUser ? "border-red-500 shadow-red-glow" : "border-gold-dim"
+                          }`}>
+                            <img
+                              src={`${API}/api/crop/${userPid}?t=${cropKey}`}
+                              alt={user.name}
+                              className="w-full h-full object-cover"
+                              onError={(e) => {
+                                (e.target as HTMLImageElement).src = `https://api.dicebear.com/7.x/bottts/svg?seed=${userPid}`;
+                              }}
+                            />
+                          </div>
+
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5">
+                              <span className={`font-orbitron text-xs font-bold truncate ${isIntruderUser ? "text-red-400" : "text-white"}`}>
+                                {user.name}
+                              </span>
+                              <span className={`font-orbitron text-[7px] font-bold px-1 py-0.5 rounded flex-shrink-0 ${
+                                isIntruderUser ? "text-red-400 bg-red-950/50 border border-red-500/30" : "text-green-oms bg-green-oms/10 border border-green-500/20"
+                              }`}>
+                                {user.status}
+                              </span>
+                            </div>
+                            <div className="font-mono text-[8px] text-sec truncate">
+                              ID: {userPid} • {user.visitCount} visits • {user.lastSeen}
+                            </div>
+                          </div>
+                        </div>
+
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedUserPid(userPid);
+                            setEditingPid(userPid);
+                            setEditNameValue(user.name.startsWith("Intruder") ? "" : user.name);
+                          }}
+                          className="py-1 px-2 bg-gold/10 border border-gold/30 hover:bg-gold/20 text-gold-accent rounded text-[8px] font-orbitron font-bold flex-shrink-0 flex items-center gap-1"
+                        >
+                          <Edit2 size={9} />
+                          SELECT
+                        </button>
+                      </div>
+                    );
+                  })}
               </div>
             </div>
 

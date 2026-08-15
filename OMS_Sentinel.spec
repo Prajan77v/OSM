@@ -37,22 +37,26 @@ objects_dir = ROOT / "objects"
 if objects_dir.exists():
     datas.append((str(objects_dir), "objects"))
 
-# plugins/ directory
-plugins_dir = ROOT / "plugins"
-if plugins_dir.exists():
-    datas.append((str(plugins_dir), "plugins"))
+# models/ directory (includes InsightFace buffalo_sc, YuNet, SFace, ResNet50)
+models_dir = ROOT / "models"
+if models_dir.exists():
+    datas.append((str(models_dir), "models"))
 
-# ultralytics cfg directory
-try:
-    import ultralytics
-    ultralytics_cfg = Path(ultralytics.__file__).parent / "cfg"
-    if ultralytics_cfg.exists():
-        datas.append((str(ultralytics_cfg), "ultralytics/cfg"))
-except ImportError:
-    pass
+# YOLO model weights
+yolo_pt = ROOT / "yolov8n.pt"
+if yolo_pt.exists():
+    datas.append((str(yolo_pt), "."))
 
-# ── Hidden imports needed by FastAPI / uvicorn / OpenCV / pynvml ─────────────
+# ── Hidden imports needed by FastAPI / uvicorn / OpenCV / InsightFace / pynvml ─────────────
 hidden_imports = [
+    # OMS Face Engine & InsightFace
+    "face_engine",
+    "insightface",
+    "insightface.app",
+    "insightface.app.face_analysis",
+    "insightface.model_zoo",
+    "insightface.utils",
+    "onnxruntime",
     # FastAPI / Starlette / uvicorn
     "uvicorn",
     "uvicorn.logging",
@@ -85,6 +89,13 @@ hidden_imports = [
     "PIL.ImageDraw",
     # Ultralytics / YOLO
     "ultralytics",
+    "ultralytics.models",
+    "ultralytics.models.yolo",
+    "ultralytics.models.yolo.detect",
+    "ultralytics.nn",
+    "ultralytics.nn.tasks",
+    "ultralytics.utils",
+    "torchvision",
     "sympy",
     # PyWin32
     "win32gui",
@@ -100,11 +111,6 @@ hidden_imports = [
     "email.mime.text",
     "email.mime.multipart",
     "dotenv",
-    "deepface",
-    "tf_keras",
-    "tensorflow",
-    "torch",
-    "torchvision",
 ]
 
 # ── Analysis ──────────────────────────────────────────────────────────────────
@@ -117,7 +123,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["pandas", "h5py", "IPython", "notebook", "jinja2", "sklearn", "scikit-learn", "tensorboard", "PyQt5", "PySide2", "PySide6", "boto3", "botocore", "cryptography", "sqlalchemy", "numpy.tests"],
+    excludes=["pandas", "h5py", "IPython", "notebook", "jinja2", "sklearn", "scikit-learn", "tensorflow", "tensorboard", "keras", "PyQt5", "PySide2", "PySide6", "boto3", "botocore", "cryptography", "sqlalchemy", "numpy.tests"],
     noarchive=False,
     optimize=0,
 )

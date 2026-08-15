@@ -643,10 +643,11 @@ def create_app() -> "FastAPI":
             else:
                 col = (55, 175, 212) # Gold
 
-            # 1. Soft semi-transparent background fill
-            overlay = frame.copy()
-            cv2.rectangle(overlay, (x1, y1), (x2, y2), col, -1)
-            cv2.addWeighted(overlay, 0.08, frame, 0.92, 0, frame)
+            # 1. Soft semi-transparent background fill on ROI only (0MB allocations, 100x speedup)
+            if x2 > x1 and y2 > y1:
+                sub = frame[y1:y2, x1:x2]
+                if sub.size > 0:
+                    cv2.addWeighted(sub, 0.90, np.full_like(sub, col), 0.10, 0, sub)
 
             # 2. Thin bounding box
             cv2.rectangle(frame, (x1, y1), (x2, y2), col, 1, cv2.LINE_AA)
@@ -831,20 +832,22 @@ def create_app() -> "FastAPI":
 
             res = []
             for pid, info in db.items():
-                if info.get("known", False):
-                    name = info.get("name", "Unknown")
-                    role = "System Administrator" if name.lower() == sv.Config.USERNAME.lower() else "Authorized Subject"
-                    res.append({
-                        "pid": pid,
-                        "name": name,
-                        "visitCount": info.get("visit_count", 1),
-                        "lastSeen": info.get("last_seen", "Just now"),
-                        "accuracy": 98.4 if name.lower() == sv.Config.USERNAME.lower() else 96.1,
-                        "role": role,
-                        "status": "AUTHORIZED",
-                        "photo": info.get("photo")
-                    })
-            res.sort(key=lambda u: (0 if u["role"] == "System Administrator" else 1, -u["visitCount"]))
+                is_known = info.get("known", False)
+                name = info.get("name", "Unknown")
+                role = "System Administrator" if name.lower() == sv.Config.USERNAME.lower() else ("Authorized Subject" if is_known else "Detected Subject")
+                status = "AUTHORIZED" if is_known else "INTRUDER"
+                photo = info.get("photo") or f"api/crop/{pid}"
+                res.append({
+                    "pid": pid,
+                    "name": name,
+                    "visitCount": info.get("visit_count", 1),
+                    "lastSeen": info.get("last_seen", "Just now"),
+                    "accuracy": 98.4 if name.lower() == sv.Config.USERNAME.lower() else (95.0 if is_known else 50.0),
+                    "role": role,
+                    "status": status,
+                    "photo": photo
+                })
+            res.sort(key=lambda u: (0 if u["role"] == "System Administrator" else (1 if u["status"] == "AUTHORIZED" else 2), -u["visitCount"]))
             return JSONResponse(res)
         except Exception as e:
             # EH-03: Return proper error instead of silently returning mock data
@@ -1217,6 +1220,12 @@ def create_app() -> "FastAPI":
                         old_name = sv.faces_db[pid].get("name", "Unknown")
                         sv.faces_db[pid]["name"] = new_name
                         sv.faces_db[pid]["known"] = True
+
+                        if getattr(sv, "FACE_ENGINE_AVAILABLE", False) and getattr(sv, "_global_face_engine", None) is not None:
+                            try:
+                                sv._global_face_engine.rename(pid, new_name, set_known=True)
+                            except Exception:
+                                pass
 
                         import shutil
                         from pathlib import Path

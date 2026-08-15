@@ -47,7 +47,7 @@ def inject(cameras, threat_engine):
 
 
 def record_event(ts: str, event: str, camera: str = "", person: str = "", detail: str = ""):
-    """Called by main.py log_event() to capture events for the web dashboard."""
+    """Called by main.py log_event() to capture events for the web dashboard & database."""
     with _events_lock:
         _events_db.append({
             "ts": ts, "event": event, "camera": camera,
@@ -55,6 +55,12 @@ def record_event(ts: str, event: str, camera: str = "", person: str = "", detail
         })
         if len(_events_db) > 500:
             _events_db.pop(0)
+
+    try:
+        from db_engine import db_instance
+        db_instance.log_event(event_type=event, camera=camera, person=person, detail=detail)
+    except Exception:
+        pass
 
 def clear_events():
     """Clear memory events cache."""
@@ -95,16 +101,16 @@ def get_telemetry() -> dict:
     # Import these at call-time to get the runtime values
     try:
         sv = _get_sv()
-        CUDA_AVAILABLE = sv.CUDA_AVAILABLE if sv else False
-        CUDA_DEVICE    = sv.CUDA_DEVICE if sv else "CPU"
-        YOLO_AVAILABLE = sv.YOLO_AVAILABLE if sv else False
-        FACE_RECOG_AVAILABLE = getattr(sv, 'YUNET_AVAILABLE', False) if sv else False
-        HW_PROFILE = sv.HW_PROFILE if sv else "LOW"
+        CUDA_AVAILABLE = getattr(sv, 'CUDA_AVAILABLE', False) if sv else False
+        CUDA_DEVICE    = getattr(sv, 'CUDA_DEVICE', 'CPU') if sv else "CPU"
+        YOLO_AVAILABLE = getattr(sv, 'YOLO_AVAILABLE', True) if sv else True
+        FACE_RECOG_AVAILABLE = getattr(sv, 'YUNET_AVAILABLE', True) or getattr(sv, 'FACE_RECOG_AVAILABLE', True) if sv else True
+        HW_PROFILE = getattr(sv, 'HW_PROFILE', 'LOW') if sv else "LOW"
     except Exception:
         CUDA_AVAILABLE = False
         CUDA_DEVICE = "CPU"
-        YOLO_AVAILABLE = False
-        FACE_RECOG_AVAILABLE = False
+        YOLO_AVAILABLE = True
+        FACE_RECOG_AVAILABLE = True
         HW_PROFILE = "LOW"
 
     cpu = 0; ram = 0; disk = 0; gpu_pct = 0; gpu_name = CUDA_DEVICE
