@@ -734,6 +734,47 @@ def create_app() -> "FastAPI":
             return JSONResponse(_get_summary())
         return JSONResponse({})
 
+    @app.get("/api/diagnostics")
+    async def diagnostics():
+        """Per-camera tracking diagnostics — FPS, track counts, identity state."""
+        import psutil as _pu
+        out = []
+        with _cameras_lock:
+            cams_snap = list(_cameras)
+        for idx, cs in enumerate(cams_snap):
+            sie_diag = cs.stable_id.diagnostics() if hasattr(cs, "stable_id") else {}
+            pending = len(getattr(cs, "pending_futures", {}))
+            lost_cnt = len(getattr(cs, "lost_tracks", {}))
+            try:
+                cpu_pct = _pu.cpu_percent(interval=None) if _pu else -1
+            except Exception:
+                cpu_pct = -1
+            sv = _get_sv()
+            gpu_mb = -1
+            try:
+                import torch as _t
+                if _t.cuda.is_available():
+                    gpu_mb = round(_t.cuda.memory_allocated() / 1024 / 1024, 1)
+            except Exception:
+                pass
+            out.append({
+                "camera_id":         idx,
+                "camera_name":       cs.name,
+                "online":            cs.online,
+                "fps":               round(cs.fps_inst, 1),
+                "frame_count":       cs.frame_cnt,
+                "cpu_pct":           cpu_pct,
+                "gpu_memory_mb":     gpu_mb,
+                "track_count":       sie_diag.get("total_tracks", 0),
+                "confirmed_tracks":  sie_diag.get("confirmed_tracks", 0),
+                "tentative_tracks":  sie_diag.get("tentative_tracks", 0),
+                "lost_tracks":       sie_diag.get("lost_tracks", 0),
+                "legacy_lost_tracks": lost_cnt,
+                "pending_recognition": pending,
+                "track_details":     sie_diag.get("track_details", []),
+            })
+        return JSONResponse(out)
+
     @app.get("/api/activity")
     async def get_activity():
         """HAAE — Real-time human activity & expression analysis for all tracked persons."""
@@ -1250,6 +1291,9 @@ def create_app() -> "FastAPI":
                             if track_tid is not None and track_tid in cs.track_to_pid:
                                 cs.track_to_pid[track_tid] = new_assigned_pid
                                 cs.tid_identity_locked[track_tid] = True
+                                # Immediately force-lock in StableIdentityEngine
+                                if hasattr(cs, "stable_id"):
+                                    cs.stable_id.force_identity(track_tid, new_assigned_pid, new_name, 0.99)
                             with cs.frame_lock:
                                 f_copy = cs.latest_frame.copy() if cs.latest_frame is not None else None
                             if f_copy is not None:
@@ -1344,12 +1388,18 @@ def create_app() -> "FastAPI":
                             except ValueError:
                                 sv.faces_db[target_pid]["photo"] = str(dest_img)
 
-                        # Lock active tracks to this newly renamed known profile immediately
+                         # Lock active tracks to this newly renamed known profile immediately
                         with _cameras_lock:
                             for cs in _cameras:
                                 for t_id, p_id in list(cs.track_to_pid.items()):
                                     if p_id == target_pid:
                                         cs.tid_identity_locked[t_id] = True
+                                        # Force-lock in StableIdentityEngine too
+                                        if hasattr(cs, "stable_id"):
+                                            cs.stable_id.force_identity(t_id, target_pid, new_name, 0.99)
+                                # Also update any TENTATIVE entries awaiting confirmation
+                                if hasattr(cs, "stable_id"):
+                                    cs.stable_id.force_identity_by_pid(target_pid, new_name)
                                 for d in getattr(cs, "latest_dets", []):
                                     if d.get("pid") == target_pid:
                                         d["disp"] = new_name.upper()

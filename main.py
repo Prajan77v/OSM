@@ -198,6 +198,26 @@ except Exception as _haae_err:
     def _tg_running(cam, pid, name, ts): return ''
     def _tg_emotion_alert(cam, pid, name, emotion, score, ts): return ''
 
+# ── StableIdentityEngine import ───────────────────────────────────────────────
+try:
+    from identity_engine import StableIdentityEngine
+    STABLE_ID_AVAILABLE = True
+except Exception as _sie_err:
+    STABLE_ID_AVAILABLE = False
+    import logging as _slog
+    _slog.getLogger("OMS").error(f"[SIE] identity_engine.py not loaded: {_sie_err}")
+    class StableIdentityEngine:
+        """No-op stub when identity_engine.py is missing."""
+        def mark_seen(self, tid, box): return None
+        def mark_missing(self, tid): pass
+        def submit_recognition(self, tid, pid, name, conf): return False
+        def force_identity(self, tid, pid, name, conf=0.99): pass
+        def force_identity_by_pid(self, pid, name, conf=0.99): pass
+        def get_display(self, tid): return None, None, 0.0, False
+        def get_active_tids(self): return []
+        def purge_expired(self): pass
+        def diagnostics(self): return {"total_tracks": 0}
+
 # ══════════════════════════════════════════════════════════════════════════════
 # HARDWARE PROFILE
 # ══════════════════════════════════════════════════════════════════════════════
@@ -280,7 +300,7 @@ class Config:
     MOTION_THRESH_INIT = _cfg("detection","motion_thresh_init", default=300)
     MOTION_CALIB_FRAMES= _cfg("detection","motion_calib_frames", default=30)
     IDLE_SKIP_EXTRA    = _cfg("detection","idle_skip_extra", default=2)
-    ABSENT_CYCLES_THRESH = _cfg("detection","absent_cycles_thresh", default=50)
+    ABSENT_CYCLES_THRESH = _cfg("detection","absent_cycles_thresh", default=90)
 
     FACE_MATCH_THRESH   = _cfg("face_recognition","match_threshold", default=0.36)
     OBJECT_MATCH_THRESH = _cfg("object_recognition","match_threshold", default=0.55)
@@ -2934,6 +2954,9 @@ class CameraState:
         self.tid_identity_locked: Dict[int, bool]     = {}
         self.lost_tracks:     Dict[int, Tuple[str, Tuple[int,int,int,int], float]] = {}
         self.last_track_boxes: Dict[int, Tuple[int,int,int,int]] = {}
+        # ── Stable Identity Engine — replaces ad-hoc vote/lock pipeline ─────
+        self.stable_id   = StableIdentityEngine()
+        self._sie_purge_t: float = time.time()
         self.tracker     = SpatialTracker()
         self.behavior    = BehaviorEngine()
         self.ownership   = OwnershipEngine()
@@ -3340,15 +3363,36 @@ def camera_thread(cs: CameraState):
         tid_seen: set        = set()
 
         # ── YOLO DETECTION + TRACKING ─────────────────────────────────────────
+        # ── Periodic StableIdentityEngine maintenance (every ~2 seconds) ────────
+        now_sie = time.time()
+        if now_sie - cs._sie_purge_t > 2.0:
+            cs.stable_id.purge_expired()
+            # Mark all tids NOT seen in this frame as missing in SIE
+            for known_tid in list(cs.stable_id.get_active_tids()):
+                if known_tid not in tid_seen:
+                    cs.stable_id.mark_missing(known_tid)
+            cs._sie_purge_t = now_sie
+
         if yolo:
             try:
                 # Resize directly from raw_frame to detector resolution (dw, dh), avoiding double-resizing!
                 small   = cv2.resize(raw_frame, (dw, dh), interpolation=cv2.INTER_LINEAR)
+                # torch.inference_mode() disables gradient tracking for maximum FPS
+                _inf_ctx = None
+                try:
+                    import torch as _torch
+                    _inf_ctx = _torch.inference_mode()
+                    _inf_ctx.__enter__()
+                except Exception:
+                    pass
                 results = yolo.track(source=small, conf=Config.CONFIDENCE,
                                      device=Config.DEVICE, persist=Config.TRACK_PERSIST,
                                      verbose=False, half=(Config.DEVICE == "cuda"),
                                      imgsz=max(dw, dh), tracker="bytetrack.yaml",
                                      max_det=300)
+                if _inf_ctx:
+                    try: _inf_ctx.__exit__(None, None, None)
+                    except Exception: pass
                 boxes = results[0].boxes
                 fh_h, fh_w = frame.shape[:2]
                 sx = fh_w / dw; sy = fh_h / dh
@@ -3375,11 +3419,15 @@ def camera_thread(cs: CameraState):
                         except: pass
                     yolo_dets.append({"label":label,"conf":cv_val,"box":(x1,y1,x2,y2),"tid":tid})
 
-                unassigned = [d["box"] for d in yolo_dets if d["label"]=="person" and d["tid"] is None]
-                if unassigned:
-                    local_tids = cs.tracker.track(unassigned); ui = 0
+                # Fix: Only use SpatialTracker centroid fallback for non-person objects.
+                # Persons without a ByteTrack ID are skipped (they will be detected next frame).
+                # This prevents the centroid tracker from assigning shadow IDs that collide
+                # with real ByteTrack IDs and cause identity swaps.
+                unassigned_obj = [d["box"] for d in yolo_dets if d["label"]!="person" and d["tid"] is None]
+                if unassigned_obj:
+                    local_tids = cs.tracker.track(unassigned_obj); ui = 0
                     for d in yolo_dets:
-                        if d["label"]=="person" and d["tid"] is None:
+                        if d["label"]!="person" and d["tid"] is None:
                             d["tid"] = local_tids[ui]; ui += 1
 
                 person_dets_this_frame = []
@@ -3395,6 +3443,11 @@ def camera_thread(cs: CameraState):
                         is_person = (label == "person")
                         tid_seen.add(tid)
                         cs.last_track_boxes[tid] = (x1, y1, x2, y2)
+
+                        # ── Stable Identity Engine: mark this track as seen ────
+                        cs.stable_id.mark_seen(tid, (x1, y1, x2, y2))
+
+                        # ── Resolve any completed face recognition futures ─────
                         fut = cs.pending_futures.get(tid)
                         if fut and fut.done():
                             try:
@@ -3402,105 +3455,72 @@ def camera_thread(cs: CameraState):
                                 if res and isinstance(res, (tuple, list)) and len(res) >= 2:
                                     np_pid = res[0]
                                     np_name = res[1]
-                                    conf = res[2] if len(res) > 2 else 0.984
+                                    np_conf = res[2] if len(res) > 2 else 0.984
                                 else:
-                                    np_pid, np_name, conf = None, None, 0.0
+                                    np_pid, np_name, np_conf = None, None, 0.0
                             except Exception as e:
                                 app_log.warning(f"Error fetching recognition future: {e}")
-                                np_pid, np_name, conf = None, None, 0.0
+                                np_pid, np_name, np_conf = None, None, 0.0
                             del cs.pending_futures[tid]
 
                             if np_pid:
-                                curr_pid = cs.track_to_pid.get(tid)
-                                curr_conf = cs.pid_confidences.get(curr_pid, 0.0) if curr_pid else 0.0
-                                is_locked = cs.tid_identity_locked.get(tid, False)
-                                
-                                if is_locked and curr_pid and np_pid != curr_pid and conf >= 0.58 and curr_conf < 0.45:
-                                    app_log.info(f"[{cs.name}] [LOCK OVERRIDE] Correcting track {tid} from {curr_pid} (conf={curr_conf:.3f}) to {np_pid} (conf={conf:.3f}) due to strong match")
-                                    is_locked = False
-                                    cs.tid_identity_locked[tid] = False
-                                    if tid in cs.tid_face_votes:
-                                        cs.tid_face_votes[tid] = {}
-                                    if curr_pid in cs.present_pids:
-                                        cs.present_pids.discard(curr_pid)
-                                    with _fdb_lock:
-                                        if curr_pid in faces_db:
-                                            faces_db[curr_pid]["in_scene"] = False
-                                            if not faces_db[curr_pid].get("known") and faces_db[curr_pid].get("visit_count", 0) <= 1:
-                                                del faces_db[curr_pid]
-                                
-                                if not is_locked:
-                                    np_is_registered = False
-                                    np_is_known = False
-                                    with _fdb_lock:
-                                        if np_pid in faces_db:
-                                            np_is_registered = True
-                                            np_is_known = faces_db[np_pid].get("known", False)
-                                    
-                                    if np_is_registered:
-                                        if np_is_known:
-                                            votes = cs.tid_face_votes.setdefault(tid, {})
-                                            votes[np_pid] = votes.get(np_pid, 0.0) + conf
-                                            
-                                            should_lock = (conf >= 0.52 or votes[np_pid] >= 0.80)
-                                            if should_lock:
-                                                cs.tid_identity_locked[tid] = True
-                                                app_log.info(f"[{cs.name}] [LOCK] Locked tracking ID {tid} to {np_pid} (conf={conf:.3f}, votes={votes[np_pid]:.3f})")
-                                            
-                                            cs.pid_confidences[np_pid] = conf
-                                            old = cs.track_to_pid.get(tid)
-                                            if old and old != np_pid:
-                                                cs.present_pids.discard(old)
-                                                with _fdb_lock:
-                                                    if old in faces_db:
-                                                        faces_db[old]["in_scene"] = False
-                                                        if not faces_db[old].get("known") and faces_db[old].get("visit_count", 0) <= 1:
-                                                            del faces_db[old]
-                                            cs.track_to_pid[tid] = np_pid
-                                            _ensure_pid(cs, np_pid, np_name)
-                                        else:
-                                            # Intruder logic (only for person)
-                                            cs.pid_confidences[np_pid] = conf
-                                            old = cs.track_to_pid.get(tid)
-                                            if old and old != np_pid:
-                                                cs.present_pids.discard(old)
-                                                with _fdb_lock:
-                                                    if old in faces_db:
-                                                        faces_db[old]["in_scene"] = False
-                                                        if not faces_db[old].get("known") and faces_db[old].get("visit_count", 0) <= 1:
-                                                            del faces_db[old]
-                                            cs.track_to_pid[tid] = np_pid
-                                            _ensure_pid(cs, np_pid, np_name)
-                                            cs.tid_face_cd[tid] = 60
-                                    else:
-                                        curr_pid = cs.track_to_pid.get(tid)
-                                        if curr_pid:
-                                            cs.pid_confidences[curr_pid] = conf
+                                # Feed result into StableIdentityEngine — it handles
+                                # temporal confirmation, locking, and override logic
+                                confirmed = cs.stable_id.submit_recognition(tid, np_pid, np_name, np_conf)
 
-                        if is_person and tid not in cs.track_to_pid:
-                            # Spatial tracking recovery fallback
+                                # Sync stable confirmed identity back to legacy track_to_pid
+                                # (needed by other subsystems: behavior, zone, HAAE, etc.)
+                                s_pid, s_name, s_conf, s_ok = cs.stable_id.get_display(tid)
+                                if s_ok and s_pid:
+                                    old = cs.track_to_pid.get(tid)
+                                    if old and not old.startswith("Unknown-") and old != s_pid:
+                                        # Identity changed to different pid — clean up old
+                                        cs.present_pids.discard(old)
+                                        with _fdb_lock:
+                                            if old in faces_db:
+                                                faces_db[old]["in_scene"] = False
+                                                if not faces_db[old].get("known") and faces_db[old].get("visit_count", 0) <= 1:
+                                                    del faces_db[old]
+                                    cs.track_to_pid[tid] = s_pid
+                                    cs.pid_confidences[s_pid] = s_conf
+                                    cs.tid_identity_locked[tid] = True
+                                    _ensure_pid(cs, s_pid, s_name)
+
+                                    # Set face cooldown based on whether confirmed
+                                    cs.tid_face_cd[tid] = 90  # ~3s at 30fps
+
+                        # ── Identity resolution: use stable engine as source of truth ──
+                        # Check if StableIdentityEngine has a confirmed identity for this track
+                        # This prevents name flicker — confirmed_name is held through occlusions
+                        s_pid, s_name, s_conf, s_ok = cs.stable_id.get_display(tid)
+                        if is_person and s_ok and s_pid:
+                            # Confirmed identity from stable engine
+                            pid = s_pid
+                            name = s_name
+                            cs.track_to_pid[tid] = s_pid
+                            cs.pid_confidences[s_pid] = s_conf
+                            cs.tid_identity_locked[tid] = True
+                            _ensure_pid(cs, s_pid, s_name)
+                            with _fdb_lock:
+                                is_known_profile = faces_db.get(s_pid, {}).get("known", False)
+                            if is_known_profile:
+                                disp = s_name.upper()[:20]
+                            else:
+                                disp = s_name.replace("Intruder-", "UNKNOWN-").upper()[:16]
+                        elif is_person and tid not in cs.track_to_pid:
+                            # No confirmed identity yet. Try spatial recovery from lost_tracks
                             recovered_pid = None
                             recovered_tid = None
                             currently_visible_pids = {cs.track_to_pid[t] for t in tid_seen if t in cs.track_to_pid}
                             candidates = []
                             for l_tid, (l_pid, l_box, l_time) in cs.lost_tracks.items():
                                 if l_pid not in currently_visible_pids:
-                                    is_known_profile = False
-                                    with _fdb_lock:
-                                        if l_pid in faces_db:
-                                            is_known_profile = faces_db[l_pid].get("known", False)
-                                    if not is_known_profile:
-                                        candidates.append((l_tid, l_pid, l_box))
+                                    candidates.append((l_tid, l_pid, l_box))
                             for active_tid, active_pid in cs.track_to_pid.items():
                                 if active_tid not in tid_seen and active_tid in cs.last_track_boxes:
                                     if active_pid not in currently_visible_pids:
-                                        is_known_profile = False
-                                        with _fdb_lock:
-                                            if active_pid in faces_db:
-                                                is_known_profile = faces_db[active_pid].get("known", False)
-                                        if not is_known_profile:
-                                            candidates.append((active_tid, active_pid, cs.last_track_boxes[active_tid]))
-                            
+                                        candidates.append((active_tid, active_pid, cs.last_track_boxes[active_tid]))
+
                             cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
                             best_dist = 80.0
                             for c_tid, c_pid, c_box in candidates:
@@ -3511,22 +3531,28 @@ def camera_thread(cs: CameraState):
                                     best_dist = dist
                                     recovered_pid = c_pid
                                     recovered_tid = c_tid
-                            
+
                             if recovered_pid:
-                                app_log.info(f"[{cs.name}] [TRACK RECOVERY] Recovered tracking ID {tid} as {recovered_pid} (previously {recovered_tid}) spatially (dist={best_dist:.1f}px)")
+                                app_log.info(f"[{cs.name}] [TRACK RECOVERY] Recovered tracking ID {tid} as "
+                                             f"{recovered_pid} (previously {recovered_tid}) dist={best_dist:.1f}px")
                                 cs.track_to_pid[tid] = recovered_pid
                                 was_locked = cs.tid_identity_locked.get(recovered_tid, False) if recovered_tid is not None else False
                                 cs.tid_identity_locked[tid] = was_locked
+                                # Migrate stable engine state from old tid to new tid
+                                old_s_pid, old_s_name, old_s_conf, old_s_ok = cs.stable_id.get_display(recovered_tid)
+                                if old_s_ok and old_s_pid:
+                                    cs.stable_id.force_identity(tid, old_s_pid, old_s_name, old_s_conf)
                                 if recovered_tid is not None and recovered_tid in cs.tid_face_votes:
                                     cs.tid_face_votes[tid] = cs.tid_face_votes.pop(recovered_tid)
                                 if recovered_tid != tid and recovered_tid in cs.track_to_pid:
                                     cs.track_to_pid.pop(recovered_tid, None)
                                 cs.lost_tracks.pop(recovered_tid, None)
                             else:
-                                if is_person:
-                                    new_p = f"Unknown-{tid}"
-                                    cs.track_to_pid[tid] = new_p
+                                # Brand new unknown person
+                                new_p = f"Unknown-{tid}"
+                                cs.track_to_pid[tid] = new_p
 
+                        # ── Build display values from current track_to_pid state ──
                         pid = cs.track_to_pid.get(tid)
                         if pid:
                             if pid.startswith("Unknown-"):
@@ -3541,7 +3567,8 @@ def camera_thread(cs: CameraState):
                                     del cs.track_to_pid[tid]
                                     continue
                                 if is_person:
-                                    is_known_profile = faces_db[pid].get("known", False)
+                                    with _fdb_lock:
+                                        is_known_profile = faces_db.get(pid, {}).get("known", False)
                                     if is_known_profile:
                                         disp = name.upper()[:20]
                                     else:
@@ -3658,9 +3685,12 @@ def camera_thread(cs: CameraState):
                 for t in stale_lost:
                     cs.lost_tracks.pop(t, None)
 
-                # Absent-person tracking
+                # Absent-person tracking — also updates StableIdentityEngine missing state
                 for tid_gone in list(cs.track_to_pid.keys()):
                     if tid_gone not in tid_seen:
+                        # Mark as missing in StableIdentityEngine every frame (not just at threshold)
+                        cs.stable_id.mark_missing(tid_gone)
+
                         pid_g = cs.track_to_pid[tid_gone]
                         pi_g  = cs.pid_info.get(pid_g)
                         if pi_g:
@@ -3676,20 +3706,18 @@ def camera_thread(cs: CameraState):
                                     on_person_left(cs, pid_g, name_g, frame)
                                 del cs.track_to_pid[tid_gone]
                                 cs.last_track_boxes.pop(tid_gone, None)
-                                if hasattr(cs, "tid_face_votes") and tid_gone in cs.tid_face_votes:
-                                    del cs.tid_face_votes[tid_gone]
-                                if hasattr(cs, "tid_identity_locked") and tid_gone in cs.tid_identity_locked:
-                                    del cs.tid_identity_locked[tid_gone]
+                                cs.tid_face_votes.pop(tid_gone, None)
+                                cs.tid_identity_locked.pop(tid_gone, None)
+                                # Note: StableIdentityEngine keeps the identity in grace period
+                                # so if ByteTrack reassigns with the same face, it re-confirms quickly
                         else:
                             if tid_gone in cs.last_track_boxes:
                                 cs.lost_tracks[tid_gone] = (pid_g, cs.last_track_boxes[tid_gone], time.time())
                                 app_log.info(f"[{cs.name}] Tracker lost ID {tid_gone} ({pid_g}) (no Info). Added to recovery buffer.")
                             del cs.track_to_pid[tid_gone]
                             cs.last_track_boxes.pop(tid_gone, None)
-                            if hasattr(cs, "tid_face_votes") and tid_gone in cs.tid_face_votes:
-                                del cs.tid_face_votes[tid_gone]
-                            if hasattr(cs, "tid_identity_locked") and tid_gone in cs.tid_identity_locked:
-                                del cs.tid_identity_locked[tid_gone]
+                            cs.tid_face_votes.pop(tid_gone, None)
+                            cs.tid_identity_locked.pop(tid_gone, None)
 
                 # Object change detection
                 cur_ctr = Counter(o for o in cur_objs if o != "person")
