@@ -2759,7 +2759,21 @@ class CameraManager:
                         if self.cap and self.cap.isOpened():
                             break
             else:
-                self.cap = cv2.VideoCapture(str(source_val), cv2.CAP_FFMPEG)
+                src_str = str(source_val)
+                # Automatically fix passwords containing '@' (e.g., admin:arasan@123@IP -> admin:arasan%40123@IP)
+                if src_str.startswith("rtsp://") or src_str.startswith("rtsps://") or src_str.startswith("http://"):
+                    proto, rest = src_str.split("://", 1)
+                    if "@" in rest:
+                        parts = rest.split("@")
+                        if len(parts) > 2:
+                            # Multiple @ symbols: the host is the last part, user:pass is everything before
+                            host_part = parts[-1]
+                            auth_part = "@".join(parts[:-1])
+                            if ":" in auth_part:
+                                u, p = auth_part.split(":", 1)
+                                p_encoded = p.replace("@", "%40")
+                                src_str = f"{proto}://{u}:{p_encoded}@{host_part}"
+                self.cap = cv2.VideoCapture(src_str, cv2.CAP_FFMPEG)
                 
             if not self.cap or not self.cap.isOpened():
                 return False
