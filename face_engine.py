@@ -34,10 +34,10 @@ class FaceResult:
 
 
 class FaceEngine:
-    MIN_DET_SCORE         = 0.65
-    MIN_FACE_SIZE         = 40
+    MIN_DET_SCORE         = 0.35  # Relaxed for CCTV / distant faces
+    MIN_FACE_SIZE         = 12    # Support small faces in wide-angle CCTV feeds
     MATCH_THRESHOLD       = 0.28  # Robust ArcFace similarity threshold for intruder matching
-    MATCH_THRESHOLD_KNOWN = 0.45  # Strict threshold for known authorized persons to prevent misidentification
+    MATCH_THRESHOLD_KNOWN = 0.42  # Strict threshold for known authorized persons to prevent misidentification
 
     def __init__(self):
         self._lock      = threading.RLock()
@@ -99,13 +99,21 @@ class FaceEngine:
                 return False
 
     def detect_and_embed(self, bgr_frame: np.ndarray,
-                          min_det_score: float = 0.65,
-                          min_size: int = 40) -> List[FaceResult]:
+                          min_det_score: float = 0.35,
+                          min_size: int = 12) -> List[FaceResult]:
         if not self.available or self._app is None or bgr_frame is None or bgr_frame.size == 0:
             return []
         try:
+            h_in, w_in = bgr_frame.shape[:2]
+            # If the crop from CCTV is small, upscale it so SCRFD detector can find small faces easily
+            scale = 1.0
+            feed_frame = bgr_frame
+            if max(h_in, w_in) < 160:
+                scale = 160.0 / max(1, max(h_in, w_in))
+                feed_frame = cv2.resize(bgr_frame, (int(w_in * scale), int(h_in * scale)), interpolation=cv2.INTER_CUBIC)
+
             with self._lock:
-                faces = self._app.get(bgr_frame)
+                faces = self._app.get(feed_frame)
         except Exception as e:
             log.debug(f"[FaceEngine] detect error: {e}")
             return []
@@ -117,7 +125,8 @@ class FaceEngine:
             bbox = getattr(face, "bbox", None)
             if bbox is None:
                 continue
-            x1, y1, x2, y2 = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
+            # Scale coordinates back if upscaled
+            x1, y1, x2, y2 = int(bbox[0] / scale), int(bbox[1] / scale), int(bbox[2] / scale), int(bbox[3] / scale)
             if (x2 - x1) < min_size or (y2 - y1) < min_size:
                 continue
             emb = getattr(face, "normed_embedding", None)

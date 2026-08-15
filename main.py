@@ -704,7 +704,7 @@ def _init_yunet():
     """Initialize Face engine (InsightFace preferred, YuNet+SFace fallback) and Object engine."""
     global YUNET_AVAILABLE, _yunet_detector, _sface_recognizer
     global OBJECT_ENGINE_AVAILABLE, _obj_model, _obj_transform
-    global FACE_ENGINE_AVAILABLE
+    global FACE_ENGINE_AVAILABLE, FACE_RECOG_AVAILABLE
 
     # ── 0. Try InsightFace first (preferred) ───────────────────────────────────
     if _global_face_engine is not None and INSIGHTFACE_AVAILABLE:
@@ -714,6 +714,7 @@ def _init_yunet():
             )
             if ok:
                 FACE_ENGINE_AVAILABLE = True
+                FACE_RECOG_AVAILABLE = True
                 app_log.info("[FACE] InsightFace ArcFace Engine ONLINE — YuNet/SFace skipped")
         except Exception as _fe_init_err:
             app_log.warning(f"[FACE] InsightFace init failed: {_fe_init_err}")
@@ -731,6 +732,7 @@ def _init_yunet():
                 _yunet_detector   = cv2.FaceDetectorYN.create(Config.YUNET_MODEL_PATH, "", (320, 320), 0.45)
                 _sface_recognizer = cv2.FaceRecognizerSF.create(Config.SFACE_MODEL_PATH, "")
                 YUNET_AVAILABLE   = True
+                FACE_RECOG_AVAILABLE = True
                 print("[OMS] \u2714 Face Recognition Engine ONLINE (YuNet+SFace fallback)")
                 app_log.info("[FACE] YuNet+SFace Neural Face Engine ONLINE (fallback)")
         except Exception as e:
@@ -2208,7 +2210,7 @@ def async_face(rgb_or_bgr: np.ndarray, is_bgr: bool = False, is_person: bool = T
             pid, name, is_new, score = _global_face_engine.match(best_face.embedding)
             if is_new:
                 if Config.DETECT_NEW_IDS:
-                    if face_size is None or face_size >= 40:
+                    if face_size is None or face_size >= 12:
                         with _face_registration_lock:
                             # Re-match inside lock to prevent parallel thread race conditions
                             pid, name, is_new, score = _global_face_engine.match(best_face.embedding)
@@ -2221,7 +2223,7 @@ def async_face(rgb_or_bgr: np.ndarray, is_bgr: bool = False, is_person: bool = T
                     return None, None, 0.0
             else:
                 # Dynamic Multi-Pose Learning: accumulate high-quality face poses into existing profile
-                if best_face.det_score >= 0.70:
+                if best_face.det_score >= 0.55:
                     known_status = _global_face_engine._meta.get(pid, {}).get("known", False)
                     _global_face_engine.register(pid, name, best_face.embedding, known=known_status)
             return pid, name, score
@@ -3331,7 +3333,8 @@ def camera_thread(cs: CameraState):
                 results = yolo.track(source=small, conf=Config.CONFIDENCE,
                                      device=Config.DEVICE, persist=Config.TRACK_PERSIST,
                                      verbose=False, half=(Config.DEVICE == "cuda"),
-                                     imgsz=max(dw, dh), tracker="bytetrack.yaml")
+                                     imgsz=max(dw, dh), tracker="bytetrack.yaml",
+                                     max_det=300)
                 boxes = results[0].boxes
                 fh_h, fh_w = frame.shape[:2]
                 sx = fh_w / dw; sy = fh_h / dh
@@ -3351,8 +3354,7 @@ def camera_thread(cs: CameraState):
                     w_box = x2 - x1
                     h_box = y2 - y1
                     if label == "person":
-                        if w_box < 25 or h_box < 45: continue
-                        if h_box / max(1, w_box) > 4.0: continue
+                        if w_box < 6 or h_box < 10: continue
                     tid = None
                     if box.id is not None:
                         try: tid = int(box.id[0])

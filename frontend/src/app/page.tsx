@@ -422,6 +422,13 @@ export default function Dashboard() {
   const [wizardName, setWizardName] = useState("");
   const [wizardStep, setWizardStep] = useState(1);
 
+  // Interactive Camera Manager Modal state
+  const [editingCamIdx, setEditingCamIdx] = useState<number | null>(null);
+  const [manageCamName, setManageCamName] = useState("");
+  const [manageCamSource, setManageCamSource] = useState("");
+  const [manageCamLocation, setManageCamLocation] = useState("");
+  const [addModalOpen, setAddModalOpen] = useState(false);
+
   // Config settings state (Dynamically loaded & editable)
   const [opName, setOpName] = useState("Prajan");
   const [ttsEnabled, setTtsEnabled] = useState(true);
@@ -2911,194 +2918,453 @@ export default function Dashboard() {
               <motion.div
                 initial={{ opacity: 0, scale: 0.98 }}
                 animate={{ opacity: 1, scale: 1 }}
-                className="glass-premium flex-1 p-6 flex flex-col min-h-0 h-full overflow-hidden"
+                className="glass-premium flex-1 p-5 flex flex-col min-h-0 h-full overflow-hidden"
               >
-                <div className="flex items-center gap-3 border-b border-white/5 pb-4 mb-4 flex-shrink-0">
-                  <Video className="text-gold-accent" size={20} />
-                  <h2 className="font-orbitron text-base font-black text-gold-accent tracking-widest uppercase">
-                    CCTV CAMERA STREAMING CONTROL MATRIX
-                  </h2>
+                {/* Header with Title and Actions */}
+                <div className="flex items-center justify-between border-b border-white/10 pb-3 mb-4 flex-shrink-0">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2 rounded-xl bg-gold/10 border border-gold/30 text-gold-accent">
+                      <Video size={20} />
+                    </div>
+                    <div>
+                      <h2 className="font-orbitron text-sm font-black text-gold-accent tracking-widest uppercase">
+                        CCTV CAMERA STREAMING CONTROL MATRIX
+                      </h2>
+                      <p className="font-mono text-[9px] text-sec tracking-wider">
+                        CLICK ANY CAMERA TO EDIT, CONFIGURE, OR DELETE
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2.5">
+                    <span className="font-orbitron text-[9px] font-bold text-green-400 bg-green-950/40 border border-green-500/30 px-3 py-1.5 rounded-lg tracking-wider flex items-center gap-1.5 shadow">
+                      <span className="w-2 h-2 rounded-full bg-green-400 animate-ping" />
+                      {cameras.filter(c => c.online).length} ONLINE
+                    </span>
+                    <button
+                      onClick={() => setAddModalOpen(true)}
+                      className="btn-gold-luxury py-1.5 px-3 text-[9px] flex items-center gap-1.5 shadow-gold-glow"
+                    >
+                      <Plus size={12} />
+                      ADD CAMERA
+                    </button>
+                  </div>
                 </div>
 
-                <div className="flex-1 grid grid-cols-2 gap-4 overflow-y-auto pr-1">
+                {/* Main Camera Cards Grid */}
+                <div className="flex-1 grid grid-cols-2 gap-4 overflow-y-auto pr-1 pb-6 auto-rows-max">
                   {cameras.map((cam, idx) => (
-                    <div key={cam.id} className="glass-premium p-4 flex flex-col gap-3 min-h-0 relative">
-                      <div className="flex items-center justify-between flex-shrink-0">
-                        <div className="flex items-center gap-2">
-                          <span className={`status-indicator ${cam.online ? "text-green-oms bg-green-oms animate-pulse" : "text-red-500 bg-red-500"}`} />
-                          <h4 className="font-orbitron text-xs font-black text-gold tracking-widest leading-none">
-                            CAM {cam.id + 1} - {cam.name}
+                    <div
+                      key={cam.id}
+                      className={`glass-premium p-4 flex flex-col gap-3 rounded-2xl border transition-all duration-300 relative group cursor-pointer ${
+                        cam.online
+                          ? "border-gold/30 hover:border-gold shadow-lg hover:shadow-gold-glow/20 bg-black/40"
+                          : "border-white/10 opacity-70 hover:opacity-100 bg-black/30"
+                      }`}
+                      onClick={() => {
+                        setEditingCamIdx(idx);
+                        setManageCamName(cam.name);
+                        setManageCamSource(cam.source || "");
+                        setManageCamLocation(cam.location || "Monitored Sector");
+                      }}
+                    >
+                      {/* Top Card Bar */}
+                      <div className="flex items-center justify-between flex-shrink-0" onClick={(e) => e.stopPropagation()}>
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${cam.online ? "bg-green-400 animate-pulse shadow-[0_0_10px_#22c55e]" : "bg-red-500"}`} />
+                          <h4 className="font-orbitron text-xs font-black text-gold tracking-wider truncate">
+                            CH-{cam.id + 1}: {cam.name.toUpperCase()}
                           </h4>
                         </div>
-                        <span className="font-orbitron text-[8.5px] font-bold text-sec bg-white/5 px-2 py-0.5 rounded tracking-widest">
-                          {cam.online ? "SECURE FEED" : "NO CORRELATION"}
-                        </span>
+                        
+                        {/* Quick Header Action Icons */}
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            onClick={() => {
+                              setActiveCam(idx);
+                              setActiveNav("overview");
+                            }}
+                            className="p-1.5 rounded-lg bg-gold/10 hover:bg-gold/30 text-gold-accent border border-gold/30 transition-all"
+                            title="Focus in Main HUD"
+                          >
+                            <Maximize2 size={11} />
+                          </button>
+                          <button
+                            onClick={() => {
+                              setEditingCamIdx(idx);
+                              setManageCamName(cam.name);
+                              setManageCamSource(cam.source || "");
+                              setManageCamLocation(cam.location || "Monitored Sector");
+                            }}
+                            className="p-1.5 rounded-lg bg-white/5 hover:bg-white/20 text-sec hover:text-white border border-white/10 transition-all"
+                            title="Edit Camera Details"
+                          >
+                            <Edit2 size={11} />
+                          </button>
+                          <button
+                            onClick={() => removeCam(idx)}
+                            disabled={btnLoading[`remove_cam_${idx}`]}
+                            className="p-1.5 rounded-lg bg-red-950/30 hover:bg-red-900/60 text-red-400 border border-red-500/30 transition-all"
+                            title="Delete this camera"
+                          >
+                            {btnLoading[`remove_cam_${idx}`] ? <RefreshCw size={11} className="animate-spin" /> : <Trash size={11} />}
+                          </button>
+                        </div>
                       </div>
 
-                      {/* Small camera view or placeholder */}
-                      <div className="h-[120px] rounded-lg bg-black/60 border border-white/5 overflow-hidden relative flex items-center justify-center flex-shrink-0">
+                      {/* True 16:9 HD Camera Viewport */}
+                      <div className="w-full aspect-video rounded-xl bg-black border border-white/15 overflow-hidden relative flex items-center justify-center shadow-inner">
                         {cam.online ? (
-                          <img
-                            src={`${API}/api/camera/${idx}/snapshot?t=${telemetry?.uptime_secs || 0}`}
-                            alt={cam.name}
-                            className="w-full h-full object-cover"
-                          />
+                          <>
+                            <img
+                              src={`${API}/api/stream/${idx}`}
+                              alt={cam.name}
+                              className="w-full h-full object-contain bg-black"
+                            />
+                            {/* HUD Corner Accents */}
+                            <div className="absolute top-2 left-2 w-3.5 h-3.5 border-t-2 border-l-2 border-gold-accent/80 pointer-events-none" />
+                            <div className="absolute top-2 right-2 w-3.5 h-3.5 border-t-2 border-r-2 border-gold-accent/80 pointer-events-none" />
+                            <div className="absolute bottom-2 left-2 w-3.5 h-3.5 border-b-2 border-l-2 border-gold-accent/80 pointer-events-none" />
+                            <div className="absolute bottom-2 right-2 w-3.5 h-3.5 border-b-2 border-r-2 border-gold-accent/80 pointer-events-none" />
+
+                            {/* Floating Telemetry Badge */}
+                            <div className="absolute top-2.5 left-3 bg-black/80 backdrop-blur px-2.5 py-1 rounded-md text-[9px] font-orbitron font-bold text-gold-accent border border-gold/40 flex items-center gap-1.5 shadow-lg">
+                              <span className="w-2 h-2 rounded-full bg-red-500 animate-ping" />
+                              LIVE FEED
+                            </div>
+
+                            {/* Click Indicator on Hover */}
+                            <div className="absolute inset-0 bg-black/40 backdrop-blur-[1px] opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2 pointer-events-none">
+                              <div className="btn-gold-luxury py-1.5 px-3.5 text-[9.5px] flex items-center gap-1.5 shadow-2xl">
+                                <Edit2 size={11} />
+                                CLICK TO MANAGE
+                              </div>
+                            </div>
+                          </>
                         ) : (
-                          <div className="flex flex-col items-center gap-1.5 text-center">
-                            <Eye size={16} className="text-muted animate-pulse" />
-                            <span className="font-orbitron text-[8px] text-muted tracking-widest">STREAM TERMINATED</span>
+                          <div className="flex flex-col items-center gap-2 text-center p-6">
+                            <Eye size={24} className="text-muted/60" />
+                            <span className="font-orbitron text-[10px] text-muted tracking-widest">FEED OFFLINE / DISCONNECTED</span>
+                            <span className="font-mono text-[9px] text-muted/60 max-w-[240px] truncate">{cam.source || "No source assigned"}</span>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                connectCctv(idx);
+                              }}
+                              className="mt-1 px-3 py-1 bg-gold/10 hover:bg-gold/20 text-gold-accent border border-gold/30 rounded-lg text-[9px] font-orbitron font-bold flex items-center gap-1"
+                            >
+                              <Wifi size={10} /> RECONNECT
+                            </button>
                           </div>
                         )}
                       </div>
 
-                      {/* Name & URL Reconnection Inputs */}
-                      <div className="flex flex-col gap-2 text-[9px] font-orbitron font-bold text-sec tracking-wider">
-                        <div className="flex flex-col gap-1">
-                          <span>CAMERA CHANNEL NAME</span>
-                          <div className="flex gap-2">
-                            <input
-                              type="text"
-                              value={camNames[idx] !== undefined ? camNames[idx] : cam.name}
-                              onChange={(e) => {
-                                const newNames = [...camNames];
-                                if (newNames.length === 0 && cameras.length > 0) {
-                                  for (let k = 0; k < cameras.length; k++) {
-                                    newNames[k] = cameras[k].name;
-                                  }
-                                }
-                                newNames[idx] = e.target.value;
-                                setCamNames(newNames);
-                              }}
-                              placeholder="e.g. Front Door"
-                              className="flex-1 glass-premium bg-black/40 border border-white/10 text-white font-mono text-xs px-3 py-1.5 rounded-lg outline-none focus:border-gold-accent transition-colors"
-                            />
-                            <button
-                              onClick={() => renameCam(idx)}
-                              disabled={btnLoading[`rename_cam_${idx}`]}
-                              className="btn-gold-luxury py-1 px-3 text-[8.5px] justify-center"
-                              title="Rename this camera channel"
-                            >
-                              {btnLoading[`rename_cam_${idx}`] ? (
-                                <RefreshCw size={10} className="animate-spin text-gold-accent" />
-                              ) : (
-                                <Save size={10} />
-                              )}
-                              RENAME
-                            </button>
-                            <button
-                              onClick={() => removeCam(idx)}
-                              disabled={btnLoading[`remove_cam_${idx}`]}
-                              className="glass-premium flex items-center gap-1 py-1 px-3 text-[8.5px] justify-center border border-red-500/20 hover:border-red-500/40 bg-red-950/20 hover:bg-red-900/30 text-red-400 rounded-lg transition-all"
-                              title="Remove this camera channel"
-                            >
-                              {btnLoading[`remove_cam_${idx}`] ? (
-                                <RefreshCw size={10} className="animate-spin text-red-400" />
-                              ) : (
-                                <Trash size={10} />
-                              )}
-                              REMOVE
-                            </button>
-                          </div>
-                        </div>
-
-                        <div className="flex flex-col gap-1">
-                          <span>CCTV URL / DEVICE ID</span>
-                          <div className="flex gap-2">
-                            <input
-                              type="text"
-                              value={camConnectUrls[idx] !== undefined ? camConnectUrls[idx] : cam.source || ""}
-                              onChange={(e) => {
-                                const newUrls = [...camConnectUrls];
-                                if (newUrls.length === 0 && cameras.length > 0) {
-                                  for (let k = 0; k < cameras.length; k++) {
-                                    newUrls[k] = cameras[k].source || "";
-                                  }
-                                }
-                                newUrls[idx] = e.target.value;
-                                setCamConnectUrls(newUrls);
-                              }}
-                              placeholder="e.g. 0, rtsp://address, http://"
-                              className="flex-1 glass-premium bg-black/40 border border-white/10 text-white font-mono text-xs px-3 py-1.5 rounded-lg outline-none focus:border-gold-accent transition-colors"
-                            />
-                            <button
-                              onClick={() => connectCctv(idx)}
-                              disabled={btnLoading[`connect_cam_${idx}`]}
-                              className="btn-gold-luxury py-1 px-3 text-[8.5px] justify-center"
-                              title="Toggles a secure feed connection/reconnection logic"
-                            >
-                              {btnLoading[`connect_cam_${idx}`] ? (
-                                <RefreshCw size={10} className="animate-spin text-gold-accent" />
-                              ) : (
-                                <Wifi size={10} />
-                              )}
-                              CONNECT
-                            </button>
-                          </div>
-                        </div>
+                      {/* Footer Info Strip */}
+                      <div className="flex items-center justify-between text-[9px] font-mono text-sec pt-1 border-t border-white/5" onClick={(e) => e.stopPropagation()}>
+                        <span className="truncate max-w-[200px] text-muted">SRC: {cam.source || "0"}</span>
+                        <span className="text-gold-accent uppercase font-bold">{cam.location || "SECTOR"}</span>
                       </div>
                     </div>
                   ))}
 
-                  {/* ADD NEW CAMERA NODE */}
-                  <div className="glass-premium p-4 flex flex-col gap-3 min-h-0 border border-dashed border-white/10 hover:border-gold-accent/40 hover:bg-white/[0.01] rounded-xl transition-all">
-                    <div className="flex items-center gap-2 flex-shrink-0">
-                      <Plus className="text-gold-accent" size={14} />
-                      <h4 className="font-orbitron text-xs font-black text-gold tracking-widest leading-none">
-                        ADD NEW CCTV NODE
-                      </h4>
+                  {/* Sleek ADD NEW CAMERA Card */}
+                  <div
+                    onClick={() => setAddModalOpen(true)}
+                    className="glass-premium p-6 flex flex-col items-center justify-center gap-3 rounded-2xl border-2 border-dashed border-gold/30 hover:border-gold hover:bg-gold/[0.03] transition-all cursor-pointer min-h-[220px]"
+                  >
+                    <div className="w-12 h-12 rounded-2xl bg-gold/10 border border-gold/40 flex items-center justify-center text-gold-accent shadow-gold-glow/20">
+                      <Plus size={24} />
                     </div>
+                    <div className="text-center">
+                      <h4 className="font-orbitron text-xs font-black text-gold tracking-widest uppercase">
+                        ADD NEW CCTV CAMERA
+                      </h4>
+                      <p className="font-mono text-[9px] text-sec mt-0.5">
+                        RTSP Stream, IP Cam, or USB DirectShow
+                      </p>
+                    </div>
+                  </div>
+                </div>
 
-                    <div className="flex flex-col gap-2 text-[9px] font-orbitron font-bold text-sec tracking-wider">
-                      <div className="flex flex-col gap-1">
-                        <span>CAMERA CHANNEL NAME</span>
-                        <input
-                          type="text"
-                          value={newCamName}
-                          onChange={(e) => setNewCamName(e.target.value)}
-                          placeholder="e.g. Back Alley Cam"
-                          className="glass-premium bg-black/40 border border-white/10 text-white font-mono text-xs px-3 py-1.5 rounded-lg outline-none focus:border-gold-accent transition-colors"
-                        />
+                {/* ── MANAGE / EDIT CAMERA MODAL ── */}
+                {editingCamIdx !== null && (
+                  <div
+                    className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4 animate-fade-in"
+                    onClick={() => setEditingCamIdx(null)}
+                  >
+                    <div
+                      className="glass-premium w-full max-w-lg p-6 rounded-2xl border border-gold/50 shadow-2xl flex flex-col gap-4 bg-zinc-950/95"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      {/* Modal Header */}
+                      <div className="flex items-center justify-between border-b border-white/10 pb-3">
+                        <div className="flex items-center gap-2.5">
+                          <div className="p-2 rounded-xl bg-gold/10 text-gold-accent border border-gold/30">
+                            <Video size={18} />
+                          </div>
+                          <div>
+                            <h3 className="font-orbitron text-sm font-black text-gold tracking-wider">
+                              MANAGE CAMERA: CH-{editingCamIdx + 1}
+                            </h3>
+                            <p className="font-mono text-[9.5px] text-sec">
+                              CONFIGURE STREAM PROPERTIES & DETECTIONS
+                            </p>
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => setEditingCamIdx(null)}
+                          className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-sec hover:text-white transition-colors"
+                        >
+                          <X size={16} />
+                        </button>
                       </div>
 
-                      <div className="flex flex-col gap-1">
-                        <span>CCTV URL / DEVICE ID</span>
-                        <input
-                          type="text"
-                          value={newCamSource}
-                          onChange={(e) => setNewCamSource(e.target.value)}
-                          placeholder="e.g. 1, rtsp://address, http://"
-                          className="glass-premium bg-black/40 border border-white/10 text-white font-mono text-xs px-3 py-1.5 rounded-lg outline-none focus:border-gold-accent transition-colors"
-                        />
+                      {/* Live Preview Inside Modal */}
+                      <div className="w-full aspect-video rounded-xl bg-black border border-white/10 overflow-hidden relative flex items-center justify-center">
+                        {cameras[editingCamIdx]?.online ? (
+                          <img
+                            src={`${API}/api/stream/${editingCamIdx}`}
+                            alt={cameras[editingCamIdx]?.name}
+                            className="w-full h-full object-contain"
+                          />
+                        ) : (
+                          <div className="text-center p-4 text-muted font-orbitron text-[10px]">
+                            STREAM OFFLINE
+                          </div>
+                        )}
                       </div>
 
-                      <div className="flex flex-col gap-1">
-                        <span>LOCATION / ZONE</span>
-                        <div className="flex gap-2">
+                      {/* Edit Fields */}
+                      <div className="flex flex-col gap-3 font-orbitron text-[9.5px] font-bold text-sec">
+                        <div className="flex flex-col gap-1">
+                          <span className="text-gold-accent">CAMERA NAME</span>
                           <input
                             type="text"
-                            value={newCamLocation}
-                            onChange={(e) => setNewCamLocation(e.target.value)}
-                            placeholder="e.g. Server Room Entrance"
-                            className="flex-1 glass-premium bg-black/40 border border-white/10 text-white font-mono text-xs px-3 py-1.5 rounded-lg outline-none focus:border-gold-accent transition-colors"
+                            value={manageCamName}
+                            onChange={(e) => setManageCamName(e.target.value)}
+                            placeholder="e.g. Front Gate CCTV"
+                            className="glass-premium bg-black/60 border border-white/15 text-white font-mono text-xs px-3.5 py-2 rounded-xl outline-none focus:border-gold-accent"
                           />
+                        </div>
+
+                        <div className="flex flex-col gap-1">
+                          <span className="text-gold-accent">RTSP STREAM URL / DEVICE ID</span>
+                          <input
+                            type="text"
+                            value={manageCamSource}
+                            onChange={(e) => setManageCamSource(e.target.value)}
+                            placeholder="rtsp://admin:pass@192.168.1.XX:554/... or 0"
+                            className="glass-premium bg-black/60 border border-white/15 text-white font-mono text-xs px-3.5 py-2 rounded-xl outline-none focus:border-gold-accent"
+                          />
+                        </div>
+
+                        <div className="flex flex-col gap-1">
+                          <span className="text-gold-accent">LOCATION / SECTOR ZONE</span>
+                          <input
+                            type="text"
+                            value={manageCamLocation}
+                            onChange={(e) => setManageCamLocation(e.target.value)}
+                            placeholder="e.g. Entrance Gate Sector"
+                            className="glass-premium bg-black/60 border border-white/15 text-white font-mono text-xs px-3.5 py-2 rounded-xl outline-none focus:border-gold-accent"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Modal Action Buttons */}
+                      <div className="flex items-center justify-between gap-2 pt-3 border-t border-white/10">
+                        <button
+                          onClick={async () => {
+                            const idx = editingCamIdx;
+                            setEditingCamIdx(null);
+                            await removeCam(idx);
+                          }}
+                          className="px-4 py-2 bg-red-950/40 hover:bg-red-900/60 text-red-400 border border-red-500/30 rounded-xl text-[9.5px] font-orbitron font-bold flex items-center gap-1.5 transition-all"
+                        >
+                          <Trash size={12} />
+                          DELETE CAMERA
+                        </button>
+
+                        <div className="flex items-center gap-2">
                           <button
-                            onClick={addCam}
-                            disabled={btnLoading["add_cam"]}
-                            className="btn-gold-luxury py-1 px-4 text-[8.5px] justify-center flex-shrink-0"
-                            title="Register and initialize this new camera channel"
+                            onClick={() => {
+                              setActiveCam(editingCamIdx);
+                              setActiveNav("overview");
+                              setEditingCamIdx(null);
+                            }}
+                            className="px-4 py-2 bg-white/5 hover:bg-white/15 text-white border border-white/15 rounded-xl text-[9.5px] font-orbitron font-bold flex items-center gap-1.5 transition-all"
                           >
-                            {btnLoading["add_cam"] ? (
-                              <RefreshCw size={10} className="animate-spin text-gold-accent" />
-                            ) : (
-                              <Plus size={10} />
-                            )}
-                            ADD CAMERA
+                            <Maximize2 size={12} />
+                            VIEW ON HUD
+                          </button>
+                          
+                          <button
+                            onClick={async () => {
+                              const idx = editingCamIdx;
+                              const newNames = [...camNames];
+                              newNames[idx] = manageCamName;
+                              setCamNames(newNames);
+                              const newUrls = [...camConnectUrls];
+                              newUrls[idx] = manageCamSource;
+                              setCamConnectUrls(newUrls);
+                              
+                              await renameCam(idx);
+                              if (manageCamSource !== cameras[idx]?.source) {
+                                await connectCctv(idx);
+                              }
+                              setEditingCamIdx(null);
+                            }}
+                            className="btn-gold-luxury px-5 py-2 text-[9.5px] flex items-center gap-1.5 shadow-gold-glow"
+                          >
+                            <Save size={12} />
+                            SAVE & APPLY
                           </button>
                         </div>
                       </div>
                     </div>
                   </div>
-                </div>
+                )}
+
+                {/* ── ADD NEW CAMERA MODAL ── */}
+                {addModalOpen && (
+                  <div
+                    className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4 animate-fade-in"
+                    onClick={() => setAddModalOpen(false)}
+                  >
+                    <div
+                      className="glass-premium w-full max-w-lg p-6 rounded-2xl border border-gold/50 shadow-2xl flex flex-col gap-4 bg-zinc-950/95"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <div className="flex items-center justify-between border-b border-white/10 pb-3">
+                        <div className="flex items-center gap-2.5">
+                          <div className="p-2 rounded-xl bg-gold/10 text-gold-accent border border-gold/30">
+                            <Plus size={18} />
+                          </div>
+                          <div>
+                            <h3 className="font-orbitron text-sm font-black text-gold tracking-wider">
+                              ADD NEW CCTV NODE
+                            </h3>
+                            <p className="font-mono text-[9.5px] text-sec">
+                              CONNECT RTSP IP CAMERA, ONVIF, OR USB DEVICE
+                            </p>
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => setAddModalOpen(false)}
+                          className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-sec hover:text-white transition-colors"
+                        >
+                          <X size={16} />
+                        </button>
+                      </div>
+
+                      {/* Quick Presets */}
+                      <div className="flex flex-col gap-1.5">
+                        <span className="font-orbitron text-[8.5px] font-bold text-gold-accent uppercase">ONE-CLICK PRESETS</span>
+                        <div className="grid grid-cols-2 gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setNewCamName("HIKVISION CCTV");
+                              setNewCamSource("rtsp://admin:abcd1234@192.168.1.200:554/Streaming/Channels/101");
+                              setNewCamLocation("Entrance Gate");
+                            }}
+                            className="p-2 bg-white/5 hover:bg-gold/15 border border-white/10 hover:border-gold/50 text-[9px] font-orbitron font-bold text-gold-accent rounded-xl text-left transition-all"
+                          >
+                            📹 HIKVISION (192.168.1.200)
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setNewCamName("TAPO RTSP");
+                              setNewCamSource("rtsp://admin:password@192.168.1.50:554/stream1");
+                              setNewCamLocation("Office Hallway");
+                            }}
+                            className="p-2 bg-white/5 hover:bg-gold/15 border border-white/10 hover:border-gold/50 text-[9px] font-orbitron font-bold text-sec hover:text-gold-accent rounded-xl text-left transition-all"
+                          >
+                            📹 TAPO / ONVIF
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setNewCamName("PHONE IP CAM");
+                              setNewCamSource("http://192.168.1.100:8080/video");
+                              setNewCamLocation("Mobile Zone");
+                            }}
+                            className="p-2 bg-white/5 hover:bg-gold/15 border border-white/10 hover:border-gold/50 text-[9px] font-orbitron font-bold text-sec hover:text-gold-accent rounded-xl text-left transition-all"
+                          >
+                            📱 PHONE IP CAM
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setNewCamName("USB WEBCAM 0");
+                              setNewCamSource("0");
+                              setNewCamLocation("Control Desk");
+                            }}
+                            className="p-2 bg-white/5 hover:bg-gold/15 border border-white/10 hover:border-gold/50 text-[9px] font-orbitron font-bold text-sec hover:text-gold-accent rounded-xl text-left transition-all"
+                          >
+                            💻 LOCAL WEBCAM (0)
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Inputs */}
+                      <div className="flex flex-col gap-3 font-orbitron text-[9.5px] font-bold text-sec">
+                        <div className="flex flex-col gap-1">
+                          <span className="text-gold-accent">CHANNEL NAME</span>
+                          <input
+                            type="text"
+                            value={newCamName}
+                            onChange={(e) => setNewCamName(e.target.value)}
+                            placeholder="e.g. Front Gate Camera"
+                            className="glass-premium bg-black/60 border border-white/15 text-white font-mono text-xs px-3.5 py-2 rounded-xl outline-none focus:border-gold-accent"
+                          />
+                        </div>
+
+                        <div className="flex flex-col gap-1">
+                          <span className="text-gold-accent">RTSP URL / DEVICE ID</span>
+                          <input
+                            type="text"
+                            value={newCamSource}
+                            onChange={(e) => setNewCamSource(e.target.value)}
+                            placeholder="rtsp://admin:pass@IP:554/stream or 0"
+                            className="glass-premium bg-black/60 border border-white/15 text-white font-mono text-xs px-3.5 py-2 rounded-xl outline-none focus:border-gold-accent"
+                          />
+                        </div>
+
+                        <div className="flex flex-col gap-1">
+                          <span className="text-gold-accent">LOCATION / SECTOR</span>
+                          <input
+                            type="text"
+                            value={newCamLocation}
+                            onChange={(e) => setNewCamLocation(e.target.value)}
+                            placeholder="e.g. Main Entrance"
+                            className="glass-premium bg-black/60 border border-white/15 text-white font-mono text-xs px-3.5 py-2 rounded-xl outline-none focus:border-gold-accent"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-end gap-2 pt-3 border-t border-white/10">
+                        <button
+                          onClick={() => setAddModalOpen(false)}
+                          className="px-4 py-2 bg-white/5 hover:bg-white/10 text-sec hover:text-white rounded-xl text-[9.5px] font-orbitron font-bold transition-all"
+                        >
+                          CANCEL
+                        </button>
+                        <button
+                          onClick={async () => {
+                            await addCam();
+                            setAddModalOpen(false);
+                          }}
+                          disabled={btnLoading["add_cam"]}
+                          className="btn-gold-luxury px-6 py-2 text-[9.5px] flex items-center gap-1.5 shadow-gold-glow"
+                        >
+                          {btnLoading["add_cam"] ? <RefreshCw size={12} className="animate-spin" /> : <Plus size={12} />}
+                          ADD CAMERA CHANNEL
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </motion.div>
             )}
 

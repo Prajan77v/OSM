@@ -1,28 +1,59 @@
 operator:
   username: Prajan
+cameras:
+- id: 0
+  source: 0
+  name: LOCAL CAM
+  enabled: true
+  location: Main Entrance Sector
+- id: 1
+  source: NONE
+  name: CCTV NODE-2
+  enabled: false
+  location: Office Sector B
+- id: 2
+  source: NONE
+  name: CCTV NODE-3
+  enabled: false
+  location: Restricted Storage Area
+- id: 3
+  source: NONE
+  name: PHONE / IP CAM
+  enabled: false
+  location: Mobile Sector D
+- id: 4
+  source: rtsp://admin:abcd1234@192.168.1.200:554/Streaming/Channels/101
+  name: CAMM
+  enabled: true
+  location: open
+- id: 5
+  source: rtsp://admin:abcd1234@192.168.1.200:554/Streaming/Channels/102
+  name: '22'
+  enabled: true
+  location: open
 performance:
-  lightweight_mode: true
+  lightweight_mode: false
 detection:
-  confidence: 0.5
+  confidence: 0.25
   use_cuda: false
   detect_people: true
   detect_objects: true
-  profile: LOW
-  frame_w: 512
-  frame_h: 288
+  profile: MEDIUM
+  frame_w: 1280
+  frame_h: 720
   det_w:
-    LOW: 320
-    MEDIUM: 384
-    HIGH: 512
+    LOW: 640
+    MEDIUM: 640
+    HIGH: 960
   det_h:
-    LOW: 192
-    MEDIUM: 224
-    HIGH: 320
+    LOW: 384
+    MEDIUM: 480
+    HIGH: 640
   process_every_n:
-    LOW: 3
-    MEDIUM: 2
-    HIGH: 2
-  max_detections: 20
+    LOW: 1
+    MEDIUM: 1
+    HIGH: 1
+  max_detections: 300
   use_yolo_tracker: true
   model:
     LOW: yolov8n.pt
