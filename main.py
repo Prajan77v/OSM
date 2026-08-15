@@ -3541,7 +3541,11 @@ def camera_thread(cs: CameraState):
                                     del cs.track_to_pid[tid]
                                     continue
                                 if is_person:
-                                    disp = name.split("-")[0][:12]
+                                    is_known_profile = faces_db[pid].get("known", False)
+                                    if is_known_profile:
+                                        disp = name.upper()[:20]
+                                    else:
+                                        disp = name.replace("Intruder-", "UNKNOWN-").upper()[:16]
                                 else:
                                     disp = f"OBJECT: {name}"[:22]
                         if not is_person:
@@ -3553,6 +3557,7 @@ def camera_thread(cs: CameraState):
                         if not is_locked:
                             fr_cd = cs.tid_face_cd.get(tid, 0)
                             if fr_cd <= 0 and tid not in cs.pending_futures:
+                                cs.tid_face_cd[tid] = 30 # Cooldown to keep tracking buttery smooth at 30+ FPS
                                 x1f, y1f, x2f, y2f = d["box"]
                                 h_img, w_img = frame.shape[:2]
                                 if is_person:

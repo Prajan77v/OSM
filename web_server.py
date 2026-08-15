@@ -1216,14 +1216,81 @@ def create_app() -> "FastAPI":
                     return JSONResponse({"status": "error", "message": "Name cannot be empty"}, status_code=400)
 
                 with sv._fdb_lock:
-                    if pid in sv.faces_db:
-                        old_name = sv.faces_db[pid].get("name", "Unknown")
-                        sv.faces_db[pid]["name"] = new_name
-                        sv.faces_db[pid]["known"] = True
+                    target_pid = pid
+                    # If target is an active Unknown track (e.g. Unknown-1, Unknown-2), register it now
+                    if target_pid not in sv.faces_db:
+                        # Generate a clean PID for this new subject
+                        new_assigned_pid = f"P{len(sv.faces_db)+1}"
+                        created_profile = {
+                            "name": new_name,
+                            "known": True,
+                            "in_scene": True,
+                            "first_seen": datetime.now().isoformat(),
+                            "last_seen": datetime.now().isoformat(),
+                            "visit_count": 1,
+                            "photo": None
+                        }
+                        sv.faces_db[new_assigned_pid] = created_profile
+
+                        # If face engine is available, register embedding from active track
+                        with _cameras_lock:
+                            cams_list = list(_cameras)
+                        
+                        track_tid = None
+                        if pid.startswith("Unknown-"):
+                            try: track_tid = int(pid.split("-")[1])
+                            except Exception: pass
+
+                        crop_saved = False
+                        known_dir = Path(sv.Config.KNOWN_FACES_DIR)
+                        known_dir.mkdir(parents=True, exist_ok=True)
+                        dest_img = known_dir / f"{new_name}.jpg"
+
+                        for cs in cams_list:
+                            if track_tid is not None and track_tid in cs.track_to_pid:
+                                cs.track_to_pid[track_tid] = new_assigned_pid
+                                cs.tid_identity_locked[track_tid] = True
+                            with cs.frame_lock:
+                                f_copy = cs.latest_frame.copy() if cs.latest_frame is not None else None
+                            if f_copy is not None:
+                                for d in getattr(cs, "latest_dets", []):
+                                    if d.get("pid") == pid or (track_tid is not None and d.get("tid") == track_tid):
+                                        d["pid"] = new_assigned_pid
+                                        d["disp"] = new_name.upper()
+                                        x1, y1, x2, y2 = d["box"]
+                                        H, W = f_copy.shape[:2]
+                                        x1, y1 = max(0, int(x1)), max(0, int(y1))
+                                        x2, y2 = min(W, int(x2)), min(H, int(y2))
+                                        crop = f_copy[y1:y2, x1:x2]
+                                        if crop.size > 0:
+                                            cv2.imwrite(str(dest_img), crop)
+                                            crop_saved = True
+                                            if getattr(sv, "FACE_ENGINE_AVAILABLE", False) and getattr(sv, "_global_face_engine", None) is not None:
+                                                try:
+                                                    sv._global_face_engine.register_face(new_assigned_pid, new_name, crop, is_known=True)
+                                                except Exception:
+                                                    pass
+                                            break
+                            if crop_saved: break
+
+                        if crop_saved:
+                            try: sv.faces_db[new_assigned_pid]["photo"] = str(dest_img.relative_to(WORKING_DIR))
+                            except Exception: sv.faces_db[new_assigned_pid]["photo"] = str(dest_img)
+
+                        target_pid = new_assigned_pid
+                        old_name = "Unknown"
+                        sv._save_db_json()
+                        sv._enc_dirty = True
+                        speak_name = new_name
+
+                    else:
+                        old_name = sv.faces_db[target_pid].get("name", "Unknown")
+                        sv.faces_db[target_pid]["name"] = new_name
+                        sv.faces_db[target_pid]["known"] = True
 
                         if getattr(sv, "FACE_ENGINE_AVAILABLE", False) and getattr(sv, "_global_face_engine", None) is not None:
                             try:
-                                sv._global_face_engine.rename(pid, new_name, set_known=True)
+                                sv._global_face_engine.rename(target_pid, new_name, set_known=True)
                             except Exception:
                                 pass
 
@@ -1235,7 +1302,7 @@ def create_app() -> "FastAPI":
                         dest_img = known_dir / f"{new_name}.jpg"
 
                         photo_copied = False
-                        photo_val = sv.faces_db[pid].get("photo")
+                        photo_val = sv.faces_db[target_pid].get("photo")
                         if photo_val:
                             p_path = Path(photo_val)
                             if not p_path.is_absolute():
@@ -1248,56 +1315,46 @@ def create_app() -> "FastAPI":
                                     pass
 
                         if not photo_copied:
-                            captured_dir = WORKING_DIR / "objects/captured"
-                            if captured_dir.exists():
-                                matches = sorted(list(captured_dir.glob(f"{pid}_*.jpg")), key=os.path.getmtime, reverse=True)
-                                if matches:
-                                    try:
-                                        shutil.copy(str(matches[0]), str(dest_img))
-                                        photo_copied = True
-                                    except Exception:
-                                        pass
-
-                        if not photo_copied:
                             with _cameras_lock:
                                 cams_s = list(_cameras)
                             for cs in cams_s:
-                                if pid in getattr(cs, "present_pids", set()):
-                                    frame = None
-                                    with cs.frame_lock:
-                                        if cs.latest_frame is not None:
-                                            frame = cs.latest_frame.copy()
-                                    if frame is not None:
-                                        try:
-                                            fw = getattr(sv.Config, "FRAME_W", 640)
-                                            fh = getattr(sv.Config, "FRAME_H", 360)
-                                            for d in getattr(cs, "latest_dets", []):
-                                                if d.get("pid") == pid:
-                                                    x1, y1, x2, y2 = d["box"]
-                                                    H, W = frame.shape[:2]
-                                                    sx = W / fw; sy = H / fh
-                                                    x1_f = int(x1 * sx); y1_f = int(y1 * sy)
-                                                    x2_f = int(x2 * sx); y2_f = int(y2 * sy)
-                                                    pad = int((y2_f - y1_f) * 0.15)
-                                                    crop = frame[max(0, y1_f-pad):min(H, y2_f+pad), max(0, x1_f-pad):min(W, x2_f+pad)]
-                                                    if crop.size > 0:
-                                                        cv2.imwrite(str(dest_img), crop)
-                                                        photo_copied = True
-                                                        break
-                                        except Exception:
-                                            pass
-                                    if photo_copied:
-                                        break
+                                frame = None
+                                with cs.frame_lock:
+                                    if cs.latest_frame is not None:
+                                        frame = cs.latest_frame.copy()
+                                if frame is not None:
+                                    for d in getattr(cs, "latest_dets", []):
+                                        if d.get("pid") == target_pid:
+                                            d["disp"] = new_name.upper()
+                                            x1, y1, x2, y2 = d["box"]
+                                            H, W = frame.shape[:2]
+                                            x1, y1 = max(0, int(x1)), max(0, int(y1))
+                                            x2, y2 = min(W, int(x2)), min(H, int(y2))
+                                            crop = frame[y1:y2, x1:x2]
+                                            if crop.size > 0:
+                                                cv2.imwrite(str(dest_img), crop)
+                                                photo_copied = True
+                                                break
+                                if photo_copied:
+                                    break
 
                         if photo_copied:
                             try:
-                                sv.faces_db[pid]["photo"] = str(dest_img.relative_to(WORKING_DIR))
+                                sv.faces_db[target_pid]["photo"] = str(dest_img.relative_to(WORKING_DIR))
                             except ValueError:
-                                sv.faces_db[pid]["photo"] = str(dest_img)
+                                sv.faces_db[target_pid]["photo"] = str(dest_img)
+
+                        # Lock active tracks to this newly renamed known profile immediately
+                        with _cameras_lock:
+                            for cs in _cameras:
+                                for t_id, p_id in list(cs.track_to_pid.items()):
+                                    if p_id == target_pid:
+                                        cs.tid_identity_locked[t_id] = True
+                                for d in getattr(cs, "latest_dets", []):
+                                    if d.get("pid") == target_pid:
+                                        d["disp"] = new_name.upper()
 
                         sv._save_db_json()
-                        # FE-03: Call preload_known AFTER releasing _fdb_lock
-                        # (we'll call it after the with block)
 
                         if "Intruder" in old_name or "Object-" in old_name:
                             any_intruders = False
@@ -1321,9 +1378,6 @@ def create_app() -> "FastAPI":
 
                         sv._enc_dirty = True
                         speak_name = new_name
-
-                    else:
-                        return JSONResponse({"status": "error", "message": f"PID {pid} not found in database"}, status_code=404)
 
                 # FE-03: preload_known called OUTSIDE _fdb_lock
                 try:
