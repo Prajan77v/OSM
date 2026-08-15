@@ -1,205 +1,408 @@
 """
-OMS Stable Identity Engine
-==========================
-Provides temporally-stable identity assignment for persistent multi-person tracking.
-
-Key guarantees:
-  - Confirmed identities are NEVER reset by a single bad recognition frame
-  - Names persist for IDENTITY_GRACE_SECS after face disappears / occlusion
-  - Track IDs are never reused within ID_REUSE_BLOCK_SECS after deletion
-  - Identity changes require MIN_CONFIRM_FRAMES consecutive high-conf results
-  - Strong override requires OVERRIDE_MIN_FRAMES consecutive results for a *different* pid
+OMS Production-Grade Tracking & Stable Identity Engine
+======================================================
+Provides:
+  1. High-precision 2D Kalman Filter (KalmanBoxTracker) per track
+  2. Velocity-adaptive temporal box smoothing (AdaptiveBoxSmoother) for zero-jitter HUD
+  3. Continuous prediction & interpolation across skipped/detector frames (30+ FPS HUD)
+  4. Robust track state machine (NEW -> TENTATIVE -> CONFIRMED -> LOST -> TERMINATED)
+  5. Multi-frame identity confirmation & permanent locking through occlusions (e.g. phone in front of face)
+  6. Clean sequential temporary IDs for unknown persons (UNKNOWN #01, UNKNOWN #02)
 """
 
 from __future__ import annotations
 import threading
 import time
+import math
 import logging
 from dataclasses import dataclass, field
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
+import numpy as np
 
-log = logging.getLogger("OMS.identity")
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Tuning knobs — all can be overridden via Config if needed
-# ──────────────────────────────────────────────────────────────────────────────
-
-# Minimum consecutive recognition frames before an identity is *confirmed*
-MIN_CONFIRM_FRAMES      = 3
-
-# Minimum confidence to count toward confirmation
-CONFIRM_MIN_CONF        = 0.45
-
-# Seconds a confirmed identity is retained after the track stops being detected
-IDENTITY_GRACE_SECS     = 8.0
-
-# Frames without detection before track moves to LOST state
-LOST_FRAMES_THRESH      = 60   # ~2 s at 30 fps
-
-# Seconds a LOST track is kept in memory for re-identification
-REIDENT_WINDOW_SECS     = 6.0
-
-# Seconds after removal before a track ID may be reused by a *different* person
-ID_REUSE_BLOCK_SECS     = 10.0
-
-# Frames of consecutive *different-pid* results needed to override a confirmed identity
-OVERRIDE_MIN_FRAMES     = 5
-
-# Minimum confidence for an override candidate to accumulate votes
-OVERRIDE_MIN_CONF       = 0.60
+log = logging.getLogger("OMS.tracker")
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Track states
+# Default Hyperparameters
 # ──────────────────────────────────────────────────────────────────────────────
-STATE_TENTATIVE  = "TENTATIVE"
-STATE_CONFIRMED  = "CONFIRMED"
-STATE_LOST       = "LOST"
-STATE_REMOVED    = "REMOVED"
+TRACK_MIN_HITS               = 3     # Hits required before track is considered confirmed
+TRACK_MAX_AGE                = 30    # Max missed frames before track is marked terminated
+IDENTITY_CONFIRMATION_FRAMES = 4     # Consecutive consistent recognition frames to lock identity
+IDENTITY_CONFIRM_MIN_CONF    = 0.42  # Minimum confidence to count toward identity confirmation
+IDENTITY_LOST_TIMEOUT_SECS   = 8.0   # Seconds identity is held during occlusion / detection drop
+ID_REUSE_BLOCK_SECS          = 10.0  # Seconds before a terminated track ID can be reused
+OVERRIDE_MIN_FRAMES          = 5     # Frames required to override an already locked identity
+OVERRIDE_MIN_CONF            = 0.62  # Confidence required for override candidate
+SMOOTHING_ALPHA_STILL        = 0.20  # Alpha when stationary (rock-solid, zero jitter)
+SMOOTHING_ALPHA_MOVE         = 0.75  # Alpha when moving quickly (responsive, zero lag)
+VELOCITY_THRESHOLD_LOW       = 3.0   # Pixels/frame velocity for still regime
+VELOCITY_THRESHOLD_HIGH      = 25.0  # Pixels/frame velocity for fast move regime
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Track States
+# ──────────────────────────────────────────────────────────────────────────────
+STATE_NEW              = "NEW"
+STATE_TENTATIVE        = "TENTATIVE"
+STATE_CONFIRMED        = "CONFIRMED"
+STATE_TRACKED          = "TRACKED"
+STATE_TEMPORARILY_LOST = "TEMPORARILY_LOST"
+STATE_REACQUIRED       = "REACQUIRED"
+STATE_TERMINATED       = "TERMINATED"
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# 2D Kalman Box Filter
+# ──────────────────────────────────────────────────────────────────────────────
+class KalmanBoxTracker:
+    """
+    Standard 8-dimensional Kalman filter for 2D bounding box tracking:
+    State: x = [cx, cy, aspect_ratio, height, v_cx, v_cy, v_a, v_h]^T
+    Measurement: z = [cx, cy, aspect_ratio, height]^T
+    """
+    def __init__(self, initial_box: Tuple[int, int, int, int]):
+        # State dimension 8, measurement dimension 4
+        self.dim_x = 8
+        self.dim_z = 4
+
+        x1, y1, x2, y2 = initial_box
+        w = max(1.0, float(x2 - x1))
+        h = max(1.0, float(y2 - y1))
+        cx = float(x1 + x2) / 2.0
+        cy = float(y1 + y2) / 2.0
+        aspect_ratio = w / h
+
+        # State vector
+        self.x = np.zeros((8, 1), dtype=np.float64)
+        self.x[0, 0] = cx
+        self.x[1, 0] = cy
+        self.x[2, 0] = aspect_ratio
+        self.x[3, 0] = h
+
+        # State transition matrix F
+        self.F = np.eye(8, dtype=np.float64)
+        for i in range(4):
+            self.F[i, i + 4] = 1.0  # dt = 1 frame
+
+        # Measurement matrix H
+        self.H = np.zeros((4, 8), dtype=np.float64)
+        for i in range(4):
+            self.H[i, i] = 1.0
+
+        # Initial state covariance P
+        self.P = np.eye(8, dtype=np.float64)
+        self.P[4:, 4:] *= 1000.0  # High uncertainty in initial velocities
+        self.P *= 10.0
+
+        # Process noise covariance Q
+        self.Q = np.eye(8, dtype=np.float64)
+        self.Q[:4, :4] *= 1.0
+        self.Q[4:, 4:] *= 0.01
+
+        # Measurement noise covariance R
+        self.R = np.eye(4, dtype=np.float64)
+        self.R[0, 0] = 1.0   # cx
+        self.R[1, 1] = 1.0   # cy
+        self.R[2, 2] = 10.0  # aspect ratio (penalize sudden aspect changes)
+        self.R[3, 3] = 1.0   # height
+
+    def predict(self) -> Tuple[float, float, float, float]:
+        """Advance state by 1 step. Returns predicted (x1, y1, x2, y2)."""
+        # Ensure aspect ratio and height remain positive
+        if self.x[3, 0] + self.x[7, 0] <= 0:
+            self.x[7, 0] = 0.0
+        if self.x[2, 0] + self.x[6, 0] <= 0:
+            self.x[6, 0] = 0.0
+
+        self.x = self.F @ self.x
+        self.P = self.F @ self.P @ self.F.T + self.Q
+        return self.get_current_box()
+
+    def update(self, box: Tuple[int, int, int, int], confidence: float = 1.0):
+        """Update filter with detection measurement."""
+        x1, y1, x2, y2 = box
+        w = max(1.0, float(x2 - x1))
+        h = max(1.0, float(y2 - y1))
+        cx = float(x1 + x2) / 2.0
+        cy = float(y1 + y2) / 2.0
+        aspect_ratio = w / h
+
+        z = np.array([[cx], [cy], [aspect_ratio], [h]], dtype=np.float64)
+
+        # Scale R inversely with confidence
+        conf_scale = 1.0 / max(0.2, min(1.0, confidence))
+        R = self.R * conf_scale
+
+        y = z - self.H @ self.x
+        S = self.H @ self.P @ self.H.T + R
+        try:
+            K = self.P @ self.H.T @ np.linalg.inv(S)
+        except np.linalg.LinAlgError:
+            K = self.P @ self.H.T @ np.linalg.pinv(S)
+
+        self.x = self.x + K @ y
+        I = np.eye(self.dim_x, dtype=np.float64)
+        self.P = (I - K @ self.H) @ self.P
+
+    def get_current_box(self) -> Tuple[float, float, float, float]:
+        """Convert state [cx, cy, a, h] to (x1, y1, x2, y2)."""
+        cx = self.x[0, 0]
+        cy = self.x[1, 0]
+        a  = max(0.05, min(10.0, self.x[2, 0]))
+        h  = max(2.0, self.x[3, 0])
+        w  = a * h
+        x1 = cx - w / 2.0
+        y1 = cy - h / 2.0
+        x2 = cx + w / 2.0
+        y2 = cy + h / 2.0
+        return (x1, y1, x2, y2)
+
+    def get_velocity(self) -> Tuple[float, float]:
+        """Returns velocity magnitude in pixels per frame."""
+        return (float(self.x[4, 0]), float(self.x[5, 0]))
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Adaptive Bounding Box Smoother
+# ──────────────────────────────────────────────────────────────────────────────
+class AdaptiveBoxSmoother:
+    """
+    Applies an adaptive EMA filter to predicted/measured coordinates.
+    Stationary objects get high smoothing (zero pixel jitter).
+    Moving objects get dynamic low smoothing (zero lag / trailing).
+    """
+    def __init__(self, initial_box: Tuple[float, float, float, float]):
+        self.smoothed_box = np.array(initial_box, dtype=np.float64)
+
+    def smooth(self, target_box: Tuple[float, float, float, float], velocity: Tuple[float, float]) -> Tuple[int, int, int, int]:
+        vx, vy = velocity
+        speed = math.hypot(vx, vy)
+
+        # Dynamic alpha calculation based on speed
+        if speed <= VELOCITY_THRESHOLD_LOW:
+            alpha = SMOOTHING_ALPHA_STILL
+        elif speed >= VELOCITY_THRESHOLD_HIGH:
+            alpha = SMOOTHING_ALPHA_MOVE
+        else:
+            t = (speed - VELOCITY_THRESHOLD_LOW) / (VELOCITY_THRESHOLD_HIGH - VELOCITY_THRESHOLD_LOW)
+            alpha = SMOOTHING_ALPHA_STILL + t * (SMOOTHING_ALPHA_MOVE - SMOOTHING_ALPHA_STILL)
+
+        tgt = np.array(target_box, dtype=np.float64)
+        self.smoothed_box = alpha * tgt + (1.0 - alpha) * self.smoothed_box
+
+        x1 = int(round(self.smoothed_box[0]))
+        y1 = int(round(self.smoothed_box[1]))
+        x2 = int(round(self.smoothed_box[2]))
+        y2 = int(round(self.smoothed_box[3]))
+        return (x1, y1, x2, y2)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Track State Object
+# ──────────────────────────────────────────────────────────────────────────────
 @dataclass
 class TrackIdentity:
-    """Per-track identity state. Thread-safe via StableIdentityEngine's lock."""
+    """Complete physical track state with Kalman filter and identity persistence."""
     track_id:     int
-    state:        str   = STATE_TENTATIVE
+    label:        str               = "person"
+    state:        str               = STATE_NEW
+    hits:         int               = 1
+    age:          int               = 1
+    missed_frames:int               = 0
 
-    # ── Confirmed identity ────────────────────────────────────────────────────
+    # ── Identity State ────────────────────────────────────────────────────────
     confirmed_pid:   Optional[str]   = None
     confirmed_name:  Optional[str]   = None
     confirmed_conf:  float           = 0.0
     confirmed_at:    float           = 0.0
+    identity_locked: bool            = False
 
-    # ── Candidate accumulator ─────────────────────────────────────────────────
-    candidate_pid:    Optional[str] = None
-    candidate_name:   Optional[str] = None
-    candidate_frames: int           = 0     # consecutive matching frames
-    candidate_conf:   float         = 0.0   # rolling avg conf
+    # ── Unknown Tag (e.g. UNKNOWN #01) ────────────────────────────────────────
+    unknown_tag:     str             = ""
 
-    # ── Override accumulator (for replacing a confirmed identity) ─────────────
-    override_pid:     Optional[str] = None
-    override_name:    Optional[str] = None
-    override_frames:  int           = 0
-    override_conf:    float         = 0.0
+    # ── Candidate Accumulator ─────────────────────────────────────────────────
+    candidate_pid:    Optional[str]  = None
+    candidate_name:   Optional[str]  = None
+    candidate_frames: int            = 0
+    candidate_conf:   float          = 0.0
 
-    # ── Track lifecycle ───────────────────────────────────────────────────────
-    missed_frames:    int            = 0
-    last_seen_at:     float          = field(default_factory=time.time)
+    # ── Override Accumulator ──────────────────────────────────────────────────
+    override_pid:     Optional[str]  = None
+    override_name:    Optional[str]  = None
+    override_frames:  int            = 0
+    override_conf:    float          = 0.0
+
+    # ── Temporal / Occlusion ──────────────────────────────────────────────────
     created_at:       float          = field(default_factory=time.time)
-    grace_expires_at: float          = 0.0   # identity kept until this time
-    removed_at:       float          = 0.0
+    last_seen_at:     float          = field(default_factory=time.time)
+    grace_expires_at: float          = 0.0
 
-    # ── Spatial ───────────────────────────────────────────────────────────────
-    last_box:   Optional[Tuple[int,int,int,int]] = None
-    vx:         float = 0.0   # pixel/frame velocity
-    vy:         float = 0.0
+    # ── Spatial Filters ───────────────────────────────────────────────────────
+    kalman:   Optional[KalmanBoxTracker]   = None
+    smoother: Optional[AdaptiveBoxSmoother]= None
+    latest_smoothed_box: Tuple[int, int, int, int] = (0, 0, 0, 0)
+    last_raw_conf: float = 0.5
 
     # ── Diagnostics ───────────────────────────────────────────────────────────
-    total_recognition_attempts: int = 0
-    total_confirmed_updates:    int = 0
-
-    def display_name(self) -> Optional[str]:
-        """Return the stable display name, or None if tentative/unknown."""
-        if self.confirmed_name:
-            return self.confirmed_name
-        return None
-
-    def display_conf(self) -> float:
-        return self.confirmed_conf
+    total_recognition_attempts: int  = 0
+    total_confirmed_updates:    int  = 0
 
     def is_confirmed(self) -> bool:
-        return self.state == STATE_CONFIRMED and self.confirmed_pid is not None
+        return self.identity_locked and self.confirmed_pid is not None
 
     def grace_active(self) -> bool:
-        """True if we're inside the identity grace window (face hidden but name kept)."""
         return time.time() < self.grace_expires_at
 
+    def display_name(self) -> str:
+        """Returns stable display name."""
+        if self.confirmed_name:
+            return self.confirmed_name
+        return self.unknown_tag or f"UNKNOWN #{self.track_id:02d}"
 
+    def display_conf(self) -> float:
+        if self.confirmed_conf > 0.0:
+            return self.confirmed_conf
+        return self.last_raw_conf
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Stable Identity & Tracking Engine
+# ──────────────────────────────────────────────────────────────────────────────
 class StableIdentityEngine:
     """
-    Manages stable identity assignment for all active tracks on one camera.
-    Call from the camera_thread only; internal state is protected by a lock
-    for safe reads from the web server / stream rendering threads.
+    Production-grade multi-object tracking and identity persistence manager.
+    Maintains a 2D Kalman filter and dynamic smoother per track.
+    Decoupled: predict_all() runs on every frame (30+ FPS) while updates run on YOLO frames.
     """
-
     def __init__(self):
         self._lock   = threading.Lock()
         self._tracks: Dict[int, TrackIdentity] = {}
-        # Track IDs removed recently; blocked from immediate reuse
-        self._recently_removed: Dict[int, float] = {}   # tid -> time_removed
+        self._recently_removed: Dict[int, float] = {}
+        self._next_unknown_idx: int = 1
+        self._unknown_tag_map: Dict[int, str] = {}  # tid -> UNKNOWN #XX
+
+    def _get_or_create_unknown_tag(self, tid: int) -> str:
+        if tid not in self._unknown_tag_map:
+            self._unknown_tag_map[tid] = f"UNKNOWN #{self._next_unknown_idx:02d}"
+            self._next_unknown_idx += 1
+        return self._unknown_tag_map[tid]
 
     # ──────────────────────────────────────────────────────────────────────────
-    # Called every frame from camera_thread: mark track as seen
+    # Called on EVERY frame (both detection frames and skipped frames)
     # ──────────────────────────────────────────────────────────────────────────
-    def mark_seen(self, tid: int, box: Tuple[int,int,int,int]) -> TrackIdentity:
-        """Called when YOLO detects this track_id this frame."""
+    def predict_all(self) -> List[dict]:
+        """
+        Advance all Kalman filters by 1 step and compute smoothed coordinates.
+        Returns a list of active detection dicts ready for HUD rendering.
+        """
+        with self._lock:
+            active_dets = []
+            for tid, t in list(self._tracks.items()):
+                if t.state == STATE_TERMINATED:
+                    continue
+
+                t.age += 1
+                if t.kalman is not None and t.smoother is not None:
+                    pred_box = t.kalman.predict()
+                    vel = t.kalman.get_velocity()
+                    smoothed = t.smoother.smooth(pred_box, vel)
+                    t.latest_smoothed_box = smoothed
+
+                    # Only output tracks that have reached minimum hits or are confirmed
+                    if t.hits >= TRACK_MIN_HITS or t.is_confirmed():
+                        is_known = t.is_confirmed() and not (t.confirmed_pid and t.confirmed_pid.startswith("Unknown-"))
+                        disp_str = t.display_name()
+                        active_dets.append({
+                            "label": t.label,
+                            "conf":  t.display_conf(),
+                            "box":   smoothed,
+                            "disp":  disp_str,
+                            "pid":   t.confirmed_pid or f"Unknown-{tid}",
+                            "tid":   tid,
+                            "is_known": is_known,
+                            "locked": t.identity_locked,
+                            "state":  t.state
+                        })
+            return active_dets
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Called on YOLO detection frames: update measurement
+    # ──────────────────────────────────────────────────────────────────────────
+    def update_track_measurement(self, tid: int, box: Tuple[int, int, int, int],
+                                 conf: float, label: str = "person") -> TrackIdentity:
+        """Update Kalman filter and state machine with actual YOLO detection."""
         with self._lock:
             if tid not in self._tracks:
-                # Check ID-reuse block
+                # Check reuse block
                 if tid in self._recently_removed:
-                    elapsed = time.time() - self._recently_removed[tid]
-                    if elapsed < ID_REUSE_BLOCK_SECS:
-                        log.debug(f"[SIE] Track {tid} blocked from reuse ({elapsed:.1f}s < {ID_REUSE_BLOCK_SECS}s)")
-                        # Create as TENTATIVE but don't inherit old identity
+                    if time.time() - self._recently_removed[tid] < ID_REUSE_BLOCK_SECS:
+                        log.debug(f"[SIE] Track {tid} blocked from reuse")
                     else:
                         del self._recently_removed[tid]
-                self._tracks[tid] = TrackIdentity(track_id=tid, last_box=box)
-                log.debug(f"[SIE] New track {tid} created (TENTATIVE)")
+
+                t = TrackIdentity(
+                    track_id=tid,
+                    label=label,
+                    state=STATE_NEW,
+                    unknown_tag=self._get_or_create_unknown_tag(tid),
+                    last_raw_conf=conf
+                )
+                t.kalman = KalmanBoxTracker(box)
+                t.smoother = AdaptiveBoxSmoother((float(box[0]), float(box[1]), float(box[2]), float(box[3])))
+                t.latest_smoothed_box = box
+                self._tracks[tid] = t
+                log.debug(f"[SIE] Track {tid} initialized (NEW)")
 
             t = self._tracks[tid]
-
-            # Update velocity from box movement
-            if t.last_box:
-                ox = (t.last_box[0] + t.last_box[2]) / 2
-                oy = (t.last_box[1] + t.last_box[3]) / 2
-                nx = (box[0] + box[2]) / 2
-                ny = (box[1] + box[3]) / 2
-                # Exponential moving average for smooth velocity
-                t.vx = 0.7 * t.vx + 0.3 * (nx - ox)
-                t.vy = 0.7 * t.vy + 0.3 * (ny - oy)
-
-            t.last_box    = box
+            t.hits += 1
             t.missed_frames = 0
-            t.last_seen_at  = time.time()
+            t.last_seen_at = time.time()
+            t.last_raw_conf = conf
+            t.label = label
 
-            # Revive from LOST state if re-detected
-            if t.state == STATE_LOST:
-                t.state = STATE_CONFIRMED if t.confirmed_pid else STATE_TENTATIVE
-                # Reset grace since we're active again
+            # Update Kalman filter
+            if t.kalman is not None:
+                t.kalman.update(box, confidence=conf)
+                vel = t.kalman.get_velocity()
+                if t.smoother is not None:
+                    t.latest_smoothed_box = t.smoother.smooth(t.kalman.get_current_box(), vel)
+
+            # State transitions
+            if t.state in (STATE_NEW, STATE_TENTATIVE):
+                if t.hits >= TRACK_MIN_HITS:
+                    t.state = STATE_TRACKED
+            elif t.state == STATE_TEMPORARILY_LOST:
+                t.state = STATE_REACQUIRED
                 t.grace_expires_at = 0.0
-                log.debug(f"[SIE] Track {tid} revived from LOST → {t.state}")
 
             return t
 
     # ──────────────────────────────────────────────────────────────────────────
-    # Called every frame for tracks NOT seen this frame
+    # Called on YOLO detection frames for tracks NOT detected
     # ──────────────────────────────────────────────────────────────────────────
     def mark_missing(self, tid: int):
-        """Called when a previously known track was not detected this frame."""
+        """Called when a known track was missing in this detection cycle."""
         with self._lock:
             if tid not in self._tracks:
                 return
             t = self._tracks[tid]
             t.missed_frames += 1
 
-            if t.state in (STATE_TENTATIVE, STATE_CONFIRMED):
-                if t.missed_frames >= LOST_FRAMES_THRESH:
-                    t.state = STATE_LOST
-                    t.grace_expires_at = time.time() + IDENTITY_GRACE_SECS
-                    log.debug(f"[SIE] Track {tid} → LOST (missed {t.missed_frames} frames), "
-                              f"grace until +{IDENTITY_GRACE_SECS:.0f}s")
+            if t.state in (STATE_TRACKED, STATE_CONFIRMED, STATE_REACQUIRED):
+                if t.missed_frames >= 2:
+                    t.state = STATE_TEMPORARILY_LOST
+                    t.grace_expires_at = time.time() + IDENTITY_LOST_TIMEOUT_SECS
 
-            elif t.state == STATE_LOST:
-                # Check if grace period expired
-                if not t.grace_active() and time.time() - t.last_seen_at > REIDENT_WINDOW_SECS:
+            elif t.state == STATE_TEMPORARILY_LOST:
+                if t.missed_frames > TRACK_MAX_AGE and not t.grace_active():
                     self._remove_track(tid)
 
     # ──────────────────────────────────────────────────────────────────────────
-    # Called when face recognition returns a result for a track
+    # Face Recognition Result Ingestion
     # ──────────────────────────────────────────────────────────────────────────
     def submit_recognition(self, tid: int, pid: str, name: str, conf: float) -> bool:
         """
-        Feed a recognition result.
-        Returns True if the identity was updated/confirmed.
+        Feeds async face recognition result into identity state.
+        Requires IDENTITY_CONFIRMATION_FRAMES consistent matches to confirm.
+        Once confirmed, identity is locked and resilient to occlusions.
         """
         with self._lock:
             if tid not in self._tracks:
@@ -207,191 +410,168 @@ class StableIdentityEngine:
             t = self._tracks[tid]
             t.total_recognition_attempts += 1
 
-            if conf < CONFIRM_MIN_CONF:
-                # Low-confidence result — reset candidate accumulator
+            if conf < IDENTITY_CONFIRM_MIN_CONF:
                 t.candidate_pid = None
                 t.candidate_frames = 0
                 return False
 
-            # ── Case 1: No confirmed identity yet — accumulate candidate ──────
-            if not t.confirmed_pid or t.state == STATE_TENTATIVE:
+            # Case 1: Track does not have a confirmed identity yet
+            if not t.identity_locked or not t.confirmed_pid:
                 if t.candidate_pid == pid:
                     t.candidate_frames += 1
                     t.candidate_conf = 0.7 * t.candidate_conf + 0.3 * conf
                 else:
-                    # New candidate resets counter
-                    t.candidate_pid    = pid
-                    t.candidate_name   = name
+                    t.candidate_pid = pid
+                    t.candidate_name = name
                     t.candidate_frames = 1
-                    t.candidate_conf   = conf
+                    t.candidate_conf = conf
 
-                if t.candidate_frames >= MIN_CONFIRM_FRAMES:
-                    # Confirm identity
-                    t.confirmed_pid   = pid
-                    t.confirmed_name  = name
-                    t.confirmed_conf  = t.candidate_conf
-                    t.confirmed_at    = time.time()
-                    t.state           = STATE_CONFIRMED
-                    t.candidate_pid   = None
-                    t.candidate_frames= 0
+                if t.candidate_frames >= IDENTITY_CONFIRMATION_FRAMES:
+                    t.confirmed_pid = pid
+                    t.confirmed_name = name
+                    t.confirmed_conf = t.candidate_conf
+                    t.confirmed_at = time.time()
+                    t.identity_locked = True
+                    t.state = STATE_CONFIRMED
+                    t.candidate_pid = None
+                    t.candidate_frames = 0
                     t.total_confirmed_updates += 1
-                    log.info(f"[SIE] Track {tid} CONFIRMED → {name} ({pid}) conf={t.confirmed_conf:.2f} "
-                             f"after {MIN_CONFIRM_FRAMES} frames")
+                    log.info(f"[SIE] Track {tid} LOCKED & CONFIRMED -> {name} ({pid}) conf={t.confirmed_conf:.2f}")
                     return True
                 return False
 
-            # ── Case 2: Already confirmed — check if same pid ─────────────────
+            # Case 2: Already confirmed — same person reinforces confidence and extends grace
             if pid == t.confirmed_pid:
-                # Reinforce confidence
-                t.confirmed_conf  = max(t.confirmed_conf, conf)
-                t.confirmed_at    = time.time()
-                t.override_frames = 0   # reset any override attempt
-                t.override_pid    = None
-                # Extend grace
-                t.grace_expires_at = time.time() + IDENTITY_GRACE_SECS
+                t.confirmed_conf = max(t.confirmed_conf, conf)
+                t.confirmed_at = time.time()
+                t.override_frames = 0
+                t.override_pid = None
+                t.grace_expires_at = time.time() + IDENTITY_LOST_TIMEOUT_SECS
                 return True
 
-            # ── Case 3: Different pid result → accumulate override ─────────────
+            # Case 3: Contradictory result (different person detected on locked track)
+            # Requires OVERRIDE_MIN_FRAMES high-confidence results to override
             if conf >= OVERRIDE_MIN_CONF:
                 if t.override_pid == pid:
                     t.override_frames += 1
-                    t.override_conf    = 0.6 * t.override_conf + 0.4 * conf
+                    t.override_conf = 0.6 * t.override_conf + 0.4 * conf
                 else:
-                    t.override_pid    = pid
-                    t.override_name   = name
+                    t.override_pid = pid
+                    t.override_name = name
                     t.override_frames = 1
-                    t.override_conf   = conf
+                    t.override_conf = conf
 
                 if t.override_frames >= OVERRIDE_MIN_FRAMES:
                     old_name = t.confirmed_name
-                    t.confirmed_pid   = pid
-                    t.confirmed_name  = name
-                    t.confirmed_conf  = t.override_conf
-                    t.confirmed_at    = time.time()
-                    t.override_pid    = None
+                    t.confirmed_pid = pid
+                    t.confirmed_name = name
+                    t.confirmed_conf = t.override_conf
+                    t.confirmed_at = time.time()
+                    t.override_pid = None
                     t.override_frames = 0
                     t.total_confirmed_updates += 1
-                    log.info(f"[SIE] Track {tid} OVERRIDE: {old_name} → {name} "
-                             f"(conf={t.confirmed_conf:.2f} after {OVERRIDE_MIN_FRAMES} frames)")
+                    log.info(f"[SIE] Track {tid} OVERRIDE: {old_name} -> {name} ({pid}) conf={t.confirmed_conf:.2f}")
                     return True
-            else:
-                # Insufficient confidence for override — ignore
-                pass
 
             return False
 
     # ──────────────────────────────────────────────────────────────────────────
-    # Forced rename (from UI "rename_subject" action)
+    # Forced Identity Locking (from UI Rename / Face Enrollment)
     # ──────────────────────────────────────────────────────────────────────────
     def force_identity(self, tid: int, pid: str, name: str, conf: float = 0.99):
-        """Immediately lock a confirmed identity (called when user renames from UI)."""
+        """Immediately locks confirmed identity onto a track (e.g. from user UI action)."""
         with self._lock:
             if tid not in self._tracks:
                 self._tracks[tid] = TrackIdentity(track_id=tid)
             t = self._tracks[tid]
-            t.confirmed_pid   = pid
-            t.confirmed_name  = name
-            t.confirmed_conf  = conf
-            t.confirmed_at    = time.time()
-            t.state           = STATE_CONFIRMED
-            t.grace_expires_at= time.time() + IDENTITY_GRACE_SECS
-            t.override_pid    = None
+            t.confirmed_pid = pid
+            t.confirmed_name = name
+            t.confirmed_conf = conf
+            t.confirmed_at = time.time()
+            t.identity_locked = True
+            t.state = STATE_CONFIRMED
+            t.grace_expires_at = time.time() + IDENTITY_LOST_TIMEOUT_SECS
+            t.override_pid = None
             t.override_frames = 0
-            log.info(f"[SIE] Track {tid} FORCE-LOCKED → {name} ({pid})")
+            log.info(f"[SIE] Track {tid} FORCE-LOCKED -> {name} ({pid})")
 
-    # ──────────────────────────────────────────────────────────────────────────
-    # Force-set identity by pid (called when renaming by pid, not tid)
-    # ──────────────────────────────────────────────────────────────────────────
     def force_identity_by_pid(self, pid: str, name: str, conf: float = 0.99):
-        """Lock identity for all tracks currently confirmed as this pid."""
+        """Update identity for all tracks matching this pid."""
         with self._lock:
             for t in self._tracks.values():
                 if t.confirmed_pid == pid:
-                    t.confirmed_name  = name
-                    t.confirmed_conf  = conf
-                    t.confirmed_at    = time.time()
-                    t.grace_expires_at= time.time() + IDENTITY_GRACE_SECS
-                    log.info(f"[SIE] Track {t.track_id} name updated → {name} via pid")
+                    t.confirmed_name = name
+                    t.confirmed_conf = conf
+                    t.confirmed_at = time.time()
+                    t.identity_locked = True
+                    t.grace_expires_at = time.time() + IDENTITY_LOST_TIMEOUT_SECS
 
     # ──────────────────────────────────────────────────────────────────────────
-    # Get display info for a track (safe to call from any thread)
+    # Queries & Display State
     # ──────────────────────────────────────────────────────────────────────────
     def get_display(self, tid: int) -> Tuple[Optional[str], Optional[str], float, bool]:
-        """
-        Returns (pid, display_name, confidence, is_confirmed).
-        Never returns None for display_name if identity is confirmed or in grace period.
-        """
+        """Returns (pid, display_name, confidence, is_confirmed)."""
         with self._lock:
             t = self._tracks.get(tid)
             if t is None:
                 return None, None, 0.0, False
-            if t.confirmed_pid and (t.state == STATE_CONFIRMED or t.grace_active()):
+            if t.confirmed_pid and (t.identity_locked or t.grace_active()):
                 return t.confirmed_pid, t.confirmed_name, t.confirmed_conf, True
-            return None, None, 0.0, False
+            return None, t.display_name(), t.display_conf(), False
 
-    # ──────────────────────────────────────────────────────────────────────────
-    # Get all active track IDs (confirmed or tentative, not removed)
-    # ──────────────────────────────────────────────────────────────────────────
-    def get_active_tids(self) -> list:
+    def get_active_tids(self) -> List[int]:
         with self._lock:
-            return [tid for tid, t in self._tracks.items()
-                    if t.state != STATE_REMOVED]
+            return [tid for tid, t in self._tracks.items() if t.state != STATE_TERMINATED]
 
-    # ──────────────────────────────────────────────────────────────────────────
-    # Periodic maintenance — call every second or so from camera_thread
-    # ──────────────────────────────────────────────────────────────────────────
     def purge_expired(self):
-        """Remove fully expired tracks. Call periodically (not every frame)."""
+        """Periodic maintenance."""
         with self._lock:
-            to_remove = []
             now = time.time()
+            to_remove = []
             for tid, t in self._tracks.items():
-                if t.state == STATE_LOST:
-                    if not t.grace_active() and now - t.last_seen_at > REIDENT_WINDOW_SECS:
+                if t.state == STATE_TEMPORARILY_LOST:
+                    if not t.grace_active() and t.missed_frames > TRACK_MAX_AGE:
                         to_remove.append(tid)
-                elif t.state == STATE_REMOVED:
+                elif t.state == STATE_TERMINATED:
                     to_remove.append(tid)
             for tid in to_remove:
                 self._remove_track(tid)
 
-        # Clean up old reuse-blocked IDs
-        with self._lock:
-            expired_blocks = [tid for tid, t in self._recently_removed.items()
-                              if time.time() - t > ID_REUSE_BLOCK_SECS * 2]
+            # Prune reuse blocks
+            expired_blocks = [tid for tid, ts in self._recently_removed.items()
+                              if now - ts > ID_REUSE_BLOCK_SECS * 2]
             for tid in expired_blocks:
                 del self._recently_removed[tid]
 
     def _remove_track(self, tid: int):
-        """Internal: remove a track and block its ID from reuse."""
         if tid in self._tracks:
             self._recently_removed[tid] = time.time()
             del self._tracks[tid]
-            log.debug(f"[SIE] Track {tid} REMOVED (ID reuse blocked for {ID_REUSE_BLOCK_SECS}s)")
+            self._unknown_tag_map.pop(tid, None)
+            log.debug(f"[SIE] Track {tid} TERMINATED")
 
-    # ──────────────────────────────────────────────────────────────────────────
-    # Diagnostics snapshot (for /api/diagnostics)
-    # ──────────────────────────────────────────────────────────────────────────
     def diagnostics(self) -> dict:
         with self._lock:
             all_tracks = list(self._tracks.values())
-        confirmed = [t for t in all_tracks if t.state == STATE_CONFIRMED and t.confirmed_pid]
-        tentative = [t for t in all_tracks if t.state == STATE_TENTATIVE]
-        lost      = [t for t in all_tracks if t.state == STATE_LOST]
+        confirmed = [t for t in all_tracks if t.is_confirmed()]
+        tracked   = [t for t in all_tracks if t.state in (STATE_TRACKED, STATE_CONFIRMED)]
+        lost      = [t for t in all_tracks if t.state == STATE_TEMPORARILY_LOST]
         return {
             "total_tracks":     len(all_tracks),
             "confirmed_tracks": len(confirmed),
-            "tentative_tracks": len(tentative),
+            "tracked_tracks":   len(tracked),
             "lost_tracks":      len(lost),
             "track_details": [
                 {
                     "track_id":        t.track_id,
                     "state":           t.state,
-                    "identity":        t.confirmed_name or "UNKNOWN",
+                    "identity":        t.display_name(),
                     "pid":             t.confirmed_pid,
-                    "conf":            round(t.confirmed_conf, 3),
+                    "conf":            round(t.display_conf(), 3),
                     "missed_frames":   t.missed_frames,
-                    "recognition_attempts": t.total_recognition_attempts,
-                    "grace_active":    t.grace_active(),
+                    "hits":            t.hits,
+                    "locked":          t.identity_locked,
+                    "smoothed_box":    t.latest_smoothed_box
                 }
                 for t in all_tracks
             ]

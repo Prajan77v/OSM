@@ -289,6 +289,16 @@ class Config:
     USE_CUDA    = _cfg("detection","use_cuda", default=True)
     DEVICE      = "cuda" if (CUDA_AVAILABLE and USE_CUDA) else "cpu"
     CONFIDENCE  = _cfg("detection","confidence", default=0.45)
+    TRACKER_TYPE = _cfg("detection", "tracker_type", default="botsort")
+    USE_KALMAN  = _cfg("detection", "use_kalman", default=True)
+    USE_SMOOTHING = _cfg("detection", "use_smoothing", default=True)
+    SMOOTHING_ALPHA_STILL = _cfg("detection", "smoothing_alpha_still", default=0.20)
+    SMOOTHING_ALPHA_MOVE  = _cfg("detection", "smoothing_alpha_move", default=0.75)
+    TRACK_MIN_HITS = _cfg("detection", "track_min_hits", default=3)
+    TRACK_MAX_AGE  = _cfg("detection", "track_max_age", default=30)
+    IDENTITY_CONFIRMATION_FRAMES = _cfg("detection", "identity_confirmation_frames", default=4)
+    IDENTITY_LOST_TIMEOUT = _cfg("detection", "identity_lost_timeout", default=45)
+    FACE_RECOGNITION_INTERVAL = _cfg("detection", "face_recognition_interval", default=5)
 
     FRAME_W = _cfg("detection","frame_w", default=640)
     FRAME_H = _cfg("detection","frame_h", default=360)
@@ -3295,11 +3305,15 @@ def camera_thread(cs: CameraState):
 
             # Defer main frame processing
             if cs.frame_cnt % skip_n != 0:
-                face_boxes = []
-                if cs.latest_dets:
-                    face_boxes = [d["box"] for d in cs.latest_dets if d.get("label") == "person"]
+                # ── Predict Kalman state & smooth boxes on deferred frames (30+ FPS HUD) ──
+                smoothed_pred_dets = cs.stable_id.predict_all()
+                face_boxes = [d["box"] for d in smoothed_pred_dets if d.get("label") == "person"]
                 frame = FrameProcessor.process(raw_frame, cs.manager, face_boxes)
-                with cs.frame_lock: cs.latest_frame = frame; cs.tile_dirty = has_motion
+                with cs.frame_lock:
+                    cs.latest_frame = frame
+                    if smoothed_pred_dets:
+                        cs.latest_dets = smoothed_pred_dets
+                    cs.tile_dirty = has_motion
                 cs.frame_cnt += 1; cs._fps_cnt += 1
                 t = time.perf_counter(); e = t - cs._fps_t
                 if e >= 1.0:
@@ -3318,6 +3332,8 @@ def camera_thread(cs: CameraState):
             time.sleep(2.0)
             continue
 
+        # ── Update Kalman state prediction on main frames ──
+        cs.stable_id.predict_all()
         face_boxes = []
         if cs.latest_dets:
             face_boxes = [d["box"] for d in cs.latest_dets if d.get("label") == "person"]
@@ -3385,10 +3401,11 @@ def camera_thread(cs: CameraState):
                     _inf_ctx.__enter__()
                 except Exception:
                     pass
+                tracker_cfg = f"{Config.TRACKER_TYPE}.yaml" if Config.TRACKER_TYPE in ("botsort", "bytetrack") else "bytetrack.yaml"
                 results = yolo.track(source=small, conf=Config.CONFIDENCE,
                                      device=Config.DEVICE, persist=Config.TRACK_PERSIST,
                                      verbose=False, half=(Config.DEVICE == "cuda"),
-                                     imgsz=max(dw, dh), tracker="bytetrack.yaml",
+                                     imgsz=max(dw, dh), tracker=tracker_cfg,
                                      max_det=300)
                 if _inf_ctx:
                     try: _inf_ctx.__exit__(None, None, None)
@@ -3444,8 +3461,10 @@ def camera_thread(cs: CameraState):
                         tid_seen.add(tid)
                         cs.last_track_boxes[tid] = (x1, y1, x2, y2)
 
-                        # ── Stable Identity Engine: mark this track as seen ────
-                        cs.stable_id.mark_seen(tid, (x1, y1, x2, y2))
+                        # ── Stable Identity Engine: update Kalman filter and smooth box ────
+                        t_obj = cs.stable_id.update_track_measurement(tid, (x1, y1, x2, y2), cv_val, label)
+                        smoothed_box = t_obj.latest_smoothed_box
+                        sx1, sy1, sx2, sy2 = smoothed_box
 
                         # ── Resolve any completed face recognition futures ─────
                         fut = cs.pending_futures.get(tid)
@@ -3464,17 +3483,11 @@ def camera_thread(cs: CameraState):
                             del cs.pending_futures[tid]
 
                             if np_pid:
-                                # Feed result into StableIdentityEngine — it handles
-                                # temporal confirmation, locking, and override logic
                                 confirmed = cs.stable_id.submit_recognition(tid, np_pid, np_name, np_conf)
-
-                                # Sync stable confirmed identity back to legacy track_to_pid
-                                # (needed by other subsystems: behavior, zone, HAAE, etc.)
                                 s_pid, s_name, s_conf, s_ok = cs.stable_id.get_display(tid)
                                 if s_ok and s_pid:
                                     old = cs.track_to_pid.get(tid)
                                     if old and not old.startswith("Unknown-") and old != s_pid:
-                                        # Identity changed to different pid — clean up old
                                         cs.present_pids.discard(old)
                                         with _fdb_lock:
                                             if old in faces_db:
@@ -3485,16 +3498,11 @@ def camera_thread(cs: CameraState):
                                     cs.pid_confidences[s_pid] = s_conf
                                     cs.tid_identity_locked[tid] = True
                                     _ensure_pid(cs, s_pid, s_name)
-
-                                    # Set face cooldown based on whether confirmed
-                                    cs.tid_face_cd[tid] = 90  # ~3s at 30fps
+                                    cs.tid_face_cd[tid] = 90
 
                         # ── Identity resolution: use stable engine as source of truth ──
-                        # Check if StableIdentityEngine has a confirmed identity for this track
-                        # This prevents name flicker — confirmed_name is held through occlusions
                         s_pid, s_name, s_conf, s_ok = cs.stable_id.get_display(tid)
                         if is_person and s_ok and s_pid:
-                            # Confirmed identity from stable engine
                             pid = s_pid
                             name = s_name
                             cs.track_to_pid[tid] = s_pid
@@ -3508,7 +3516,7 @@ def camera_thread(cs: CameraState):
                             else:
                                 disp = s_name.replace("Intruder-", "UNKNOWN-").upper()[:16]
                         elif is_person and tid not in cs.track_to_pid:
-                            # No confirmed identity yet. Try spatial recovery from lost_tracks
+                            # Try spatial recovery from lost_tracks
                             recovered_pid = None
                             recovered_tid = None
                             currently_visible_pids = {cs.track_to_pid[t] for t in tid_seen if t in cs.track_to_pid}
@@ -3521,7 +3529,7 @@ def camera_thread(cs: CameraState):
                                     if active_pid not in currently_visible_pids:
                                         candidates.append((active_tid, active_pid, cs.last_track_boxes[active_tid]))
 
-                            cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+                            cx, cy = (sx1 + sx2) / 2.0, (sy1 + sy2) / 2.0
                             best_dist = 80.0
                             for c_tid, c_pid, c_box in candidates:
                                 cx1, cy1, cx2, cy2 = c_box
@@ -3538,7 +3546,6 @@ def camera_thread(cs: CameraState):
                                 cs.track_to_pid[tid] = recovered_pid
                                 was_locked = cs.tid_identity_locked.get(recovered_tid, False) if recovered_tid is not None else False
                                 cs.tid_identity_locked[tid] = was_locked
-                                # Migrate stable engine state from old tid to new tid
                                 old_s_pid, old_s_name, old_s_conf, old_s_ok = cs.stable_id.get_display(recovered_tid)
                                 if old_s_ok and old_s_pid:
                                     cs.stable_id.force_identity(tid, old_s_pid, old_s_name, old_s_conf)
@@ -3548,16 +3555,15 @@ def camera_thread(cs: CameraState):
                                     cs.track_to_pid.pop(recovered_tid, None)
                                 cs.lost_tracks.pop(recovered_tid, None)
                             else:
-                                # Brand new unknown person
                                 new_p = f"Unknown-{tid}"
                                 cs.track_to_pid[tid] = new_p
 
-                        # ── Build display values from current track_to_pid state ──
+                        # ── Build display values from current state ──
                         pid = cs.track_to_pid.get(tid)
                         if pid:
                             if pid.startswith("Unknown-"):
-                                name = "Unknown"
-                                disp = "Unknown"
+                                name = t_obj.display_name()
+                                disp = name
                             else:
                                 with _fdb_lock:
                                     exists = pid in faces_db
@@ -3579,37 +3585,49 @@ def camera_thread(cs: CameraState):
                             effective_lbl = name if (pid and not pid.startswith("Unknown-") and name) else label
                             cur_objs.append(effective_lbl)
 
-                        # Schedule recognition only if not locked
-                        is_locked = cs.tid_identity_locked.get(tid, False)
-                        if not is_locked:
-                            fr_cd = cs.tid_face_cd.get(tid, 0)
+                        # ── Schedule face recognition ──
+                        # Confirmed tracks skip active recognition to save CPU/GPU and run a rare maintenance check
+                        _sie_confirmed = t_obj.is_confirmed()
+                        fr_cd = cs.tid_face_cd.get(tid, 0)
+                        if _sie_confirmed:
+                            # Maintenance check every 240 frames
                             if fr_cd <= 0 and tid not in cs.pending_futures:
-                                cs.tid_face_cd[tid] = 30 # Cooldown to keep tracking buttery smooth at 30+ FPS
-                                x1f, y1f, x2f, y2f = d["box"]
+                                h_img, w_img = frame.shape[:2]
+                                head_y2 = sy1 + int((sy2 - sy1) * 0.70)
+                                pad_y = int((sy2 - sy1) * 0.15)
+                                pad_x = int((sx2 - sx1) * 0.15)
+                                crop = frame[max(0, sy1 - pad_y):min(h_img, head_y2 + pad_y),
+                                             max(0, sx1 - pad_x):min(w_img, sx2 + pad_x)]
+                                if crop.size > 0:
+                                    cs.pending_futures[tid] = face_pool.submit(async_face, crop.copy(), True, is_person)
+                                cs.tid_face_cd[tid] = 240
+                            else:
+                                cs.tid_face_cd[tid] = max(0, fr_cd - 1)
+                        else:
+                            # Tentative / unconfirmed tracks poll every FACE_RECOGNITION_INTERVAL frames
+                            if fr_cd <= 0 and tid not in cs.pending_futures:
                                 h_img, w_img = frame.shape[:2]
                                 if is_person:
-                                    # Crop top 70% of person bounding box with generous padding for face detection
-                                    head_y1 = y1f
-                                    head_y2 = y1f + int((y2f - y1f) * 0.70)
-                                    pad_y = int((y2f - y1f) * 0.15)
-                                    pad_x = int((x2f - x1f) * 0.15)
+                                    head_y1 = sy1
+                                    head_y2 = sy1 + int((sy2 - sy1) * 0.70)
+                                    pad_y = int((sy2 - sy1) * 0.15)
+                                    pad_x = int((sx2 - sx1) * 0.15)
                                     crop_y1 = max(0, head_y1 - pad_y)
                                     crop_y2 = min(h_img, head_y2 + pad_y)
-                                    crop_x1 = max(0, x1f - pad_x)
-                                    crop_x2 = min(w_img, x2f + pad_x)
+                                    crop_x1 = max(0, sx1 - pad_x)
+                                    crop_x2 = min(w_img, sx2 + pad_x)
                                 else:
-                                    # Use the FULL bounding box for object recognition
-                                    pad_y = int((y2f - y1f) * 0.05)
-                                    pad_x = int((x2f - x1f) * 0.05)
-                                    crop_y1 = max(0, y1f - pad_y)
-                                    crop_y2 = min(h_img, y2f + pad_y)
-                                    crop_x1 = max(0, x1f - pad_x)
-                                    crop_x2 = min(w_img, x2f + pad_x)
+                                    pad_y = int((sy2 - sy1) * 0.05)
+                                    pad_x = int((sx2 - sx1) * 0.05)
+                                    crop_y1 = max(0, sy1 - pad_y)
+                                    crop_y2 = min(h_img, sy2 + pad_y)
+                                    crop_x1 = max(0, sx1 - pad_x)
+                                    crop_x2 = min(w_img, sx2 + pad_x)
 
                                 crop = frame[crop_y1:crop_y2, crop_x1:crop_x2]
                                 if crop.size > 0:
                                     cs.pending_futures[tid] = face_pool.submit(async_face, crop.copy(), True, is_person)
-                                cs.tid_face_cd[tid] = 45
+                                cs.tid_face_cd[tid] = Config.FACE_RECOGNITION_INTERVAL * 6
                             else:
                                 cs.tid_face_cd[tid] = max(0, fr_cd - 1)
 
@@ -3618,13 +3636,13 @@ def camera_thread(cs: CameraState):
                             if pid not in cs.present_pids:
                                 cs.present_pids.add(pid)
                                 if not pid.startswith("Unknown-"):
-                                    on_person_arrived(cs, pid, name, frame, d["box"], cv_val)
+                                    on_person_arrived(cs, pid, name, frame, smoothed_box, cv_val)
 
                             pi = _ensure_pid(cs, pid, name)
-                            person_dets_this_frame.append({"pid": pid, "box": d["box"]})
+                            person_dets_this_frame.append({"pid": pid, "box": smoothed_box})
 
                             # Zone check
-                            cx_p = (x1+x2)//2; cy_p = (y1+y2)//2
+                            cx_p = (sx1 + sx2) // 2; cy_p = (sy1 + sy2) // 2
                             fh_h, fh_w = frame.shape[:2]
                             zones_in = [z.name for z in ZONES if z.contains(cx_p, cy_p, fh_w, fh_h)]
                             for z in ZONES:
@@ -3641,13 +3659,12 @@ def camera_thread(cs: CameraState):
                             # ── HAAE: Async emotion analysis
                             _haae_crop = None
                             if cs.frame_cnt % 8 == 0:
-                                x1f2,y1f2,x2f2,y2f2 = d["box"]
-                                _haae_crop = frame[max(0,y1f2):min(frame.shape[0],y2f2),
-                                                   max(0,x1f2):min(frame.shape[1],x2f2)]
+                                _haae_crop = frame[max(0, sy1):min(frame.shape[0], sy2),
+                                                   max(0, sx1):min(frame.shape[1], sx2)]
                                 if _haae_crop is not None and _haae_crop.size > 0:
                                     cs.haae.submit_emotion(pid, _haae_crop.copy(), cs.frame_cnt, haae_pool if haae_pool else face_pool)
                                     cs.haae.update_attention(pid, _haae_crop,
-                                                             face_conf=cs.pid_confidences.get(pid, 0.0))
+                                                              face_conf=cs.pid_confidences.get(pid, 0.0))
                             cs.haae.collect_emotion(pid)
 
                             # ── HAAE: Check for new alerts
@@ -3673,7 +3690,8 @@ def camera_thread(cs: CameraState):
                                             event_type="EXPRESSION", camera=cs.name, person=pid, priority=4
                                         )
 
-                    new_dets.append({"label":label,"conf":cv_val,"box":(x1,y1,x2,y2),"disp":disp,"pid":pid})
+                    # Append the KALMAN-SMOOTHED box for HUD rendering
+                    new_dets.append({"label":label,"conf":cv_val,"box":smoothed_box,"disp":disp,"pid":pid,"tid":tid})
 
                 # Object ownership
                 obj_dets_frame = [d for d in new_dets if d["label"] != "person"]
