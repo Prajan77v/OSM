@@ -1032,19 +1032,37 @@ export default function Dashboard() {
 
 
   // ── Forget registered face profile ───────────────────────────────────────
-  const forgetFace = async (name: string) => {
-    const confirmForget = window.confirm(`Forget and delete all biometric profiles for '${name}'?`);
+  const forgetFace = async (name: string, pid?: string) => {
+    const displayName = name || pid || "this subject";
+    const confirmForget = window.confirm(`Permanently delete biometric profile for '${displayName}'? This action cannot be undone.`);
     if (!confirmForget) return;
     try {
-      const r = await fetch(`${API}/api/face/${encodeURIComponent(name)}`, {
-        method: "DELETE",
+      const r = await fetch(`${API}/api/control/delete_subject`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, pid: pid || name }),
       });
       const d = await r.json();
       if (d.status === "ok") {
-        speakAI(`System profile forgotten: ${name}`);
+        speakAI(`Profile deleted: ${displayName}`);
+        setSelectedUserPid(null);
+        setEditingPid(null);
+        setCropKey(Date.now().toString());
         fetchAll();
       } else {
-        alert(d.message || "Failed to delete profile");
+        const r2 = await fetch(`${API}/api/face/${encodeURIComponent(pid || name)}`, {
+          method: "DELETE",
+        });
+        const d2 = await r2.json();
+        if (d2.status === "ok") {
+          speakAI(`Profile deleted: ${displayName}`);
+          setSelectedUserPid(null);
+          setEditingPid(null);
+          setCropKey(Date.now().toString());
+          fetchAll();
+        } else {
+          alert(d2.message || d.message || "Failed to delete profile");
+        }
       }
     } catch (err) {
       alert("Error deleting face profile");
@@ -3777,44 +3795,52 @@ export default function Dashboard() {
                       </div>
                     </div>
 
-                    {/* Change Name Input */}
-                    <div className="flex items-center gap-1.5 mt-1">
-                      <input
-                        type="text"
-                        placeholder="Type new name (e.g. John Doe)..."
-                        value={editNameValue}
-                        onChange={(e) => {
-                          setEditingPid(selectedUserPid);
-                          setEditNameValue(e.target.value);
-                        }}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" && editNameValue.trim()) {
-                            handleRenameSave(selectedUserPid, editNameValue.trim());
-                          }
-                        }}
-                        className="flex-1 bg-black border border-gold/60 text-xs text-white rounded-lg px-2.5 py-1.5 focus:ring-1 focus:ring-gold-accent outline-none font-mono"
-                        autoFocus
-                      />
-                      <button
-                        onClick={() => {
-                          const n = editNameValue.trim() || (selUser.name.startsWith("Intruder") ? "" : selUser.name);
-                          if (!n) {
-                            alert("Please enter a name for this subject.");
-                            return;
-                          }
-                          handleRenameSave(selectedUserPid, n);
-                        }}
-                        className="py-1.5 px-3 bg-green-500/20 text-green-400 border border-green-500/50 hover:bg-green-500/40 rounded-lg text-xs font-orbitron font-bold flex-shrink-0"
-                      >
-                        ✔ SAVE & AUTHORIZE
-                      </button>
-                      <button
-                        onClick={() => forgetFace(selUser.name)}
-                        className="p-1.5 bg-red-500/20 text-red-400 border border-red-500/30 hover:bg-red-500/40 rounded-lg flex-shrink-0"
-                        title="Delete Profile"
-                      >
-                        <Trash size={12} />
-                      </button>
+                    {/* Change Name Input & Tactical Action Buttons */}
+                    <div className="flex flex-col gap-2 mt-1">
+                      <div className="relative w-full">
+                        <input
+                          type="text"
+                          placeholder="Type new name (e.g. John Doe)..."
+                          value={editNameValue}
+                          onChange={(e) => {
+                            setEditingPid(selectedUserPid);
+                            setEditNameValue(e.target.value);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" && editNameValue.trim()) {
+                              handleRenameSave(selectedUserPid, editNameValue.trim());
+                            }
+                          }}
+                          className="w-full bg-black/90 border border-gold/50 text-xs text-white rounded-lg px-3 py-2 focus:ring-1 focus:ring-gold-accent focus:border-gold outline-none font-mono placeholder:text-sec/40"
+                          autoFocus
+                        />
+                      </div>
+
+                      {/* Tactical Action Buttons: Save & Delete */}
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          onClick={() => {
+                            const n = editNameValue.trim() || (selUser.name.startsWith("Intruder") ? "" : selUser.name);
+                            if (!n) {
+                              alert("Please enter a name for this subject.");
+                              return;
+                            }
+                            handleRenameSave(selectedUserPid, n);
+                          }}
+                          className="w-full py-2 px-2.5 bg-emerald-500/20 hover:bg-emerald-500/35 text-emerald-300 border border-emerald-500/50 hover:border-emerald-400 rounded-lg text-[9.5px] font-orbitron font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all shadow-sm active:scale-95 cursor-pointer"
+                        >
+                          <Check size={13} className="text-emerald-400 flex-shrink-0" />
+                          <span className="truncate">SAVE & AUTHORIZE</span>
+                        </button>
+
+                        <button
+                          onClick={() => forgetFace(selUser.name, selectedUserPid)}
+                          className="w-full py-2 px-2.5 bg-red-500/20 hover:bg-red-500/35 text-red-300 border border-red-500/50 hover:border-red-400 rounded-lg text-[9.5px] font-orbitron font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all shadow-sm active:scale-95 cursor-pointer"
+                        >
+                          <Trash size={13} className="text-red-400 flex-shrink-0" />
+                          <span className="truncate">DELETE PROFILE</span>
+                        </button>
+                      </div>
                     </div>
                   </div>
                 );
@@ -3849,7 +3875,7 @@ export default function Dashboard() {
                           setEditingPid(userPid);
                           setEditNameValue(user.name.startsWith("Intruder") ? "" : user.name);
                         }}
-                        className={`p-2 rounded-xl transition-all duration-200 cursor-pointer flex items-center justify-between gap-2.5 border ${
+                        className={`p-2 rounded-xl transition-all duration-200 cursor-pointer flex items-center justify-between gap-2 border ${
                           isSelected
                             ? "bg-gold/15 border-gold shadow-gold-glow scale-[1.01]"
                             : isIntruderUser
@@ -3888,18 +3914,31 @@ export default function Dashboard() {
                           </div>
                         </div>
 
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setSelectedUserPid(userPid);
-                            setEditingPid(userPid);
-                            setEditNameValue(user.name.startsWith("Intruder") ? "" : user.name);
-                          }}
-                          className="py-1 px-2 bg-gold/10 border border-gold/30 hover:bg-gold/20 text-gold-accent rounded text-[8px] font-orbitron font-bold flex-shrink-0 flex items-center gap-1"
-                        >
-                          <Edit2 size={9} />
-                          SELECT
-                        </button>
+                        <div className="flex items-center gap-1 flex-shrink-0">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedUserPid(userPid);
+                              setEditingPid(userPid);
+                              setEditNameValue(user.name.startsWith("Intruder") ? "" : user.name);
+                            }}
+                            className="py-1 px-2 bg-gold/10 border border-gold/30 hover:bg-gold/25 text-gold-accent rounded text-[8px] font-orbitron font-bold flex items-center gap-1 transition-all"
+                            title="Inspect & Edit"
+                          >
+                            <Edit2 size={9} />
+                            SELECT
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              forgetFace(user.name, userPid);
+                            }}
+                            className="p-1 bg-red-950/40 border border-red-500/30 hover:bg-red-900/60 text-red-400 hover:text-red-300 rounded transition-all"
+                            title="Delete Profile"
+                          >
+                            <Trash size={10} />
+                          </button>
+                        </div>
                       </div>
                     );
                   })}

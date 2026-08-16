@@ -1451,6 +1451,91 @@ def create_app() -> "FastAPI":
             else:
                 return JSONResponse({"status": "error", "message": res["message"]}, status_code=500)
 
+        def _do_delete_subject(target: str):
+            sv = _get_sv()
+            if not sv:
+                raise Exception("Main module not running")
+            target = str(target).strip()
+            if not target:
+                return JSONResponse({"status": "error", "message": "Target PID or name is required"}, status_code=400)
+
+            deleted_name = None
+            with sv._fdb_lock:
+                target_pid = None
+                if target in sv.faces_db:
+                    target_pid = target
+                else:
+                    for p, data in list(sv.faces_db.items()):
+                        if data.get("name") == target or p.lower() == target.lower() or data.get("name", "").lower() == target.lower():
+                            target_pid = p
+                            break
+
+                if target_pid and target_pid in sv.faces_db:
+                    deleted_name = sv.faces_db[target_pid].get("name", target_pid)
+                    photo_p = sv.faces_db[target_pid].get("photo")
+                    if photo_p:
+                        try:
+                            p_abs = Path(photo_p)
+                            if p_abs.exists():
+                                p_abs.unlink()
+                        except Exception:
+                            pass
+
+                    try:
+                        known_dir = Path(sv.Config.KNOWN_FACES_DIR)
+                        for ext in (".jpg", ".jpeg", ".png"):
+                            k_file = known_dir / f"{deleted_name}{ext}"
+                            if k_file.exists():
+                                k_file.unlink()
+                    except Exception:
+                        pass
+
+                    del sv.faces_db[target_pid]
+                    sv._save_db_json()
+                    sv._enc_dirty = True
+
+                    # Clean from face engine memory caches
+                    if hasattr(sv, "_global_face_engine") and sv._global_face_engine:
+                        with sv._global_face_engine._lock:
+                            sv._global_face_engine._emb_cache.pop(target_pid, None)
+                            sv._global_face_engine._meta.pop(target_pid, None)
+                    if hasattr(sv, "_yunet_enc_cache"):
+                        with sv._yunet_lock:
+                            sv._yunet_enc_cache.pop(target_pid, None)
+
+                    # Clean active camera state tracks
+                    with _cameras_lock:
+                        for cs in _cameras:
+                            cs.present_pids.discard(target_pid)
+                            for tid, pid_val in list(cs.track_to_pid.items()):
+                                if pid_val == target_pid:
+                                    cs.track_to_pid.pop(tid, None)
+                                    cs.tid_identity_locked.pop(tid, None)
+                                    if hasattr(cs, "stable_id"):
+                                        with cs.stable_id._lock:
+                                            cs.stable_id._tracks.pop(tid, None)
+
+            try:
+                sv.preload_known()
+            except Exception as e:
+                app_log.warning(f"preload_known after delete failed: {e}")
+
+            if deleted_name:
+                try:
+                    sv.speak(f"Profile {deleted_name} deleted.")
+                except Exception:
+                    pass
+                return JSONResponse({"status": "ok", "result": f"Profile '{deleted_name}' deleted successfully"})
+            else:
+                return JSONResponse({"status": "error", "message": f"Subject '{target}' not found in database"}, status_code=404)
+
+        if action in ("delete_subject", "forget_face", "delete_profile") and body:
+            try:
+                target = str(body.get("pid") or body.get("name") or "").strip()
+                return _do_delete_subject(target)
+            except Exception as e:
+                return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
         handler = _control_handlers.get(action)
         if handler:
             try:
@@ -1461,6 +1546,54 @@ def create_app() -> "FastAPI":
                 app_log.warning(f"Control handler '{action}' failed: {e}")
                 return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
         return JSONResponse({"status": "error", "message": f"Unknown action: {action}"}, status_code=404)
+
+    @app.delete("/api/face/{target}")
+    async def delete_face_profile(target: str):
+        """REST DELETE endpoint to delete a biometric profile by PID or name."""
+        try:
+            sv = _get_sv()
+            if not sv:
+                return JSONResponse({"status": "error", "message": "Server unavailable"}, status_code=500)
+            # Find and delete
+            target_str = str(target).strip()
+            deleted_name = None
+            with sv._fdb_lock:
+                target_pid = None
+                if target_str in sv.faces_db:
+                    target_pid = target_str
+                else:
+                    for p, data in list(sv.faces_db.items()):
+                        if data.get("name") == target_str or p.lower() == target_str.lower() or data.get("name", "").lower() == target_str.lower():
+                            target_pid = p
+                            break
+
+                if target_pid and target_pid in sv.faces_db:
+                    deleted_name = sv.faces_db[target_pid].get("name", target_pid)
+                    photo_p = sv.faces_db[target_pid].get("photo")
+                    if photo_p:
+                        try:
+                            p_abs = Path(photo_p)
+                            if p_abs.exists(): p_abs.unlink()
+                        except Exception: pass
+
+                    del sv.faces_db[target_pid]
+                    sv._save_db_json()
+                    sv._enc_dirty = True
+
+                    if hasattr(sv, "_global_face_engine") and sv._global_face_engine:
+                        with sv._global_face_engine._lock:
+                            sv._global_face_engine._emb_cache.pop(target_pid, None)
+                            sv._global_face_engine._meta.pop(target_pid, None)
+
+            try: sv.preload_known()
+            except Exception: pass
+
+            if deleted_name:
+                return JSONResponse({"status": "ok", "result": f"Profile '{deleted_name}' deleted successfully"})
+            return JSONResponse({"status": "error", "message": f"Subject '{target_str}' not found"}, status_code=404)
+        except Exception as e:
+            return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
 
     @app.post("/api/voice_control")
     async def voice_control(request: Request):
