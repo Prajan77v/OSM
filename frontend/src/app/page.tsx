@@ -701,7 +701,7 @@ export default function Dashboard() {
         setSummary(sumRes);
       }
 
-      if (facRes && Array.isArray(facRes) && facRes.length > 0) {
+      if (facRes && Array.isArray(facRes)) {
         setKnownUsers(facRes);
       }
 
