@@ -556,6 +556,14 @@ export default function Dashboard() {
   // Fullscreen Preview state & ref
   const viewportRef = useRef<HTMLDivElement>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [previewSubject, setPreviewSubject] = useState<{
+    pid: string;
+    name: string;
+    status?: string;
+    visitCount?: number;
+    lastSeen?: string;
+    confidence?: number;
+  } | null>(null);
 
   const toggleFullscreen = () => {
     const el = viewportRef.current;
@@ -3592,7 +3600,20 @@ export default function Dashboard() {
                     
                     return (
                       <div className="w-full h-full flex items-center justify-center gap-4 px-4">
-                        <div className={`w-18 h-18 rounded-full border-2 ${isScanning ? 'border-gold-dim/40 animate-pulse' : isIntruder ? 'border-red-500/50 animate-pulse' : 'border-gold-accent/40 success-ring-lock'} overflow-hidden relative flex-shrink-0`}>
+                        <div 
+                          onClick={() => {
+                            if (hasActiveSubject) {
+                              setPreviewSubject({
+                                pid: activeSubject.pid,
+                                name: sName,
+                                status: isIntruder ? "INTRUDER" : "AUTHORIZED",
+                                confidence: activeSubject.confidence,
+                              });
+                            }
+                          }}
+                          className={`w-18 h-18 rounded-full border-2 ${isScanning ? 'border-gold-dim/40 animate-pulse' : isIntruder ? 'border-red-500/50 animate-pulse' : 'border-gold-accent/40 success-ring-lock'} overflow-hidden relative flex-shrink-0 cursor-pointer hover:scale-105 transition-transform`}
+                          title="Click to enlarge face preview"
+                        >
                           {hasActiveSubject ? (
                             <img
                               src={`${API}/api/crop/${activeSubject.pid}?t=${cropKey}`}
@@ -3815,16 +3836,30 @@ export default function Dashboard() {
                     </div>
 
                     <div className="flex items-center gap-3">
-                      <img
-                        src={`${API}/api/crop/${selectedUserPid}?t=${cropKey}`}
-                        alt={selUser.name}
-                        className={`w-12 h-12 rounded-lg object-cover border-2 flex-shrink-0 ${
-                          isSelIntruder ? "border-red-500 shadow-red-glow" : "border-gold"
-                        }`}
-                        onError={(e) => {
-                          (e.target as HTMLImageElement).src = `https://api.dicebear.com/7.x/bottts/svg?seed=${selectedUserPid}`;
+                      <div
+                        onClick={() => {
+                          setPreviewSubject({
+                            pid: selectedUserPid,
+                            name: selUser.name,
+                            status: selUser.status,
+                            visitCount: selUser.visitCount,
+                            lastSeen: selUser.lastSeen,
+                          });
                         }}
-                      />
+                        className={`w-12 h-12 rounded-lg border-2 flex-shrink-0 cursor-pointer hover:scale-105 transition-transform overflow-hidden relative ${
+                          isSelIntruder ? "border-red-500 shadow-red-glow" : "border-gold shadow-gold-glow"
+                        }`}
+                        title="Click to enlarge face preview"
+                      >
+                        <img
+                          src={`${API}/api/crop/${selectedUserPid}?t=${cropKey}`}
+                          alt={selUser.name}
+                          className="w-full h-full object-cover"
+                          onError={(e) => {
+                            (e.target as HTMLImageElement).src = `https://api.dicebear.com/7.x/bottts/svg?seed=${selectedUserPid}`;
+                          }}
+                        />
+                      </div>
                       <div className="flex-1 min-w-0">
                         <div className="font-orbitron text-xs font-bold text-white truncate">{selUser.name}</div>
                         <div className="font-mono text-[8px] text-sec">ID: {selectedUserPid} | Visits: {selUser.visitCount}</div>
@@ -3921,9 +3956,22 @@ export default function Dashboard() {
                         }`}
                       >
                         <div className="flex items-center gap-2.5 min-w-0 flex-1">
-                          <div className={`w-8 h-8 rounded-full overflow-hidden border flex-shrink-0 bg-black flex items-center justify-center relative ${
-                            isIntruderUser ? "border-red-500 shadow-red-glow" : "border-gold-dim"
-                          }`}>
+                          <div 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setPreviewSubject({
+                                pid: userPid,
+                                name: user.name,
+                                status: user.status,
+                                visitCount: user.visitCount,
+                                lastSeen: user.lastSeen,
+                              });
+                            }}
+                            className={`w-8 h-8 rounded-full overflow-hidden border flex-shrink-0 bg-black flex items-center justify-center relative cursor-pointer hover:scale-110 transition-transform ${
+                              isIntruderUser ? "border-red-500 shadow-red-glow" : "border-gold-dim"
+                            }`}
+                            title="Click to enlarge face preview"
+                          >
                             <img
                               src={`${API}/api/crop/${userPid}?t=${cropKey}`}
                               alt={user.name}
@@ -4267,6 +4315,119 @@ export default function Dashboard() {
         )}
       </AnimatePresence>
 
+      {/* ── High-Resolution Face Crop Lightbox Modal ── */}
+      <AnimatePresence>
+        {previewSubject && (
+          <div 
+            className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-4"
+            onClick={() => setPreviewSubject(null)}
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.90, y: 15 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.90, y: 15 }}
+              transition={{ type: "spring", damping: 25, stiffness: 300 }}
+              className="bg-black/95 border-2 border-gold/70 rounded-2xl shadow-gold-glow max-w-md w-full p-6 flex flex-col items-center gap-4 relative overflow-hidden"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Top Bar */}
+              <div className="w-full flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="font-orbitron text-xs font-black text-gold-accent tracking-widest uppercase">BIOMETRIC FACE PREVIEW</span>
+                  <span className={`font-orbitron text-[8px] font-bold px-2 py-0.5 rounded ${
+                    previewSubject.status === "INTRUDER" || previewSubject.status === "UNAUTHORIZED"
+                      ? "text-red-400 bg-red-950/60 border border-red-500/40"
+                      : "text-green-oms bg-green-oms/20 border border-green-500/30"
+                  }`}>
+                    {previewSubject.status || "DETECTED"}
+                  </span>
+                </div>
+                <button
+                  onClick={() => setPreviewSubject(null)}
+                  className="text-sec/60 hover:text-white p-1 rounded-lg hover:bg-white/10 transition-colors cursor-pointer"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              {/* Large Image Frame */}
+              <div className="relative w-64 h-64 rounded-2xl overflow-hidden border-2 border-gold shadow-2xl bg-black flex items-center justify-center">
+                <img
+                  src={`${API}/api/crop/${previewSubject.pid}?t=${cropKey}`}
+                  alt={previewSubject.name}
+                  className="w-full h-full object-cover"
+                  onError={(e) => {
+                    (e.target as HTMLImageElement).src = `https://api.dicebear.com/7.x/bottts/svg?seed=${previewSubject.pid}`;
+                  }}
+                />
+                <div className="hud-scan-line" style={{ animationDuration: "2.5s" }} />
+              </div>
+
+              {/* Details Card */}
+              <div className="w-full bg-white/5 border border-white/10 rounded-xl p-3.5 flex flex-col gap-1.5 font-mono text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="text-sec text-[10px] uppercase font-bold">Subject Name:</span>
+                  <span className="font-orbitron text-sm font-bold text-white truncate max-w-[200px]">{previewSubject.name}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-sec text-[10px] uppercase font-bold">Profile ID:</span>
+                  <span className="text-gold-accent font-bold">{previewSubject.pid}</span>
+                </div>
+                {previewSubject.visitCount !== undefined && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-sec text-[10px] uppercase font-bold">Total Visits:</span>
+                    <span className="text-white">{previewSubject.visitCount} visits</span>
+                  </div>
+                )}
+                {previewSubject.lastSeen && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-sec text-[10px] uppercase font-bold">Last Recorded:</span>
+                    <span className="text-sec text-[11px]">{previewSubject.lastSeen}</span>
+                  </div>
+                )}
+                {previewSubject.confidence !== undefined && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-sec text-[10px] uppercase font-bold">Match Confidence:</span>
+                    <span className="text-emerald-400 font-bold">{Math.round(previewSubject.confidence * 100)}%</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Modal Actions */}
+              <div className="w-full grid grid-cols-2 gap-2.5 mt-1">
+                <button
+                  onClick={() => {
+                    const pid = previewSubject.pid;
+                    const nm = previewSubject.name;
+                    setPreviewSubject(null);
+                    setSelectedUserPid(pid);
+                    setEditingPid(pid);
+                    setEditNameValue(nm.startsWith("Intruder") ? "" : nm);
+                  }}
+                  className="py-2.5 px-3 bg-gold/15 hover:bg-gold/25 text-gold-accent border border-gold/40 hover:border-gold rounded-xl text-xs font-orbitron font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all shadow-sm active:scale-95 cursor-pointer"
+                >
+                  <Edit2 size={13} />
+                  <span>EDIT IDENTITY</span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    const nm = previewSubject.name;
+                    const pid = previewSubject.pid;
+                    setPreviewSubject(null);
+                    forgetFace(nm, pid);
+                  }}
+                  className="py-2.5 px-3 bg-red-500/20 hover:bg-red-500/35 text-red-300 border border-red-500/40 hover:border-red-400 rounded-xl text-xs font-orbitron font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all shadow-sm active:scale-95 cursor-pointer"
+                >
+                  <Trash size={13} />
+                  <span>DELETE</span>
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
       {/* ── Control Feedback Toast Alerts ── */}
       <AnimatePresence>
         {controlMsg && (
@@ -4295,3 +4456,4 @@ export default function Dashboard() {
     </div>
   );
 }
+

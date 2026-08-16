@@ -1002,34 +1002,55 @@ def create_app() -> "FastAPI":
 
         for cs in cams_snapshot:
             active_subjects = []
-            for pid in list(getattr(cs, "present_pids", set())):
+            visible_pids = set(getattr(cs, "present_pids", set()))
+            for d in getattr(cs, "latest_dets", []):
+                p_id = d.get("pid")
+                if d.get("label") == "person" and p_id:
+                    visible_pids.add(p_id)
+
+            for pid in list(visible_pids):
                 if pid in db:
+                    name_val = db[pid].get("name", "Unknown")
+                    known_val = db[pid].get("known", False)
+                    photo_val = db[pid].get("photo")
                     conf = getattr(cs, "pid_confidences", {}).get(pid)
                     if conf is None:
-                        conf = 0.984 if db[pid].get("known", False) else 0.942
-
-                    photo_val = db[pid].get("photo")
-                    if photo_val:
-                        if photo_val not in photo_exists_cache:
-                            photo_exists_cache[photo_val] = (WORKING_DIR / photo_val).exists()
-                        if not photo_exists_cache[photo_val]:
-                            photo_val = None
-
-                    status_val = "ACTIVE"
-                    if hasattr(cs, "behavior") and cs.behavior is not None:
+                        conf = 0.984 if known_val else 0.942
+                else:
+                    known_val = False
+                    name_val = f"Intruder-{pid}" if not str(pid).startswith("Unknown-") else "Unknown"
+                    # Check stable_id display
+                    if hasattr(cs, "stable_id"):
                         try:
-                            status_val = cs.behavior.get(pid).status
+                            s_pid, s_name, s_conf, s_ok = cs.stable_id.get_display_by_pid(pid)
+                            if s_ok and s_name:
+                                name_val = s_name
                         except Exception:
                             pass
+                    photo_val = None
+                    conf = getattr(cs, "pid_confidences", {}).get(pid, 0.80)
 
-                    active_subjects.append({
-                        "pid": pid,
-                        "name": db[pid].get("name", "Unknown"),
-                        "known": db[pid].get("known", False),
-                        "photo": photo_val,
-                        "confidence": float(conf),
-                        "status": status_val
-                    })
+                if photo_val:
+                    if photo_val not in photo_exists_cache:
+                        photo_exists_cache[photo_val] = (WORKING_DIR / photo_val).exists()
+                    if not photo_exists_cache[photo_val]:
+                        photo_val = None
+
+                status_val = "ACTIVE"
+                if hasattr(cs, "behavior") and cs.behavior is not None:
+                    try:
+                        status_val = cs.behavior.get(pid).status
+                    except Exception:
+                        pass
+
+                active_subjects.append({
+                    "pid": pid,
+                    "name": name_val,
+                    "known": known_val,
+                    "photo": photo_val,
+                    "confidence": float(conf),
+                    "status": status_val
+                })
 
             result.append({
                 "id":           cs.cam_id,
