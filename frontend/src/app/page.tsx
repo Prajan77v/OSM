@@ -4031,31 +4031,44 @@ export default function Dashboard() {
             </div>
 
             {/* Timelines history */}
-            <div className="glass-premium px-5 py-4 flex-shrink-0 animate-slide-up" style={{ borderRadius: 20, height: 160 }}>
-              <span className="font-orbitron text-xs font-black text-gold-accent tracking-widest uppercase block mb-3">RECOGNITION TIMELINE</span>
+            <div className="glass-premium px-4 py-3 flex-shrink-0 flex flex-col justify-between animate-slide-up" style={{ borderRadius: 16, height: 160 }}>
+              <div className="flex items-center justify-between mb-1.5 flex-shrink-0">
+                <span className="font-orbitron text-[10px] font-black text-gold-accent tracking-widest uppercase flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-gold-accent animate-pulse inline-block" />
+                  RECOGNITION TIMELINE
+                </span>
+                <span className="font-mono text-[8px] text-sec/70 uppercase tracking-wider">{events.length} LOGGED</span>
+              </div>
               
-              <div className="h-[96px] overflow-y-auto flex flex-col gap-1 pr-1">
+              <div className="flex-1 overflow-y-auto flex flex-col gap-1 pr-1 custom-scrollbar">
                 <AnimatePresence mode="popLayout">
-                  {events.slice(0, 5).map((ev, i) => {
-                    const color = EVENT_COLORS[ev.event] || "#B8B8B8";
+                  {events.slice(0, 8).map((ev, i) => {
+                    const color = EVENT_COLORS[ev.event] || "#00E5FF";
+                    const isIntruder = ev.event === "INTRUDER" || (ev.person && ev.person.startsWith("Intruder"));
                     return (
                       <motion.div
                         key={`${ev.ts}-${i}`}
-                        initial={{ opacity: 0, x: 10 }}
+                        initial={{ opacity: 0, x: 6 }}
                         animate={{ opacity: 1, x: 0 }}
                         exit={{ opacity: 0 }}
-                        className="flex items-center gap-2 text-[10px] py-1 border-b border-white/5 last:border-0"
+                        className="flex items-center justify-between gap-1.5 text-[9.5px] py-1 px-2 rounded-lg bg-white/[0.03] hover:bg-white/[0.07] border border-white/5 transition-colors"
                       >
-                        <div className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: color, boxShadow: `0 0 6px ${color}` }} />
-                        <span className="font-mono text-[9px] text-muted flex-shrink-0">{ev.ts.slice(11, 19)}</span>
-                        <span className="font-orbitron font-bold text-sec truncate flex-1 leading-none">{eventLabel(ev.event)}</span>
-                        <span className="font-inter text-[9px] text-[#FFFFFF] font-medium flex-shrink-0">{ev.person || opName.toUpperCase()}</span>
+                        <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                          <div className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: color, boxShadow: `0 0 6px ${color}` }} />
+                          <span className="font-mono text-[8.5px] text-sec/60 flex-shrink-0">{ev.ts.slice(11, 19)}</span>
+                          <span className="font-orbitron font-semibold text-sec text-[8.5px] truncate">{eventLabel(ev.event)}</span>
+                        </div>
+                        <span className={`font-mono text-[9px] font-bold flex-shrink-0 truncate max-w-[80px] text-right ${
+                          isIntruder ? "text-red-400" : "text-gold-accent"
+                        }`}>
+                          {ev.person || "--"}
+                        </span>
                       </motion.div>
                     );
                   })}
                 </AnimatePresence>
                 {events.length === 0 && (
-                  <p className="font-mono text-[9px] text-muted text-center mt-2">Timeline secured. No logs</p>
+                  <p className="font-mono text-[9px] text-muted text-center my-auto">Timeline secured. Monitoring feed...</p>
                 )}
               </div>
             </div>
@@ -4064,7 +4077,7 @@ export default function Dashboard() {
         </div>
 
         {/* ── FOOTER STATS & ACTIONS BAR ── */}
-        <footer className="flex gap-3 flex-shrink-0 relative" style={{ height: 136 }}>
+        <footer className="flex gap-3 flex-shrink-0 relative h-[142px]">
           
           {/* Active Statistics Sparklines panel */}
           <div className="glass-premium flex-[1.6] px-5 py-3 flex items-center justify-between gap-4">
@@ -4086,14 +4099,14 @@ export default function Dashboard() {
             ))}
           </div>
 
-          {/*Scrolling Diagnostics Logs Feed */}
+          {/* Scrolling Diagnostics Logs Feed */}
           <div className="glass-premium flex-1 px-5 py-3 flex flex-col justify-between min-w-0">
             <div className="flex items-center justify-between flex-shrink-0">
               <span className="font-orbitron text-[9px] font-black text-gold-accent tracking-widest uppercase">DIAGNOSTIC LOG ACTIVE FEED</span>
               <span className="status-indicator text-green-oms bg-green-oms animate-pulse" />
             </div>
             
-            <div className="h-[84px] overflow-y-auto font-mono text-[9.5px] text-sec flex flex-col gap-0.5 pr-1 mt-1 leading-none">
+            <div className="h-[84px] overflow-y-auto font-mono text-[9px] text-sec flex flex-col gap-0.5 pr-1 mt-1 leading-relaxed custom-scrollbar">
               <p className="text-muted uppercase">// AI core telemetry initialized successfully.</p>
               <p className={telemetry?.yolo ? 'text-[#FFFFFF] uppercase' : 'text-red-400 uppercase'}>
                 {telemetry?.yolo ? '✓' : '✗'} YOLO OBJECT DETECTION ENGINE {telemetry?.yolo ? 'ONLINE' : 'OFFLINE — CHECK YOLO MODEL'}.
@@ -4108,26 +4121,25 @@ export default function Dashboard() {
             </div>
           </div>
 
-          {/* Quick Actions Panel */}
-          <div className="glass-gold-active flex-shrink-0 px-4 py-3 flex flex-col gap-2 justify-center" style={{ width: 220 }}>
-            <span className="font-orbitron text-[9px] font-black text-gold-accent tracking-widest uppercase text-center block mb-0.5">CORE INTERACTIVE ACTIONS</span>
+          {/* Quick Actions Panel — Neat, Balanced & Fully Proportioned */}
+          <div className="glass-gold-active flex-shrink-0 px-3.5 py-2.5 flex flex-col justify-between" style={{ width: 245 }}>
+            <span className="font-orbitron text-[8.5px] font-black text-gold-accent tracking-widest uppercase text-center block">CORE INTERACTIVE ACTIONS</span>
             
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-2 gap-1.5">
               <button
                 onClick={() => setWizardOpen(true)}
                 disabled={btnLoading["register_face"]}
-                className="btn-gold-luxury py-2 px-1 text-[9px] justify-center"
+                className="py-1.5 px-2 bg-gold/10 hover:bg-gold/20 text-gold-accent border border-gold/40 hover:border-gold rounded-lg text-[8.5px] font-orbitron font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all shadow-sm active:scale-95 cursor-pointer"
                 title="Opens custom face enrollment wizard"
               >
                 {btnLoading["register_face"] ? (
-                  <RefreshCw size={11} className="animate-spin" />
+                  <RefreshCw size={10} className="animate-spin" />
                 ) : (
-                  <UserPlus size={11} />
+                  <UserPlus size={10} />
                 )}
-                ENROLL
+                <span>ENROLL</span>
               </button>
 
-              {/* AUTO REGISTER NEW FACES toggle — mirrors the OpenCV desktop sidebar pill */}
               <button
                 onClick={async () => {
                   setBtnLoading(b => ({ ...b, toggle_auto_register: true }));
@@ -4147,77 +4159,77 @@ export default function Dashboard() {
                   }
                 }}
                 disabled={btnLoading["toggle_auto_register"]}
-                className={`py-2 px-1 text-[9px] justify-center font-orbitron font-bold tracking-widest rounded-xl border transition-all duration-300 flex items-center gap-1.5 ${
+                className={`py-1.5 px-2 rounded-lg text-[8.5px] font-orbitron font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 border transition-all active:scale-95 cursor-pointer ${
                   detectNewIds
-                    ? "bg-green-900/30 border-green-500/40 text-green-400 hover:bg-green-900/50 hover:border-green-400"
-                    : "bg-red-900/30 border-red-500/40 text-red-400 hover:bg-red-900/50 hover:border-red-400"
+                    ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/50 hover:bg-emerald-500/30 hover:border-emerald-400 shadow-sm"
+                    : "bg-red-500/20 text-red-300 border-red-500/50 hover:bg-red-500/30 hover:border-red-400 shadow-sm"
                 }`}
                 title={detectNewIds ? "Auto Register ON — click to disable" : "Auto Register OFF — click to enable"}
               >
                 {btnLoading["toggle_auto_register"] ? (
-                  <RefreshCw size={11} className="animate-spin" />
+                  <RefreshCw size={10} className="animate-spin" />
                 ) : detectNewIds ? (
-                  <ToggleRight size={13} />
+                  <ToggleRight size={11} className="text-emerald-400" />
                 ) : (
-                  <ToggleLeft size={13} />
+                  <ToggleLeft size={11} className="text-red-400" />
                 )}
-                AUTO REG
+                <span>AUTO REG</span>
               </button>
 
               <button
                 onClick={() => doControl("export_csv")}
                 disabled={btnLoading["export_csv"]}
-                className="btn-gold-luxury py-2 px-1 text-[9px] justify-center"
+                className="py-1.5 px-2 bg-gold/10 hover:bg-gold/20 text-gold-accent border border-gold/40 hover:border-gold rounded-lg text-[8.5px] font-orbitron font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all shadow-sm active:scale-95 cursor-pointer"
                 title="Exports logs activity to CSV log spreadsheet"
               >
                 {btnLoading["export_csv"] ? (
-                  <RefreshCw size={11} className="animate-spin" />
+                  <RefreshCw size={10} className="animate-spin" />
                 ) : (
-                  <Download size={11} />
+                  <Download size={10} />
                 )}
-                EXPORT CSV
+                <span>EXPORT CSV</span>
               </button>
 
               <button
                 onClick={() => doControl("test_telegram")}
                 disabled={btnLoading["test_telegram"]}
-                className="btn-gold-luxury py-2 px-1 text-[9px] justify-center"
+                className="py-1.5 px-2 bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 hover:border-cyan-400 rounded-lg text-[8.5px] font-orbitron font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all shadow-sm active:scale-95 cursor-pointer"
                 title="Sends secure test alert to Telegram"
               >
                 {btnLoading["test_telegram"] ? (
-                  <RefreshCw size={11} className="animate-spin" />
+                  <RefreshCw size={10} className="animate-spin" />
                 ) : (
-                  <Send size={11} />
+                  <Send size={10} />
                 )}
-                TELEGRAM
+                <span>TELEGRAM</span>
               </button>
 
               <button
                 onClick={() => doControl("alarm")}
                 disabled={btnLoading["alarm"]}
-                className="btn-danger-luxury py-2 px-1 text-[9px] justify-center"
+                className="py-1.5 px-2 bg-red-500/20 hover:bg-red-500/35 text-red-300 border border-red-500/50 hover:border-red-400 rounded-lg text-[8.5px] font-orbitron font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all shadow-sm active:scale-95 cursor-pointer"
                 title="Triggers local alarm alert logs"
               >
                 {btnLoading["alarm"] ? (
-                  <RefreshCw size={11} className="animate-spin" />
+                  <RefreshCw size={10} className="animate-spin" />
                 ) : (
-                  <Volume2 size={11} />
+                  <Volume2 size={10} />
                 )}
-                ALARM
+                <span>ALARM</span>
               </button>
 
               <button
                 onClick={() => doControl("reset_logs")}
                 disabled={btnLoading["reset_logs"]}
-                className="btn-danger-luxury py-2 px-1 text-[9px] justify-center"
+                className="py-1.5 px-2 bg-red-500/20 hover:bg-red-500/35 text-red-300 border border-red-500/50 hover:border-red-400 rounded-lg text-[8.5px] font-orbitron font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all shadow-sm active:scale-95 cursor-pointer"
                 title="Resets and clears all system log files and visit entries"
               >
                 {btnLoading["reset_logs"] ? (
-                  <RefreshCw size={11} className="animate-spin" />
+                  <RefreshCw size={10} className="animate-spin" />
                 ) : (
-                  <Trash size={11} />
+                  <Trash size={10} />
                 )}
-                RESET LOGS
+                <span>RESET LOGS</span>
               </button>
             </div>
           </div>
