@@ -347,7 +347,10 @@ class StableIdentityEngine:
                         if t.display_conf() < HUD_MIN_CONF and not t.is_confirmed():
                             continue   # Too low confidence — suppress ghost detections
                     else:
-                        if t.display_conf() < 0.25:
+                        # Non-person objects: filter out low-confidence noise & 1-frame glitches
+                        if t.display_conf() < 0.42:
+                            continue
+                        if t.hits < 2 and t.display_conf() < 0.60:
                             continue
 
                     is_known = t.is_confirmed() and not (t.confirmed_pid and t.confirmed_pid.startswith("Unknown-"))
@@ -375,16 +378,30 @@ class StableIdentityEngine:
                 # Check overlap against already-kept boxes
                 duplicate = False
                 for kept_det in kept:
-                    # Only suppress boxes of the SAME class (e.g. duplicate person tracks)
-                    if det.get("label", "person") != kept_det.get("label", "person"):
-                        continue
-                    ovl = _overlap(det["box"], kept_det["box"])
-                    if ovl > NMS_IOU_THRESHOLD:
-                        # Same physical region — suppress this lower-priority box
-                        suppressed_tids.add(det["tid"])
-                        log.debug(f"[SIE-NMS] Suppressed track {det['tid']} (overlap={ovl:.2f} with track {kept_det['tid']})")
-                        duplicate = True
-                        break
+                    is_det_p  = (det.get("label") == "person")
+                    is_kept_p = (kept_det.get("label") == "person")
+
+                    # Case 1: Person vs Person duplicate
+                    if is_det_p and is_kept_p:
+                        ovl = _overlap(det["box"], kept_det["box"])
+                        if ovl > NMS_IOU_THRESHOLD:
+                            suppressed_tids.add(det["tid"])
+                            log.debug(f"[SIE-NMS] Suppressed track {det['tid']} (overlap={ovl:.2f} with track {kept_det['tid']})")
+                            duplicate = True
+                            break
+
+                    # Case 2: Object vs Object competing on the same physical item
+                    # (e.g. Remote vs Cell Phone or duplicate Chair boxes)
+                    elif not is_det_p and not is_kept_p:
+                        ovl = _overlap(det["box"], kept_det["box"])
+                        if ovl > 0.40:
+                            suppressed_tids.add(det["tid"])
+                            log.debug(f"[SIE-NMS] Suppressed competing object track {det['tid']} {det.get('disp')} (overlap={ovl:.2f} with {kept_det['tid']} {kept_det.get('disp')})")
+                            duplicate = True
+                            break
+
+                    # Case 3: Person vs Object (e.g. person holding phone) -> Allowed to coexist!
+
                 if not duplicate:
                     # Clean up internal field before returning
                     det.pop("_priority", None)
@@ -697,9 +714,10 @@ def nms_detections(dets: list,
                    min_conf: float = HUD_MIN_CONF) -> list:
     """
     Apply priority-aware IoU NMS to a flat list of detection dicts.
-    Only suppresses duplicate boxes belonging to the SAME class.
+    Suppresses duplicate persons and competing overlapping objects,
+    while preserving objects interacting with persons.
     """
-    # Drop below-threshold confidence boxes (except confirmed/locked or objects >= 0.25)
+    # Drop below-threshold confidence boxes (person >= min_conf, objects >= 0.42)
     filtered = []
     for d in dets:
         label = d.get("label", "person")
@@ -708,7 +726,7 @@ def nms_detections(dets: list,
             if d.get("locked") or (d.get("pid", "").startswith("Unknown-") is False and d.get("pid")) or conf >= min_conf:
                 filtered.append(d)
         else:
-            if conf >= 0.25:
+            if conf >= 0.42:
                 filtered.append(d)
 
     # Sort: highest priority first, then highest confidence
@@ -724,20 +742,33 @@ def nms_detections(dets: list,
 
         duplicate = False
         for kept_det in kept:
-            # Only suppress boxes of the SAME class (e.g. duplicate person tracks)
-            if det.get("label", "person") != kept_det.get("label", "person"):
-                continue
-            ovl = _overlap(det["box"], kept_det["box"])
-            if ovl > iou_threshold:
-                # Boxes overlap heavily — suppress the lower-priority one
-                if tid is not None:
-                    suppressed_tids.add(tid)
-                log.debug(
-                    "[NMS] Suppressed tid=%s disp=%s (overlap=%.2f with tid=%s disp=%s)",
-                    tid, det.get("disp"), ovl, kept_det.get("tid"), kept_det.get("disp")
-                )
-                duplicate = True
-                break
+            is_det_p  = (det.get("label") == "person")
+            is_kept_p = (kept_det.get("label") == "person")
+
+            # Case 1: Person vs Person duplicate
+            if is_det_p and is_kept_p:
+                ovl = _overlap(det["box"], kept_det["box"])
+                if ovl > iou_threshold:
+                    if tid is not None:
+                        suppressed_tids.add(tid)
+                    duplicate = True
+                    break
+
+            # Case 2: Object vs Object competing on the same physical item
+            # (e.g. Remote vs Cell Phone or duplicate Chair boxes)
+            elif not is_det_p and not is_kept_p:
+                ovl = _overlap(det["box"], kept_det["box"])
+                if ovl > 0.40:
+                    if tid is not None:
+                        suppressed_tids.add(tid)
+                    log.debug(
+                        "[NMS] Suppressed competing object tid=%s %s (overlap=%.2f with tid=%s %s)",
+                        tid, det.get("disp"), ovl, kept_det.get("tid"), kept_det.get("disp")
+                    )
+                    duplicate = True
+                    break
+
+            # Case 3: Person vs Object -> Allowed to coexist!
 
         if not duplicate:
             kept.append(det)

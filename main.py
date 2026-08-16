@@ -2427,20 +2427,24 @@ class SpatialTracker:
         self.history: Dict[int, Tuple] = {}
 
     def track(self, boxes: List[Tuple]) -> List[int]:
-        now   = time.time()
-        stale = [t for t,(_, ts) in self.history.items() if now - ts > 2.0]
-        for t in stale: del self.history[t]
+        now = time.time()
+        stale = [t for t, (_, ts) in self.history.items() if now - ts > 3.5]
+        for t in stale:
+            del self.history[t]
         tids = []
         for box in boxes:
-            x1,y1,x2,y2 = box
-            cx,cy = (x1+x2)/2.0, (y1+y2)/2.0
-            best_t, best_d = None, 110.0
-            for tid,(pb,_) in self.history.items():
-                px,py = (pb[0]+pb[2])/2.0, (pb[1]+pb[3])/2.0
-                d = math.hypot(cx-px, cy-py)
-                if d < best_d: best_d = d; best_t = tid
+            x1, y1, x2, y2 = box
+            cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+            best_t, best_d = None, 140.0
+            for tid, (pb, _) in self.history.items():
+                px, py = (pb[0] + pb[2]) / 2.0, (pb[1] + pb[3]) / 2.0
+                d = math.hypot(cx - px, cy - py)
+                if d < best_d:
+                    best_d = d
+                    best_t = tid
             tid = best_t if best_t is not None else self.next_tid
-            if best_t is None: self.next_tid += 1
+            if best_t is None:
+                self.next_tid += 1
             self.history[tid] = (box, now)
             tids.append(tid)
         return tids
