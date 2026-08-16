@@ -1468,42 +1468,39 @@ def create_app() -> "FastAPI":
                                                 cs.stable_id.force_identity(t_id, target_pid, new_name, 0.99)
                                     if target_pid in getattr(cs, "present_pids", set()):
                                         cs.present_pids.add(target_pid)
+                                    if hasattr(cs, "stable_id"):
+                                        cs.stable_id.force_identity_by_pid(target_pid, new_name)
+                                    for d in getattr(cs, "latest_dets", []):
+                                        if d.get("pid") == target_pid:
+                                            d["disp"] = new_name.upper()
 
                     # Deduplicate any remaining duplicate profiles
                     sv.deduplicate_profiles()
                     sv._save_db_json()
                     sv._enc_dirty = True
-                                # Also update any TENTATIVE entries awaiting confirmation
-                                if hasattr(cs, "stable_id"):
-                                    cs.stable_id.force_identity_by_pid(target_pid, new_name)
-                                for d in getattr(cs, "latest_dets", []):
-                                    if d.get("pid") == target_pid:
-                                        d["disp"] = new_name.upper()
 
-                        sv._save_db_json()
-
-                        if "Intruder" in old_name or "Object-" in old_name:
-                            any_intruders = False
-                            with _cameras_lock:
-                                cams_s2 = list(_cameras)
-                            for cs in cams_s2:
-                                for active_pid in getattr(cs, "present_pids", set()):
-                                    p_name = sv.faces_db.get(active_pid, {}).get("name", "")
-                                    if "Intruder" in p_name or "Object-" in p_name:
-                                        any_intruders = True
-                                        break
-                                if any_intruders:
+                    if "Intruder" in old_name or "Object-" in old_name:
+                        any_intruders = False
+                        with _cameras_lock:
+                            cams_s2 = list(_cameras)
+                        for cs in cams_s2:
+                            for active_pid in getattr(cs, "present_pids", set()):
+                                p_name = sv.faces_db.get(active_pid, {}).get("name", "")
+                                if "Intruder" in p_name or "Object-" in p_name:
+                                    any_intruders = True
                                     break
-                            if not any_intruders:
-                                sv.threat_engine.level = "GREEN"
-                                sv.threat_engine.trigger_reason = None
-                                with _cameras_lock:
-                                    for cs in _cameras:
-                                        if cs.threat_level == "RED":
-                                            cs.threat_level = "GREEN"
+                            if any_intruders:
+                                break
+                        if not any_intruders:
+                            sv.threat_engine.level = "GREEN"
+                            sv.threat_engine.trigger_reason = None
+                            with _cameras_lock:
+                                for cs in _cameras:
+                                    if cs.threat_level == "RED":
+                                        cs.threat_level = "GREEN"
 
-                        sv._enc_dirty = True
-                        speak_name = new_name
+                    sv._enc_dirty = True
+                    speak_name = new_name
 
                 # FE-03: preload_known called OUTSIDE _fdb_lock
                 try:
