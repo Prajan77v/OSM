@@ -2207,6 +2207,13 @@ def _register_face_yunet(enc):
     return pid, name, True
 
 def _register_face_insightface(enc):
+    if _global_face_engine is not None:
+        # Check if embedding matches any existing profile before allocating a new PID
+        matched_pid, matched_name, is_new, s_score = _global_face_engine.match(enc, threshold=0.32)
+        if matched_pid and not is_new:
+            _global_face_engine.register(matched_pid, matched_name, enc)
+            return matched_pid, matched_name, False
+
     with _fdb_lock:
         pid  = _new_pid(); name = f"Intruder-{pid}"
         now  = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -2215,6 +2222,7 @@ def _register_face_insightface(enc):
                          "engine":"insightface","encodings":[enc]}
     if _global_face_engine is not None:
         _global_face_engine.register(pid, name, enc, known=False)
+        _global_face_engine.deduplicate(faces_db, _fdb_lock)
     _mark_db_dirty()
     return pid, name, True
 

@@ -196,7 +196,7 @@ class FaceEngine:
     def deduplicate(self, faces_db: dict, fdb_lock) -> List[Tuple[str, str]]:
         """
         Scan all stored ArcFace profiles, calculate pairwise maximum similarity,
-        and merge duplicate profiles (similarity >= 0.28).
+        and merge duplicate profiles (similarity >= 0.28 or identical names).
         Returns list of (kept_pid, dropped_pid) tuples.
         """
         with self._lock:
@@ -210,6 +210,7 @@ class FaceEngine:
                     continue
                 encs1 = self._emb_cache.get(pid1, [])
                 meta1 = self._meta.get(pid1, {})
+                name1 = meta1.get("name", "").strip().lower()
                 known1 = meta1.get("known", False)
 
                 for j in range(i + 1, len(pids)):
@@ -218,8 +219,13 @@ class FaceEngine:
                         continue
                     encs2 = self._emb_cache.get(pid2, [])
                     meta2 = self._meta.get(pid2, {})
+                    name2 = meta2.get("name", "").strip().lower()
                     known2 = meta2.get("known", False)
 
+                    # Check 1: Same Name match (e.g. both named "Prajan")
+                    same_name = (bool(name1) and bool(name2) and name1 == name2 and not name1.startswith("intruder") and not name1.startswith("unknown"))
+
+                    # Check 2: Biometric embedding similarity
                     max_sim = -1.0
                     for e1 in encs1:
                         for e2 in encs2:
@@ -228,11 +234,15 @@ class FaceEngine:
                                 if sim > max_sim:
                                     max_sim = sim
 
-                    merge_thresh = 0.34 if (known1 and known2) else 0.28
-                    if max_sim >= merge_thresh:
-                        if known1 and known2:
-                            continue  # Keep distinct authorized persons separate
+                    should_merge = False
+                    if same_name:
+                        should_merge = True
+                    elif max_sim >= 0.38:
+                        should_merge = True
+                    elif max_sim >= 0.28 and not (known1 and known2):
+                        should_merge = True
 
+                    if should_merge:
                         if known1 and not known2:
                             keep, drop = pid1, pid2
                         elif known2 and not known1:
@@ -264,6 +274,9 @@ class FaceEngine:
                             faces_db[keep]["visit_count"] = (
                                 faces_db[keep].get("visit_count", 0) + faces_db[drop].get("visit_count", 0)
                             )
+                            # Inherit photo if keep has none
+                            if not faces_db[keep].get("photo") and faces_db[drop].get("photo"):
+                                faces_db[keep]["photo"] = faces_db[drop]["photo"]
                         del faces_db[drop]
 
         return merged_pairs

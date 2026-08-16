@@ -1279,20 +1279,33 @@ def create_app() -> "FastAPI":
 
                 with sv._fdb_lock:
                     target_pid = pid
-                    # If target is an active Unknown track (e.g. Unknown-1, Unknown-2), register it now
+                    # Check if an existing profile already has this same name (case-insensitive)
+                    existing_match_pid = None
+                    for ep_k, ep_v in sv.faces_db.items():
+                        if ep_k != pid and ep_v.get("name", "").strip().lower() == new_name.strip().lower():
+                            existing_match_pid = ep_k
+                            break
+
+                    # If target is an active Unknown track (e.g. Unknown-1, Unknown-2)
                     if target_pid not in sv.faces_db:
-                        # Generate a clean PID for this new subject
-                        new_assigned_pid = f"P{len(sv.faces_db)+1}"
-                        created_profile = {
-                            "name": new_name,
-                            "known": True,
-                            "in_scene": True,
-                            "first_seen": datetime.now().isoformat(),
-                            "last_seen": datetime.now().isoformat(),
-                            "visit_count": 1,
-                            "photo": None
-                        }
-                        sv.faces_db[new_assigned_pid] = created_profile
+                        if existing_match_pid:
+                            # Re-use existing profile!
+                            target_pid = existing_match_pid
+                            sv.faces_db[target_pid]["visit_count"] = sv.faces_db[target_pid].get("visit_count", 1) + 1
+                        else:
+                            # Generate a clean PID for this new subject
+                            new_assigned_pid = f"P{len(sv.faces_db)+1}"
+                            created_profile = {
+                                "name": new_name,
+                                "known": True,
+                                "in_scene": True,
+                                "first_seen": datetime.now().isoformat(),
+                                "last_seen": datetime.now().isoformat(),
+                                "visit_count": 1,
+                                "photo": None
+                            }
+                            sv.faces_db[new_assigned_pid] = created_profile
+                            target_pid = new_assigned_pid
 
                         # If face engine is available, register embedding from active track
                         with _cameras_lock:
@@ -1310,17 +1323,16 @@ def create_app() -> "FastAPI":
 
                         for cs in cams_list:
                             if track_tid is not None and track_tid in cs.track_to_pid:
-                                cs.track_to_pid[track_tid] = new_assigned_pid
+                                cs.track_to_pid[track_tid] = target_pid
                                 cs.tid_identity_locked[track_tid] = True
-                                # Immediately force-lock in StableIdentityEngine
                                 if hasattr(cs, "stable_id"):
-                                    cs.stable_id.force_identity(track_tid, new_assigned_pid, new_name, 0.99)
+                                    cs.stable_id.force_identity(track_tid, target_pid, new_name, 0.99)
                             with cs.frame_lock:
                                 f_copy = cs.latest_frame.copy() if cs.latest_frame is not None else None
                             if f_copy is not None:
                                 for d in getattr(cs, "latest_dets", []):
                                     if d.get("pid") == pid or (track_tid is not None and d.get("tid") == track_tid):
-                                        d["pid"] = new_assigned_pid
+                                        d["pid"] = target_pid
                                         d["disp"] = new_name.upper()
                                         x1, y1, x2, y2 = d["box"]
                                         H, W = f_copy.shape[:2]
@@ -1332,92 +1344,135 @@ def create_app() -> "FastAPI":
                                             crop_saved = True
                                             if getattr(sv, "FACE_ENGINE_AVAILABLE", False) and getattr(sv, "_global_face_engine", None) is not None:
                                                 try:
-                                                    sv._global_face_engine.register_face(new_assigned_pid, new_name, crop, is_known=True)
+                                                    sv._global_face_engine.register_face(target_pid, new_name, crop, is_known=True)
                                                 except Exception:
                                                     pass
                                             break
                             if crop_saved: break
 
                         if crop_saved:
-                            try: sv.faces_db[new_assigned_pid]["photo"] = str(dest_img.relative_to(WORKING_DIR))
-                            except Exception: sv.faces_db[new_assigned_pid]["photo"] = str(dest_img)
+                            try: sv.faces_db[target_pid]["photo"] = str(dest_img.relative_to(WORKING_DIR))
+                            except Exception: sv.faces_db[target_pid]["photo"] = str(dest_img)
 
-                        target_pid = new_assigned_pid
                         old_name = "Unknown"
-                        sv._save_db_json()
-                        sv._enc_dirty = True
                         speak_name = new_name
 
                     else:
-                        old_name = sv.faces_db[target_pid].get("name", "Unknown")
-                        sv.faces_db[target_pid]["name"] = new_name
-                        sv.faces_db[target_pid]["known"] = True
+                        # Target profile is in database
+                        if existing_match_pid:
+                            # Merge target_pid into existing_match_pid!
+                            app_log.info(f"[MERGE] Merging duplicate profile {target_pid} into existing {existing_match_pid} ({new_name})")
+                            sv.faces_db[existing_match_pid]["visit_count"] = (
+                                sv.faces_db[existing_match_pid].get("visit_count", 0) + sv.faces_db[target_pid].get("visit_count", 0)
+                            )
+                            if not sv.faces_db[existing_match_pid].get("photo") and sv.faces_db[target_pid].get("photo"):
+                                sv.faces_db[existing_match_pid]["photo"] = sv.faces_db[target_pid]["photo"]
 
-                        if getattr(sv, "FACE_ENGINE_AVAILABLE", False) and getattr(sv, "_global_face_engine", None) is not None:
-                            try:
-                                sv._global_face_engine.rename(target_pid, new_name, set_known=True)
-                            except Exception:
-                                pass
-
-                        import shutil
-                        from pathlib import Path
-
-                        known_dir = Path(sv.Config.KNOWN_FACES_DIR)
-                        known_dir.mkdir(parents=True, exist_ok=True)
-                        dest_img = known_dir / f"{new_name}.jpg"
-
-                        photo_copied = False
-                        photo_val = sv.faces_db[target_pid].get("photo")
-                        if photo_val:
-                            p_path = Path(photo_val)
-                            if not p_path.is_absolute():
-                                p_path = WORKING_DIR / p_path
-                            if p_path.exists():
+                            # Merge embeddings in face engine
+                            if getattr(sv, "FACE_ENGINE_AVAILABLE", False) and getattr(sv, "_global_face_engine", None) is not None:
                                 try:
-                                    shutil.copy(str(p_path), str(dest_img))
-                                    photo_copied = True
+                                    drop_encs = sv._global_face_engine._emb_cache.get(target_pid, [])
+                                    for de in drop_encs:
+                                        sv._global_face_engine.register(existing_match_pid, new_name, de, known=True)
+                                    sv._global_face_engine.delete(target_pid)
                                 except Exception:
                                     pass
 
-                        if not photo_copied:
+                            # Re-map active tracks from target_pid to existing_match_pid
                             with _cameras_lock:
-                                cams_s = list(_cameras)
-                            for cs in cams_s:
-                                frame = None
-                                with cs.frame_lock:
-                                    if cs.latest_frame is not None:
-                                        frame = cs.latest_frame.copy()
-                                if frame is not None:
-                                    for d in getattr(cs, "latest_dets", []):
-                                        if d.get("pid") == target_pid:
-                                            d["disp"] = new_name.upper()
-                                            x1, y1, x2, y2 = d["box"]
-                                            H, W = frame.shape[:2]
-                                            x1, y1 = max(0, int(x1)), max(0, int(y1))
-                                            x2, y2 = min(W, int(x2)), min(H, int(y2))
-                                            crop = frame[y1:y2, x1:x2]
-                                            if crop.size > 0:
-                                                cv2.imwrite(str(dest_img), crop)
-                                                photo_copied = True
-                                                break
-                                if photo_copied:
-                                    break
+                                for cs in _cameras:
+                                    for t_id, p_id in list(cs.track_to_pid.items()):
+                                        if p_id == target_pid or p_id == existing_match_pid:
+                                            cs.track_to_pid[t_id] = existing_match_pid
+                                            cs.tid_identity_locked[t_id] = True
+                                            if hasattr(cs, "stable_id"):
+                                                cs.stable_id.force_identity(t_id, existing_match_pid, new_name, 0.99)
+                                    if target_pid in getattr(cs, "present_pids", set()):
+                                        cs.present_pids.discard(target_pid)
+                                        cs.present_pids.add(existing_match_pid)
 
-                        if photo_copied:
-                            try:
-                                sv.faces_db[target_pid]["photo"] = str(dest_img.relative_to(WORKING_DIR))
-                            except ValueError:
-                                sv.faces_db[target_pid]["photo"] = str(dest_img)
+                            # Delete duplicate target_pid
+                            del sv.faces_db[target_pid]
+                            target_pid = existing_match_pid
+                            old_name = new_name
+                            speak_name = new_name
 
-                         # Lock active tracks to this newly renamed known profile immediately
-                        with _cameras_lock:
-                            for cs in _cameras:
-                                for t_id, p_id in list(cs.track_to_pid.items()):
-                                    if p_id == target_pid:
-                                        cs.tid_identity_locked[t_id] = True
-                                        # Force-lock in StableIdentityEngine too
-                                        if hasattr(cs, "stable_id"):
-                                            cs.stable_id.force_identity(t_id, target_pid, new_name, 0.99)
+                        else:
+                            old_name = sv.faces_db[target_pid].get("name", "Unknown")
+                            sv.faces_db[target_pid]["name"] = new_name
+                            sv.faces_db[target_pid]["known"] = True
+
+                            if getattr(sv, "FACE_ENGINE_AVAILABLE", False) and getattr(sv, "_global_face_engine", None) is not None:
+                                try:
+                                    sv._global_face_engine.rename(target_pid, new_name, set_known=True)
+                                except Exception:
+                                    pass
+
+                            import shutil
+                            from pathlib import Path
+
+                            known_dir = Path(sv.Config.KNOWN_FACES_DIR)
+                            known_dir.mkdir(parents=True, exist_ok=True)
+                            dest_img = known_dir / f"{new_name}.jpg"
+
+                            photo_copied = False
+                            photo_val = sv.faces_db[target_pid].get("photo")
+                            if photo_val:
+                                p_path = Path(photo_val)
+                                if not p_path.is_absolute():
+                                    p_path = WORKING_DIR / p_path
+                                if p_path.exists():
+                                    try:
+                                        shutil.copy(str(p_path), str(dest_img))
+                                        photo_copied = True
+                                    except Exception:
+                                        pass
+
+                            if not photo_copied:
+                                with _cameras_lock:
+                                    cams_s = list(_cameras)
+                                for cs in cams_s:
+                                    frame = None
+                                    with cs.frame_lock:
+                                        if cs.latest_frame is not None:
+                                            frame = cs.latest_frame.copy()
+                                    if frame is not None:
+                                        for d in getattr(cs, "latest_dets", []):
+                                            if d.get("pid") == target_pid:
+                                                d["disp"] = new_name.upper()
+                                                x1, y1, x2, y2 = d["box"]
+                                                H, W = frame.shape[:2]
+                                                x1, y1 = max(0, int(x1)), max(0, int(y1))
+                                                x2, y2 = min(W, int(x2)), min(H, int(y2))
+                                                crop = frame[y1:y2, x1:x2]
+                                                if crop.size > 0:
+                                                    cv2.imwrite(str(dest_img), crop)
+                                                    photo_copied = True
+                                                    break
+                                    if photo_copied:
+                                        break
+
+                            if photo_copied:
+                                try:
+                                    sv.faces_db[target_pid]["photo"] = str(dest_img.relative_to(WORKING_DIR))
+                                except ValueError:
+                                    sv.faces_db[target_pid]["photo"] = str(dest_img)
+
+                            # Lock active tracks to this newly renamed known profile immediately
+                            with _cameras_lock:
+                                for cs in _cameras:
+                                    for t_id, p_id in list(cs.track_to_pid.items()):
+                                        if p_id == target_pid:
+                                            cs.tid_identity_locked[t_id] = True
+                                            if hasattr(cs, "stable_id"):
+                                                cs.stable_id.force_identity(t_id, target_pid, new_name, 0.99)
+                                    if target_pid in getattr(cs, "present_pids", set()):
+                                        cs.present_pids.add(target_pid)
+
+                    # Deduplicate any remaining duplicate profiles
+                    sv.deduplicate_profiles()
+                    sv._save_db_json()
+                    sv._enc_dirty = True
                                 # Also update any TENTATIVE entries awaiting confirmation
                                 if hasattr(cs, "stable_id"):
                                     cs.stable_id.force_identity_by_pid(target_pid, new_name)
