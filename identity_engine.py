@@ -262,6 +262,8 @@ class TrackIdentity:
         """Returns stable display name."""
         if self.confirmed_name:
             return self.confirmed_name
+        if self.label != "person":
+            return self.label.upper()
         return self.unknown_tag or f"UNKNOWN #{self.track_id:02d}"
 
     def display_conf(self) -> float:
@@ -339,10 +341,14 @@ class StableIdentityEngine:
                     t.latest_smoothed_box = smoothed
 
                     # Visibility gates
-                    if t.hits < TRACK_MIN_HITS and not t.is_confirmed():
-                        continue   # Too new — suppress until confirmed enough
-                    if t.display_conf() < HUD_MIN_CONF and not t.is_confirmed():
-                        continue   # Too low confidence — suppress ghost detections
+                    if t.label == "person":
+                        if t.hits < TRACK_MIN_HITS and not t.is_confirmed():
+                            continue   # Too new — suppress until confirmed enough
+                        if t.display_conf() < HUD_MIN_CONF and not t.is_confirmed():
+                            continue   # Too low confidence — suppress ghost detections
+                    else:
+                        if t.display_conf() < 0.25:
+                            continue
 
                     is_known = t.is_confirmed() and not (t.confirmed_pid and t.confirmed_pid.startswith("Unknown-"))
                     raw_dets.append({
@@ -355,7 +361,7 @@ class StableIdentityEngine:
                         "is_known": is_known,
                         "locked":   t.identity_locked,
                         "state":    t.state,
-                        "_priority": self._track_priority({"state": t.state, "locked": t.identity_locked})
+                        "_priority": self._track_priority({"state": t.state, "locked": t.identity_locked, "label": t.label})
                     })
 
             # ── IoU NMS: suppress duplicate overlapping boxes ──────────────────
@@ -369,6 +375,9 @@ class StableIdentityEngine:
                 # Check overlap against already-kept boxes
                 duplicate = False
                 for kept_det in kept:
+                    # Only suppress boxes of the SAME class (e.g. duplicate person tracks)
+                    if det.get("label", "person") != kept_det.get("label", "person"):
+                        continue
                     ovl = _overlap(det["box"], kept_det["box"])
                     if ovl > NMS_IOU_THRESHOLD:
                         # Same physical region — suppress this lower-priority box
@@ -663,9 +672,11 @@ def _overlap(box_a, box_b) -> float:
 
 def _det_priority(d: dict) -> int:
     """
-    NMS priority.  Higher = preferred (kept), lower = suppressed.
-    A detection dict may carry 'locked', 'state' or neither (legacy).
+    NMS priority. Higher = preferred (kept), lower = suppressed.
     """
+    label = d.get("label", "person")
+    if label != "person":
+        return 2   # Non-person objects
     if d.get("locked"):
         return 5   # User-confirmed identity — always keep
     pid = d.get("pid", "")
@@ -686,22 +697,19 @@ def nms_detections(dets: list,
                    min_conf: float = HUD_MIN_CONF) -> list:
     """
     Apply priority-aware IoU NMS to a flat list of detection dicts.
-
-    Each dict must contain:
-        'box'  : (x1, y1, x2, y2)
-        'conf' : float
-    Optional keys that raise priority:
-        'locked', 'state', 'pid'
-
-    Usage in main.py (after building new_dets, before cs.latest_dets = new_dets):
-        from identity_engine import nms_detections
-        new_dets = nms_detections(new_dets)
+    Only suppresses duplicate boxes belonging to the SAME class.
     """
-    # Drop below-threshold confidence boxes (except confirmed/locked)
-    filtered = [d for d in dets
-                if d.get("locked") or
-                   (d.get("pid", "").startswith("Unknown-") is False and d.get("pid")) or
-                   d.get("conf", 0) >= min_conf]
+    # Drop below-threshold confidence boxes (except confirmed/locked or objects >= 0.25)
+    filtered = []
+    for d in dets:
+        label = d.get("label", "person")
+        conf = d.get("conf", 0)
+        if label == "person":
+            if d.get("locked") or (d.get("pid", "").startswith("Unknown-") is False and d.get("pid")) or conf >= min_conf:
+                filtered.append(d)
+        else:
+            if conf >= 0.25:
+                filtered.append(d)
 
     # Sort: highest priority first, then highest confidence
     filtered.sort(key=lambda d: (_det_priority(d), d.get("conf", 0)), reverse=True)
@@ -716,6 +724,9 @@ def nms_detections(dets: list,
 
         duplicate = False
         for kept_det in kept:
+            # Only suppress boxes of the SAME class (e.g. duplicate person tracks)
+            if det.get("label", "person") != kept_det.get("label", "person"):
+                continue
             ovl = _overlap(det["box"], kept_det["box"])
             if ovl > iou_threshold:
                 # Boxes overlap heavily — suppress the lower-priority one
