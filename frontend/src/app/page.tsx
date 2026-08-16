@@ -3591,10 +3591,11 @@ export default function Dashboard() {
               <div className="h-[120px] rounded-xl glass-premium bg-black/60 border border-white/5 relative overflow-hidden flex items-center justify-center">
                 {isFaceUnlocked ? (
                   (() => {
-                    const activeSubject = (cameras as any)[activeCam]?.active_subjects?.[0];
+                    const subjectsList = (cameras as any)[activeCam]?.active_subjects || [];
+                    const activeSubject = subjectsList.find((s: any) => s.known) || subjectsList[0];
                     const hasActiveSubject = !!activeSubject && !!activeSubject.pid;
                     const sName = hasActiveSubject ? activeSubject.name : "IDENTIFYING...";
-                    const sKnown = hasActiveSubject ? activeSubject.known : false;
+                    const sKnown = hasActiveSubject ? Boolean(activeSubject.known) : false;
                     const isIntruder = hasActiveSubject && !sKnown;
                     const isScanning = !hasActiveSubject;
                     

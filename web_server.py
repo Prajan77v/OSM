@@ -1004,11 +1004,20 @@ def create_app() -> "FastAPI":
 
         for cs in cams_snapshot:
             active_subjects = []
-            visible_pids = set(getattr(cs, "present_pids", set()))
+            # Extract live pids directly from current detections in the frame
+            det_pids = set()
             for d in getattr(cs, "latest_dets", []):
                 p_id = d.get("pid")
                 if d.get("label") == "person" and p_id:
-                    visible_pids.add(p_id)
+                    det_pids.add(p_id)
+
+            # If active detections exist, use det_pids to avoid stale unknown ghosts
+            visible_pids = det_pids if det_pids else set(getattr(cs, "present_pids", set()))
+
+            # If any known profile is present, purge transient Unknown- tags
+            has_known = any(p in db and db[p].get("known", False) for p in visible_pids)
+            if has_known:
+                visible_pids = {p for p in visible_pids if not str(p).startswith("Unknown-")}
 
             for pid in list(visible_pids):
                 if pid in db:
@@ -1053,6 +1062,15 @@ def create_app() -> "FastAPI":
                     "confidence": float(conf),
                     "status": status_val
                 })
+
+            # Sort active_subjects: Known/Authorized first, then named, then highest confidence
+            active_subjects.sort(
+                key=lambda s: (
+                    2 if s["known"] else (1 if not str(s["name"]).startswith("Unknown") else 0),
+                    s["confidence"]
+                ),
+                reverse=True
+            )
 
             result.append({
                 "id":           cs.cam_id,

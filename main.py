@@ -3584,15 +3584,18 @@ def camera_thread(cs: CameraState):
                                 s_pid, s_name, s_conf, s_ok = cs.stable_id.get_display(tid)
                                 if s_ok and s_pid:
                                     old = cs.track_to_pid.get(tid)
-                                    if old and not old.startswith("Unknown-") and old != s_pid:
+                                    if old and old != s_pid:
                                         cs.present_pids.discard(old)
-                                        with _fdb_lock:
-                                            if old in faces_db:
-                                                faces_db[old]["in_scene"] = False
-                                                if not faces_db[old].get("known") and faces_db[old].get("visit_count", 0) <= 1:
-                                                    del faces_db[old]
-                                                    if _global_face_engine is not None:
-                                                        _global_face_engine.delete(old)
+                                        if not old.startswith("Unknown-"):
+                                            with _fdb_lock:
+                                                if old in faces_db:
+                                                    faces_db[old]["in_scene"] = False
+                                                    if not faces_db[old].get("known") and faces_db[old].get("visit_count", 0) <= 1:
+                                                        del faces_db[old]
+                                                        if _global_face_engine is not None:
+                                                            _global_face_engine.delete(old)
+                                    cs.present_pids.discard(f"Unknown-{tid}")
+                                    cs.present_pids.add(s_pid)
                                     cs.track_to_pid[tid] = s_pid
                                     cs.pid_confidences[s_pid] = s_conf
                                     cs.tid_identity_locked[tid] = True
@@ -3604,6 +3607,8 @@ def camera_thread(cs: CameraState):
                         if is_person and s_ok and s_pid:
                             pid = s_pid
                             name = s_name
+                            cs.present_pids.discard(f"Unknown-{tid}")
+                            cs.present_pids.add(s_pid)
                             cs.track_to_pid[tid] = s_pid
                             cs.pid_confidences[s_pid] = s_conf
                             cs.tid_identity_locked[tid] = True
