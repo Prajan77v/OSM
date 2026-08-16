@@ -1529,6 +1529,61 @@ def create_app() -> "FastAPI":
             else:
                 return JSONResponse({"status": "error", "message": f"Subject '{target}' not found in database"}, status_code=404)
 
+        if action in ("clear_all_faces", "clear_database", "wipe_faces"):
+            try:
+                sv = _get_sv()
+                if not sv:
+                    raise Exception("Main module not running")
+
+                with sv._fdb_lock:
+                    sv.faces_db.clear()
+                    sv._save_db_json()
+                    sv._enc_dirty = True
+
+                    if hasattr(sv, "_global_face_engine") and sv._global_face_engine:
+                        with sv._global_face_engine._lock:
+                            sv._global_face_engine._emb_cache.clear()
+                            sv._global_face_engine._meta.clear()
+                    if hasattr(sv, "_yunet_enc_cache"):
+                        with sv._yunet_lock:
+                            sv._yunet_enc_cache.clear()
+
+                    with _cameras_lock:
+                        for cs in _cameras:
+                            cs.present_pids.clear()
+                            cs.track_to_pid.clear()
+                            cs.tid_identity_locked.clear()
+                            cs.tid_face_votes.clear()
+                            if hasattr(cs, "stable_id"):
+                                with cs.stable_id._lock:
+                                    cs.stable_id._tracks.clear()
+
+                # Clean photo directories
+                try:
+                    for sub in ["known", "captured", "enrolled"]:
+                        p = Path(WORKING_DIR / "faces" / sub)
+                        if p.exists():
+                            for f in p.glob("*.*"):
+                                try:
+                                    f.unlink()
+                                except Exception:
+                                    pass
+                except Exception:
+                    pass
+
+                try:
+                    sv.preload_known()
+                except Exception as e:
+                    app_log.warning(f"preload_known after clear failed: {e}")
+
+                try:
+                    sv.speak("All biometric face profiles have been deleted.")
+                except Exception:
+                    pass
+                return JSONResponse({"status": "ok", "result": "All face profiles cleared successfully"})
+            except Exception as e:
+                return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
         if action in ("delete_subject", "forget_face", "delete_profile") and body:
             try:
                 target = str(body.get("pid") or body.get("name") or "").strip()

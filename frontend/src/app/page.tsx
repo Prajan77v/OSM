@@ -1068,6 +1068,31 @@ export default function Dashboard() {
       alert("Error deleting face profile");
     }
   };
+  // ── Clear All registered face profiles ────────────────────────────────────
+  const clearAllFaces = async () => {
+    const confirmClear = window.confirm("WARNING: Are you sure you want to permanently delete ALL biometric face profiles and reset the memory database? This action cannot be undone.");
+    if (!confirmClear) return;
+    try {
+      const r = await fetch(`${API}/api/control/clear_all_faces`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const d = await r.json();
+      if (d.status === "ok") {
+        speakAI("All biometric face profiles have been deleted.");
+        setSelectedUserPid(null);
+        setEditingPid(null);
+        setCropKey(Date.now().toString());
+        fetchAll();
+      } else {
+        alert(d.message || "Failed to clear database");
+      }
+    } catch (err) {
+      alert("Error clearing face database");
+    }
+  };
+
 
   // Advanced Object Enrollment functions & effects
   const POSES = ["front", "back", "left", "right", "top", "bottom", "angle_left", "angle_right"];
@@ -3698,7 +3723,19 @@ export default function Dashboard() {
               <div className="flex flex-col gap-2 mb-2 flex-shrink-0">
                 <div className="flex items-center justify-between">
                   <span className="font-orbitron text-xs font-black text-gold-accent tracking-widest uppercase">MEMORY DATABASE</span>
-                  <span className="font-mono text-[9px] text-sec uppercase font-bold">Total: {knownUsers.length}</span>
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-[9px] text-sec uppercase font-bold">Total: {knownUsers.length}</span>
+                    {knownUsers.length > 0 && (
+                      <button
+                        onClick={clearAllFaces}
+                        className="py-0.5 px-1.5 bg-red-950/60 hover:bg-red-900/80 text-red-400 hover:text-red-200 border border-red-500/40 rounded text-[7.5px] font-orbitron font-bold uppercase transition-all flex items-center gap-1 cursor-pointer"
+                        title="Delete All Face Profiles"
+                      >
+                        <Trash size={9} />
+                        CLEAR ALL
+                      </button>
+                    )}
+                  </div>
                 </div>
                 
                 {/* Search Box */}
