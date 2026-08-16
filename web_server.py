@@ -13,10 +13,12 @@ import logging
 import os
 import platform
 import re
+import shutil
 import threading
 import time
 import webbrowser
 from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, List
 
 import cv2
@@ -1407,9 +1409,6 @@ def create_app() -> "FastAPI":
                                     sv._global_face_engine.rename(target_pid, new_name, set_known=True)
                                 except Exception:
                                     pass
-
-                            import shutil
-                            from pathlib import Path
 
                             known_dir = Path(sv.Config.KNOWN_FACES_DIR)
                             known_dir.mkdir(parents=True, exist_ok=True)
