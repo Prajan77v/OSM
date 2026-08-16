@@ -3726,7 +3726,7 @@ def camera_thread(cs: CameraState):
                                 crop = frame[crop_y1:crop_y2, crop_x1:crop_x2]
                                 if crop.size > 0:
                                     cs.pending_futures[tid] = face_pool.submit(async_face, crop.copy(), True, is_person)
-                                cs.tid_face_cd[tid] = Config.FACE_RECOGNITION_INTERVAL * 6
+                                cs.tid_face_cd[tid] = 4
                             else:
                                 cs.tid_face_cd[tid] = max(0, fr_cd - 1)
 

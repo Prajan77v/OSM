@@ -510,7 +510,10 @@ class StableIdentityEngine:
                     t.candidate_frames = 1
                     t.candidate_conf = conf
 
-                if t.candidate_frames >= IDENTITY_CONFIRMATION_FRAMES:
+                is_known_person = not pid.startswith("Unknown-") and not name.startswith("Intruder-")
+                required_frames = 1 if (is_known_person or conf >= 0.50) else 2
+
+                if t.candidate_frames >= required_frames:
                     t.confirmed_pid = pid
                     t.confirmed_name = name
                     t.confirmed_conf = t.candidate_conf
