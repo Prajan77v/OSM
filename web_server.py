@@ -2987,7 +2987,14 @@ def create_app() -> "FastAPI":
             idx = os.path.join(frontend_dir, "index.html")
             if os.path.exists(idx):
                 with open(idx, "rb") as f:
-                    return HTMLResponse(f.read())
+                    return HTMLResponse(
+                        f.read(),
+                        headers={
+                            "Cache-Control": "no-cache, no-store, must-revalidate",
+                            "Pragma": "no-cache",
+                            "Expires": "0"
+                        }
+                    )
             return HTMLResponse("<h1>Frontend not built yet. Run: cd frontend && npm run build</h1>")
 
         app.mount("/", StaticFiles(directory=frontend_dir, html=True), name="static")

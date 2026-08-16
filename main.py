@@ -3707,12 +3707,10 @@ def camera_thread(cs: CameraState):
                             if fr_cd <= 0 and tid not in cs.pending_futures:
                                 h_img, w_img = frame.shape[:2]
                                 if is_person:
-                                    head_y1 = sy1
-                                    head_y2 = sy1 + int((sy2 - sy1) * 0.70)
-                                    pad_y = int((sy2 - sy1) * 0.15)
-                                    pad_x = int((sx2 - sx1) * 0.15)
-                                    crop_y1 = max(0, head_y1 - pad_y)
-                                    crop_y2 = min(h_img, head_y2 + pad_y)
+                                    pad_y = int((sy2 - sy1) * 0.10)
+                                    pad_x = int((sx2 - sx1) * 0.10)
+                                    crop_y1 = max(0, sy1 - pad_y)
+                                    crop_y2 = min(h_img, sy2 + pad_y)
                                     crop_x1 = max(0, sx1 - pad_x)
                                     crop_x2 = min(w_img, sx2 + pad_x)
                                 else:

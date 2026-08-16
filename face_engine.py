@@ -34,10 +34,10 @@ class FaceResult:
 
 
 class FaceEngine:
-    MIN_DET_SCORE         = 0.35  # Filter out low-confidence face detections
-    MIN_FACE_SIZE         = 16    # Filter out tiny noise patches
-    MATCH_THRESHOLD       = 0.35  # Optimal ArcFace cosine similarity threshold
-    MATCH_THRESHOLD_KNOWN = 0.36  # Threshold for known authorized persons
+    MIN_DET_SCORE         = 0.20  # Sensitive detection for glasses/headphones
+    MIN_FACE_SIZE         = 10    # Filter out tiny noise patches
+    MATCH_THRESHOLD       = 0.30  # Robust ArcFace cosine similarity threshold
+    MATCH_THRESHOLD_KNOWN = 0.32  # Fast matching threshold for known authorized persons
 
     def __init__(self):
         self._lock      = threading.RLock()
@@ -99,17 +99,18 @@ class FaceEngine:
                 return False
 
     def detect_and_embed(self, bgr_frame: np.ndarray,
-                          min_det_score: float = 0.35,
-                          min_size: int = 12) -> List[FaceResult]:
+                          min_det_score: float = 0.20,
+                          min_size: int = 10) -> List[FaceResult]:
         if not self.available or self._app is None or bgr_frame is None or bgr_frame.size == 0:
             return []
         try:
             h_in, w_in = bgr_frame.shape[:2]
-            # If the crop from CCTV is small, upscale it so SCRFD detector can find small faces easily
+            # Upscale crop to optimal detector resolution so SCRFD easily detects faces with glasses/headphones
             scale = 1.0
             feed_frame = bgr_frame
-            if max(h_in, w_in) < 160:
-                scale = 160.0 / max(1, max(h_in, w_in))
+            target_dim = 320
+            if max(h_in, w_in) < target_dim:
+                scale = float(target_dim) / max(1, max(h_in, w_in))
                 feed_frame = cv2.resize(bgr_frame, (int(w_in * scale), int(h_in * scale)), interpolation=cv2.INTER_CUBIC)
 
             with self._lock:
