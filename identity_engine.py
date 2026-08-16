@@ -1,5 +1,7 @@
 """
 OMS Production-Grade Tracking & Stable Identity Engine
+
+Duplicate-box prevention via IoU NMS in predict_all().
 ======================================================
 Provides:
   1. High-precision 2D Kalman Filter (KalmanBoxTracker) per track
@@ -36,6 +38,11 @@ SMOOTHING_ALPHA_STILL        = 0.20  # Alpha when stationary (rock-solid, zero j
 SMOOTHING_ALPHA_MOVE         = 0.75  # Alpha when moving quickly (responsive, zero lag)
 VELOCITY_THRESHOLD_LOW       = 3.0   # Pixels/frame velocity for still regime
 VELOCITY_THRESHOLD_HIGH      = 25.0  # Pixels/frame velocity for fast move regime
+
+# NMS settings for predict_all() to prevent duplicate boxes on the same person
+NMS_IOU_THRESHOLD            = 0.35  # IoU above this = boxes overlap = suppress lower-priority one
+HUD_MIN_CONF                 = 0.32  # Below this confidence, don't render the box at all
+HUD_MAX_LOST_AGE_FRAMES      = 8     # TEMPORARILY_LOST tracks shown for at most this many frames
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Track States
@@ -288,40 +295,104 @@ class StableIdentityEngine:
     # ──────────────────────────────────────────────────────────────────────────
     # Called on EVERY frame (both detection frames and skipped frames)
     # ──────────────────────────────────────────────────────────────────────────
+    # ──────────────────────────────────────────────────────────────────────────
+    # Internal: IoU computation for NMS deduplication
+    # ──────────────────────────────────────────────────────────────────────────
+    @staticmethod
+    def _iou(box_a: Tuple, box_b: Tuple) -> float:
+        """Compute Intersection-over-Union of two (x1,y1,x2,y2) boxes."""
+        xa = max(box_a[0], box_b[0]); ya = max(box_a[1], box_b[1])
+        xb = min(box_a[2], box_b[2]); yb = min(box_a[3], box_b[3])
+        inter = max(0, xb - xa) * max(0, yb - ya)
+        if inter == 0:
+            return 0.0
+        area_a = max(1, (box_a[2] - box_a[0]) * (box_a[3] - box_a[1]))
+        area_b = max(1, (box_b[2] - box_b[0]) * (box_b[3] - box_b[1]))
+        return inter / float(area_a + area_b - inter)
+
+    @staticmethod
+    def _track_priority(det: dict) -> int:
+        """Higher = more important in NMS (keep this one, suppress others)."""
+        state = det.get("state", "")
+        locked = det.get("locked", False)
+        if locked:
+            return 4   # Confirmed & locked — always keep
+        if state == STATE_CONFIRMED:
+            return 3
+        if state in (STATE_TRACKED, STATE_REACQUIRED):
+            return 2
+        if state == STATE_NEW:
+            return 1
+        return 0       # TEMPORARILY_LOST, TENTATIVE — lowest priority
+
     def predict_all(self) -> List[dict]:
         """
         Advance all Kalman filters by 1 step and compute smoothed coordinates.
-        Returns a list of active detection dicts ready for HUD rendering.
+        Returns a deduplicated list of active detection dicts for HUD rendering.
+        IoU NMS prevents duplicate boxes from multiple ByteTrack IDs on same person.
         """
         with self._lock:
-            active_dets = []
+            raw_dets = []
             for tid, t in list(self._tracks.items()):
                 if t.state == STATE_TERMINATED:
                     continue
 
                 t.age += 1
+
+                # Don't advance / show TEMPORARILY_LOST after a short grace window
+                if t.state == STATE_TEMPORARILY_LOST and t.missed_frames > HUD_MAX_LOST_AGE_FRAMES:
+                    continue
+
                 if t.kalman is not None and t.smoother is not None:
                     pred_box = t.kalman.predict()
                     vel = t.kalman.get_velocity()
                     smoothed = t.smoother.smooth(pred_box, vel)
                     t.latest_smoothed_box = smoothed
 
-                    # Only output tracks that have reached minimum hits or are confirmed
-                    if t.hits >= TRACK_MIN_HITS or t.is_confirmed():
-                        is_known = t.is_confirmed() and not (t.confirmed_pid and t.confirmed_pid.startswith("Unknown-"))
-                        disp_str = t.display_name()
-                        active_dets.append({
-                            "label": t.label,
-                            "conf":  t.display_conf(),
-                            "box":   smoothed,
-                            "disp":  disp_str,
-                            "pid":   t.confirmed_pid or f"Unknown-{tid}",
-                            "tid":   tid,
-                            "is_known": is_known,
-                            "locked": t.identity_locked,
-                            "state":  t.state
-                        })
-            return active_dets
+                    # Visibility gates
+                    if t.hits < TRACK_MIN_HITS and not t.is_confirmed():
+                        continue   # Too new — suppress until confirmed enough
+                    if t.display_conf() < HUD_MIN_CONF and not t.is_confirmed():
+                        continue   # Too low confidence — suppress ghost detections
+
+                    is_known = t.is_confirmed() and not (t.confirmed_pid and t.confirmed_pid.startswith("Unknown-"))
+                    raw_dets.append({
+                        "label":    t.label,
+                        "conf":     t.display_conf(),
+                        "box":      smoothed,
+                        "disp":     t.display_name(),
+                        "pid":      t.confirmed_pid or f"Unknown-{tid}",
+                        "tid":      tid,
+                        "is_known": is_known,
+                        "locked":   t.identity_locked,
+                        "state":    t.state,
+                        "_priority": self._track_priority({"state": t.state, "locked": t.identity_locked})
+                    })
+
+            # ── IoU NMS: suppress duplicate overlapping boxes ──────────────────
+            # Sort by priority descending so we always keep the best-quality track
+            raw_dets.sort(key=lambda d: (d["_priority"], d["conf"]), reverse=True)
+            kept: List[dict] = []
+            suppressed_tids: set = set()
+            for det in raw_dets:
+                if det["tid"] in suppressed_tids:
+                    continue
+                # Check overlap against already-kept boxes
+                duplicate = False
+                for kept_det in kept:
+                    iou = self._iou(det["box"], kept_det["box"])
+                    if iou > NMS_IOU_THRESHOLD:
+                        # Same physical region — suppress this lower-priority box
+                        suppressed_tids.add(det["tid"])
+                        log.debug(f"[SIE-NMS] Suppressed track {det['tid']} (IoU={iou:.2f} with track {kept_det['tid']})")
+                        duplicate = True
+                        break
+                if not duplicate:
+                    # Clean up internal field before returning
+                    det.pop("_priority", None)
+                    kept.append(det)
+
+            return kept
 
     # ──────────────────────────────────────────────────────────────────────────
     # Called on YOLO detection frames: update measurement
