@@ -99,7 +99,22 @@ This produces:
 4. **Launch Application:**
    ```bash
    python main.py
+   # Or run: .\start_oms_ai.bat
    ```
+
+---
+
+## ☁️ FREE CLOUD DEPLOYMENT // RENDER FREE + RTX 4060
+
+OMS features a hybrid edge-cloud architecture that lets you host the dashboard and cloud metadata relay on **Render Free ($0/mo)** while running all heavy computer vision workloads locally on your **NVIDIA RTX 4060**:
+
+* **Backend Cloud API (Render Web Service)**: `pip install -r requirements-cloud.txt` $\rightarrow$ `uvicorn cloud_api:app --host 0.0.0.0 --port $PORT`
+* **Frontend Dashboard (Render Static Site)**: Root `frontend`, `npm install && npm run build`, Publish `out`
+* **Local RTX 4060 Engine**: `.\start_oms_ai.bat` with `OMS_CLOUD_API_URL` configured in `.env`
+
+For complete step-by-step instructions, see [`docs/DEPLOY_RENDER_FREE.md`](docs/DEPLOY_RENDER_FREE.md) and [`docs/DEPLOYMENT_ARCHITECTURE.md`](docs/DEPLOYMENT_ARCHITECTURE.md).
+
+---
 
 * **Maintained by:** Prajan77v
 * **Project Status:** Active/Operational
