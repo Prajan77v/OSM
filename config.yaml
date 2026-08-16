@@ -29,7 +29,7 @@ detection:
   detect_people: true
   detect_objects: true
   profile: MEDIUM
-  tracker_type: botsort
+  tracker_type: bytetrack
   use_kalman: true
   use_smoothing: true
   smoothing_alpha_still: 0.20

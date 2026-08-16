@@ -3495,7 +3495,7 @@ def camera_thread(cs: CameraState):
                     _inf_ctx.__enter__()
                 except Exception:
                     pass
-                tracker_cfg = f"{Config.TRACKER_TYPE}.yaml" if Config.TRACKER_TYPE in ("botsort", "bytetrack") else "bytetrack.yaml"
+                tracker_cfg = "bytetrack.yaml"
                 results = yolo.track(source=small, conf=Config.CONFIDENCE,
                                      device=Config.DEVICE, persist=Config.TRACK_PERSIST,
                                      verbose=False, half=(Config.DEVICE == "cuda"),

@@ -723,8 +723,9 @@ def nms_detections(dets: list,
     for d in dets:
         label = d.get("label", "person")
         conf = d.get("conf", 0)
+        pid_val = str(d.get("pid") or "")
         if label == "person":
-            if d.get("locked") or (d.get("pid", "").startswith("Unknown-") is False and d.get("pid")) or conf >= min_conf:
+            if d.get("locked") or (pid_val and not pid_val.startswith("Unknown-")) or conf >= min_conf:
                 filtered.append(d)
         else:
             if conf >= 0.42:
