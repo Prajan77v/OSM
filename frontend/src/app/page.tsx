@@ -13,8 +13,10 @@ import {
   Sliders, SlidersHorizontal, SlidersVertical, Edit2, X, Trash, Plus, Grid, Camera
 } from "lucide-react";
 
-// ─── API base URL (proxied in dev, same-origin in prod) ──────────────────────
-const API = "";
+// ─── API base URL (Configurable for Render Cloud / Local AI Server) ───────────
+const API = typeof process !== "undefined"
+  ? (process.env.NEXT_PUBLIC_OMS_API_URL || process.env.NEXT_PUBLIC_API_BASE || "")
+  : "";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 interface CameraInfo {

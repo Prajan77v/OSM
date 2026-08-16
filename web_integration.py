@@ -62,6 +62,15 @@ def record_event(ts: str, event: str, camera: str = "", person: str = "", detail
     except Exception:
         pass
 
+    try:
+        from cloud_sync import cloud_sync
+        cloud_sync.queue_event({
+            "ts": ts, "event": event, "camera": camera,
+            "person": person, "detail": detail
+        })
+    except Exception:
+        pass
+
 def clear_events():
     """Clear memory events cache."""
     with _events_lock:

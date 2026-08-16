@@ -5664,6 +5664,20 @@ def main():
         )
         ws.start_server(port=8000, open_browser=True)
         app_log.info("OMS Web Dashboard started on http://localhost:8000")
+
+        # ── Start Cloud Sync Daemon (if OMS_CLOUD_API_URL configured) ──────────
+        try:
+            from cloud_sync import cloud_sync
+            cloud_sync.bind_providers(
+                wi.get_telemetry,
+                lambda: cameras,
+                wi.get_summary,
+                lambda: [{"name": v.get("name", k), "known": v.get("known", False)} for k, v in faces_db.items()]
+            )
+            cloud_sync.start()
+        except Exception as _sync_err:
+            app_log.warning(f"[CLOUD SYNC] Daemon start error: {_sync_err}")
+
     except Exception as _web_err:
         app_log.warning(f"Web server not started: {_web_err}")
 
