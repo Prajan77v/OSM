@@ -200,7 +200,7 @@ except Exception as _haae_err:
 
 # ── StableIdentityEngine import ───────────────────────────────────────────────
 try:
-    from identity_engine import StableIdentityEngine
+    from identity_engine import StableIdentityEngine, nms_detections
     STABLE_ID_AVAILABLE = True
 except Exception as _sie_err:
     STABLE_ID_AVAILABLE = False
@@ -217,6 +217,14 @@ except Exception as _sie_err:
         def get_active_tids(self): return []
         def purge_expired(self): pass
         def diagnostics(self): return {"total_tracks": 0}
+        def update_track_measurement(self, tid, box, conf, label='person'):
+            class _T:
+                latest_smoothed_box = box
+                def is_confirmed(self): return False
+                def display_name(self): return f'UNKNOWN #{tid:02d}'
+            return _T()
+        def predict_all(self): return []
+    def nms_detections(dets, iou_threshold=0.35, min_conf=0.32): return dets
 
 # ══════════════════════════════════════════════════════════════════════════════
 # HARDWARE PROFILE
@@ -3793,7 +3801,9 @@ def camera_thread(cs: CameraState):
                             pid_seen_map[p_id] = d
 
                 with cs.frame_lock:
-                    cs.latest_frame = frame; cs.latest_dets = new_dets; cs.tile_dirty = True
+                    cs.latest_frame = frame
+                    cs.latest_dets  = nms_detections(new_dets)  # IoU NMS deduplication before storing
+                    cs.tile_dirty   = True
 
                 # Release YOLO result tensors immediately to avoid tensor accumulation
                 yolo_ctr += 1

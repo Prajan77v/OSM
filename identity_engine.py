@@ -296,19 +296,8 @@ class StableIdentityEngine:
     # Called on EVERY frame (both detection frames and skipped frames)
     # ──────────────────────────────────────────────────────────────────────────
     # ──────────────────────────────────────────────────────────────────────────
-    # Internal: IoU computation for NMS deduplication
+    # Internal: overlap & containment computation for NMS deduplication
     # ──────────────────────────────────────────────────────────────────────────
-    @staticmethod
-    def _iou(box_a: Tuple, box_b: Tuple) -> float:
-        """Compute Intersection-over-Union of two (x1,y1,x2,y2) boxes."""
-        xa = max(box_a[0], box_b[0]); ya = max(box_a[1], box_b[1])
-        xb = min(box_a[2], box_b[2]); yb = min(box_a[3], box_b[3])
-        inter = max(0, xb - xa) * max(0, yb - ya)
-        if inter == 0:
-            return 0.0
-        area_a = max(1, (box_a[2] - box_a[0]) * (box_a[3] - box_a[1]))
-        area_b = max(1, (box_b[2] - box_b[0]) * (box_b[3] - box_b[1]))
-        return inter / float(area_a + area_b - inter)
 
     @staticmethod
     def _track_priority(det: dict) -> int:
@@ -380,11 +369,11 @@ class StableIdentityEngine:
                 # Check overlap against already-kept boxes
                 duplicate = False
                 for kept_det in kept:
-                    iou = self._iou(det["box"], kept_det["box"])
-                    if iou > NMS_IOU_THRESHOLD:
+                    ovl = _overlap(det["box"], kept_det["box"])
+                    if ovl > NMS_IOU_THRESHOLD:
                         # Same physical region — suppress this lower-priority box
                         suppressed_tids.add(det["tid"])
-                        log.debug(f"[SIE-NMS] Suppressed track {det['tid']} (IoU={iou:.2f} with track {kept_det['tid']})")
+                        log.debug(f"[SIE-NMS] Suppressed track {det['tid']} (overlap={ovl:.2f} with track {kept_det['tid']})")
                         duplicate = True
                         break
                 if not duplicate:
@@ -647,3 +636,100 @@ class StableIdentityEngine:
                 for t in all_tracks
             ]
         }
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Module-level NMS: call from main.py on YOLO detection frames
+# ──────────────────────────────────────────────────────────────────────────────
+def _overlap(box_a, box_b) -> float:
+    """
+    Overlap score = max(IoU, intersection/area_of_smaller_box).
+    Catches the case where ByteTrack assigns a smaller box that is fully
+    contained inside a larger box (standard IoU would be low, but visually
+    they are the same detection).
+    """
+    xa = max(box_a[0], box_b[0]); ya = max(box_a[1], box_b[1])
+    xb = min(box_a[2], box_b[2]); yb = min(box_a[3], box_b[3])
+    inter = max(0, xb - xa) * max(0, yb - ya)
+    if inter == 0:
+        return 0.0
+    area_a = max(1, (box_a[2] - box_a[0]) * (box_a[3] - box_a[1]))
+    area_b = max(1, (box_b[2] - box_b[0]) * (box_b[3] - box_b[1]))
+    iou = inter / float(area_a + area_b - inter)
+    # Containment: what fraction of the SMALLER box is covered by the intersection
+    containment = inter / min(area_a, area_b)
+    return max(iou, containment)
+
+
+def _det_priority(d: dict) -> int:
+    """
+    NMS priority.  Higher = preferred (kept), lower = suppressed.
+    A detection dict may carry 'locked', 'state' or neither (legacy).
+    """
+    if d.get("locked"):
+        return 5   # User-confirmed identity — always keep
+    pid = d.get("pid", "")
+    if pid and not pid.startswith("Unknown-"):
+        return 4   # Face-recognised known person
+    state = d.get("state", "")
+    if state == STATE_CONFIRMED:
+        return 3
+    if state in (STATE_TRACKED, STATE_REACQUIRED):
+        return 2
+    if state == STATE_NEW:
+        return 1
+    return 0       # TEMPORARILY_LOST, TENTATIVE, pure unknown
+
+
+def nms_detections(dets: list,
+                   iou_threshold: float = NMS_IOU_THRESHOLD,
+                   min_conf: float = HUD_MIN_CONF) -> list:
+    """
+    Apply priority-aware IoU NMS to a flat list of detection dicts.
+
+    Each dict must contain:
+        'box'  : (x1, y1, x2, y2)
+        'conf' : float
+    Optional keys that raise priority:
+        'locked', 'state', 'pid'
+
+    Usage in main.py (after building new_dets, before cs.latest_dets = new_dets):
+        from identity_engine import nms_detections
+        new_dets = nms_detections(new_dets)
+    """
+    # Drop below-threshold confidence boxes (except confirmed/locked)
+    filtered = [d for d in dets
+                if d.get("locked") or
+                   (d.get("pid", "").startswith("Unknown-") is False and d.get("pid")) or
+                   d.get("conf", 0) >= min_conf]
+
+    # Sort: highest priority first, then highest confidence
+    filtered.sort(key=lambda d: (_det_priority(d), d.get("conf", 0)), reverse=True)
+
+    kept = []
+    suppressed_tids = set()
+
+    for det in filtered:
+        tid = det.get("tid")
+        if tid is not None and tid in suppressed_tids:
+            continue
+
+        duplicate = False
+        for kept_det in kept:
+            ovl = _overlap(det["box"], kept_det["box"])
+            if ovl > iou_threshold:
+                # Boxes overlap heavily — suppress the lower-priority one
+                if tid is not None:
+                    suppressed_tids.add(tid)
+                log.debug(
+                    "[NMS] Suppressed tid=%s disp=%s (overlap=%.2f with tid=%s disp=%s)",
+                    tid, det.get("disp"), ovl, kept_det.get("tid"), kept_det.get("disp")
+                )
+                duplicate = True
+                break
+
+        if not duplicate:
+            kept.append(det)
+
+    return kept
+

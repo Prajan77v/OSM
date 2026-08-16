@@ -34,10 +34,10 @@ class FaceResult:
 
 
 class FaceEngine:
-    MIN_DET_SCORE         = 0.35  # Relaxed for CCTV / distant faces
-    MIN_FACE_SIZE         = 12    # Support small faces in wide-angle CCTV feeds
-    MATCH_THRESHOLD       = 0.28  # Robust ArcFace similarity threshold for intruder matching
-    MATCH_THRESHOLD_KNOWN = 0.42  # Strict threshold for known authorized persons to prevent misidentification
+    MIN_DET_SCORE         = 0.38  # Filter out low-confidence face detections
+    MIN_FACE_SIZE         = 16    # Filter out tiny noise patches
+    MATCH_THRESHOLD       = 0.40  # Robust ArcFace cosine similarity threshold
+    MATCH_THRESHOLD_KNOWN = 0.46  # Strict threshold for known authorized persons to prevent misidentification
 
     def __init__(self):
         self._lock      = threading.RLock()
