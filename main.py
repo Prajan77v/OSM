@@ -2427,35 +2427,109 @@ def register_user_face(cameras, username: str = Config.USERNAME):
     speak("Registration failed. No face detected."); return False
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SPATIAL TRACKER (centroid fallback for non-person objects)
+# ══════════════════════════════════════════════════════════════════════════════
+# SPATIAL TRACKER (class-aware, IoU 1-to-1 association & EMA box smoothing)
 # ══════════════════════════════════════════════════════════════════════════════
 class SpatialTracker:
     def __init__(self):
         self.next_tid = 1000
-        self.history: Dict[int, Tuple] = {}
+        # tid -> {"box": (x1,y1,x2,y2), "label": label, "ts": timestamp, "hits": int}
+        self.history: Dict[int, dict] = {}
 
-    def track(self, boxes: List[Tuple]) -> List[int]:
+    def track(self, items: List[Any]) -> List[int]:
         now = time.time()
-        stale = [t for t, (_, ts) in self.history.items() if now - ts > 3.5]
+        # Clean stale tracks older than 3.5 seconds
+        stale = [t for t, info in self.history.items() if now - info["ts"] > 3.5]
         for t in stale:
             del self.history[t]
-        tids = []
-        for box in boxes:
-            x1, y1, x2, y2 = box
-            cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
-            best_t, best_d = None, 140.0
-            for tid, (pb, _) in self.history.items():
-                px, py = (pb[0] + pb[2]) / 2.0, (pb[1] + pb[3]) / 2.0
-                d = math.hypot(cx - px, cy - py)
-                if d < best_d:
-                    best_d = d
-                    best_t = tid
-            tid = best_t if best_t is not None else self.next_tid
-            if best_t is None:
+
+        parsed = []
+        for it in items:
+            if isinstance(it, dict):
+                b = it.get("box", (0, 0, 0, 0))
+                lbl = it.get("label", "object")
+            elif isinstance(it, (tuple, list)) and len(it) == 2 and isinstance(it[0], (tuple, list)):
+                b, lbl = it[0], it[1]
+            else:
+                b, lbl = it, "object"
+            parsed.append((b, lbl))
+
+        if not parsed:
+            return []
+
+        unmatched_tracks = list(self.history.keys())
+        cost_matrix = []
+
+        for d_idx, (dbox, dlbl) in enumerate(parsed):
+            dx1, dy1, dx2, dy2 = dbox
+            dcx, dcy = (dx1 + dx2) / 2.0, (dy1 + dy2) / 2.0
+            dw, dh = max(1, dx2 - dx1), max(1, dy2 - dy1)
+            for tid in unmatched_tracks:
+                tinfo = self.history[tid]
+                tbox, tlbl = tinfo["box"], tinfo.get("label", "object")
+                # Class compatibility: must match label unless generic
+                if dlbl != tlbl and dlbl != "object" and tlbl != "object":
+                    continue
+                tx1, ty1, tx2, ty2 = tbox
+                tcx, tcy = (tx1 + tx2) / 2.0, (ty1 + ty2) / 2.0
+                dist = math.hypot(dcx - tcx, dcy - tcy)
+                max_allow_dist = max(180.0, max(dw, dh) * 1.6)
+                if dist > max_allow_dist:
+                    continue
+
+                # Compute IoU
+                ix1, iy1 = max(dx1, tx1), max(dy1, ty1)
+                ix2, iy2 = min(dx2, tx2), min(dy2, ty2)
+                iw, ih = max(0, ix2 - ix1), max(0, iy2 - iy1)
+                inter = iw * ih
+                union = (dw * dh) + (max(1, tx2 - tx1) * max(1, ty2 - ty1)) - inter
+                iou = inter / max(1.0, union)
+
+                # Combined matching score: lower is better
+                score = (1.0 - iou) * 0.6 + (dist / max_allow_dist) * 0.4
+                cost_matrix.append((score, d_idx, tid))
+
+        # Greedy 1-to-1 matching from lowest cost
+        cost_matrix.sort(key=lambda x: x[0])
+        assigned_dets = {}
+        used_tracks = set()
+
+        for score, d_idx, tid in cost_matrix:
+            if d_idx in assigned_dets or tid in used_tracks:
+                continue
+            assigned_dets[d_idx] = tid
+            used_tracks.add(tid)
+
+        out_tids = []
+        for d_idx, (dbox, dlbl) in enumerate(parsed):
+            if d_idx in assigned_dets:
+                tid = assigned_dets[d_idx]
+                prev = self.history[tid]["box"]
+                # Exponential moving average coordinate smoothing (alpha=0.75)
+                alpha = 0.75
+                sx1 = int(alpha * dbox[0] + (1.0 - alpha) * prev[0])
+                sy1 = int(alpha * dbox[1] + (1.0 - alpha) * prev[1])
+                sx2 = int(alpha * dbox[2] + (1.0 - alpha) * prev[2])
+                sy2 = int(alpha * dbox[3] + (1.0 - alpha) * prev[3])
+                smooth_box = (sx1, sy1, sx2, sy2)
+                self.history[tid] = {
+                    "box": smooth_box,
+                    "label": dlbl,
+                    "ts": now,
+                    "hits": self.history[tid].get("hits", 1) + 1
+                }
+            else:
+                tid = self.next_tid
                 self.next_tid += 1
-            self.history[tid] = (box, now)
-            tids.append(tid)
-        return tids
+                self.history[tid] = {
+                    "box": dbox,
+                    "label": dlbl,
+                    "ts": now,
+                    "hits": 1
+                }
+            out_tids.append(tid)
+
+        return out_tids
 
 # ══════════════════════════════════════════════════════════════════════════════
 # MOTION DETECTOR
@@ -3460,12 +3534,15 @@ def camera_thread(cs: CameraState):
                 # Persons without a ByteTrack ID are skipped (they will be detected next frame).
                 # This prevents the centroid tracker from assigning shadow IDs that collide
                 # with real ByteTrack IDs and cause identity swaps.
-                unassigned_obj = [d["box"] for d in yolo_dets if d["label"]!="person" and d["tid"] is None]
+                unassigned_obj = [{"box": d["box"], "label": d["label"]} for d in yolo_dets if d["label"] != "person" and d["tid"] is None]
                 if unassigned_obj:
                     local_tids = cs.tracker.track(unassigned_obj); ui = 0
                     for d in yolo_dets:
-                        if d["label"]!="person" and d["tid"] is None:
-                            d["tid"] = local_tids[ui]; ui += 1
+                        if d["label"] != "person" and d["tid"] is None:
+                            d["tid"] = local_tids[ui]
+                            if local_tids[ui] in cs.tracker.history:
+                                d["box"] = cs.tracker.history[local_tids[ui]]["box"]
+                            ui += 1
 
                 person_dets_this_frame = []
                 for d in yolo_dets:

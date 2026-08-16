@@ -347,10 +347,8 @@ class StableIdentityEngine:
                         if t.display_conf() < HUD_MIN_CONF and not t.is_confirmed():
                             continue   # Too low confidence — suppress ghost detections
                     else:
-                        # Non-person objects: filter out low-confidence noise & 1-frame glitches
-                        if t.display_conf() < 0.42:
-                            continue
-                        if t.hits < 2 and t.display_conf() < 0.60:
+                        # Non-person objects: stable confidence threshold without dropping on alternate frames
+                        if t.display_conf() < 0.38:
                             continue
 
                     is_known = t.is_confirmed() and not (t.confirmed_pid and t.confirmed_pid.startswith("Unknown-"))
