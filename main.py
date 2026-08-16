@@ -3514,6 +3514,8 @@ def camera_thread(cs: CameraState):
                                                 faces_db[old]["in_scene"] = False
                                                 if not faces_db[old].get("known") and faces_db[old].get("visit_count", 0) <= 1:
                                                     del faces_db[old]
+                                                    if _global_face_engine is not None:
+                                                        _global_face_engine.delete(old)
                                     cs.track_to_pid[tid] = s_pid
                                     cs.pid_confidences[s_pid] = s_conf
                                     cs.tid_identity_locked[tid] = True

@@ -34,10 +34,10 @@ class FaceResult:
 
 
 class FaceEngine:
-    MIN_DET_SCORE         = 0.38  # Filter out low-confidence face detections
+    MIN_DET_SCORE         = 0.35  # Filter out low-confidence face detections
     MIN_FACE_SIZE         = 16    # Filter out tiny noise patches
-    MATCH_THRESHOLD       = 0.40  # Robust ArcFace cosine similarity threshold
-    MATCH_THRESHOLD_KNOWN = 0.46  # Strict threshold for known authorized persons to prevent misidentification
+    MATCH_THRESHOLD       = 0.35  # Optimal ArcFace cosine similarity threshold
+    MATCH_THRESHOLD_KNOWN = 0.36  # Threshold for known authorized persons
 
     def __init__(self):
         self._lock      = threading.RLock()
