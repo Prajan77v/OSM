@@ -43,15 +43,26 @@ OMS is designed with simple, powerful features to automate surveillance:
 
 * **📹 Live Camera Monitoring**
   Inject and monitor video feeds in real time from USB webcams, pre-recorded video files, or network IP cameras (using RTSP streams).
-* **🔍 Dual-Engine Recognition (SFace + MobileNetV2)**
-  * **Operator Face Recognition (SFace)**: Instantly detects and recognizes pre-registered personnel (like Prajan) on live camera feeds.
-  * **Object Identification (MobileNetV2)**: Automatically extracts features of physical objects (keyboards, laptops, mugs) to track them by custom names.
-* **📦 Advanced Object Enrollment Matrix**
+* **🔍 Multi-Engine Facial & Object Recognition**
+  * **ArcFace / SFace Biometric Recognition**: 512-dim neural embeddings for sub-second person identification with multi-pose continuous learning.
+  * **Object Identification (MobileNetV2 / ResNet50)**: Feature extraction for physical items (keyboards, laptops, backpacks, mugs) to track them by custom names.
+* **🧠 Unified Profile Merging & Auto-Deduplication Engine**
+  * **Zero Duplicate Guarantee**: Never creates duplicate entries for the same subject. If a new face matches an existing profile ($\text{similarity} \ge 0.38$) or is renamed to an existing name (case-insensitive), it is **instantly unified into a single profile**.
+  * **Embedding & History Aggregation**: Merges multi-angle facial embeddings, consolidates cumulative visit counts, and preserves primary reference photos.
+  * **Live Stream Track Re-Routing**: Dynamically updates all active camera inference loops, ByteTrack track-to-PID maps, and HUD identity badges without requiring a restart.
+  * **Startup & On-Save Dedup Scans**: Continuous automated deduplication cleans and synchronizes the memory database across JSON and SQLite stores.
+* **🎯 Continuous Object Tracking & Competitive NMS**
+  * **Competitive Cross-Class NMS**: Resolves overlapping candidate detections on physical items (e.g., competing phone vs remote detections on a hand) by keeping the highest-confidence valid object while maintaining person interaction.
+  * **Noise Gating ($\ge 42\%$) & Hit Filtering**: Eliminates low-confidence background clutter and 1-frame flickering glitches.
+  * **Spatial Memory & Kalman Smoothing**: Maintains stable track trajectories with a 3.5s recovery buffer and smooth HUD bounding box interpolation.
+* **📦 Advanced Face & Object Enrollment Matrix**
   * **Guided Capture**: Capture multi-view object perspectives with orientation helpers (`front`, `back`, `left`, `right`, `top`, `bottom`, `left_45`, `right_45`).
   * **Center-Crop Fallback**: Auto-crops the center 50% of the frame during guided captures if the custom object is not natively detected by YOLO's default classes.
   * **Direct Image Upload**: Drag-and-drop or select object photos from your browser, name them, and register them instantly using base64 JSON APIs.
+* **🔍 High-Resolution Biometric Lightbox Preview**
+  * Click on any face avatar (Active Portrait, Inspector, or Memory Database) to open an enlarged modal view with scanline animations, visit logs, confidence percentages, and instant profile management.
 * **📍 Movement & Anomaly Tracking**
-  Follow the movement of people and objects across consecutive video frames, assigning a unique tracking ID to each subject and checking for abnormal behaviors (pacing, running).
+  Follow the movement of people and objects across consecutive video frames, assigning a unique tracking ID to each subject and checking for abnormal behaviors (pacing, running, abandoned objects).
 * **🖥️ Cinematic Web Dashboard**
   A premium dark-themed Next.js operator dashboard featuring real-time stream overlays, active track cards, telemetry metrics, and event log tables.
 
