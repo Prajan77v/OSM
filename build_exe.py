@@ -103,10 +103,8 @@ if not (frontend_dir / "node_modules").exists():
     run([npm_cmd, "install"], cwd=frontend_dir)
 
 # Build static export  (Next.js -> frontend/out/)
-if frontend_out.exists():
-    print("  [INFO] frontend/out/ already exists. Skipping Next.js build. Delete frontend/out/ to force rebuild.")
-else:
-    run([npm_cmd, "run", "build"], cwd=frontend_dir)
+print("  Building Next.js static export...")
+run([npm_cmd, "run", "build"], cwd=frontend_dir)
 
 if not frontend_out.exists():
     print("\n[ERROR] Next.js build failed -- 'frontend/out' not found.")
@@ -204,8 +202,8 @@ if models_src.exists():
     shutil.copytree(models_src, models_dst)
     print("  [OK] Copied models/ to " + str(models_dst))
 
-print("\n[STEP 5d] Copying YOLO weights to dist/ ...")
-for m_name in ["yolov8n.pt", "yolov8s.pt"]:
+print("\n[STEP 5d] Copying YOLO weights & auxiliary files to dist/ ...")
+for m_name in ["yolov8n.pt", "yolov8s.pt", "alarm.wav"]:
     y_src = ROOT / m_name
     y_dst = DIST / m_name
     if y_src.exists():
@@ -223,13 +221,12 @@ print(f"  Creating portable archive: {portable_zip_path.name}...")
 try:
     with zipfile.ZipFile(portable_zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
         zipf.write(DIST / "OMS_Sentinel.exe", "OMS_Sentinel.exe")
-        for m_name in ["yolov8n.pt", "yolov8s.pt"]:
+        for m_name in ["yolov8n.pt", "yolov8s.pt", "alarm.wav"]:
             if (DIST / m_name).exists():
                 zipf.write(DIST / m_name, m_name)
-        if (ROOT / "config.yaml").exists():
-            zipf.write(ROOT / "config.yaml", "config.yaml")
-        if (ROOT / ".env.example").exists():
-            zipf.write(ROOT / ".env.example", ".env.example")
+        for extra in ["config.yaml", ".env.example", "start_oms_ai.bat", "start_oms_cloud.bat"]:
+            if (ROOT / extra).exists():
+                zipf.write(ROOT / extra, extra)
         faces_folder = ROOT / "faces"
         if faces_folder.exists():
             for file_path in faces_folder.rglob('*'):
@@ -251,15 +248,16 @@ except Exception as e:
 
 print("  Compiling Installer GUI Wizard...")
 try:
-    run([
-        sys.executable, "-m", "PyInstaller",
-        "--noconfirm",
-        "--clean",
-        "--onefile",
-        "--noconsole",
-        "--name=OMS_Sentinel_Installer",
+    installer_datas = [
         "--add-data=main.py;.",
+        "--add-data=face_engine.py;.",
+        "--add-data=identity_engine.py;.",
         "--add-data=haae_engine.py;.",
+        "--add-data=db_engine.py;.",
+        "--add-data=auth_engine.py;.",
+        "--add-data=analytics_engine.py;.",
+        "--add-data=cloud_sync.py;.",
+        "--add-data=cloud_api.py;.",
         "--add-data=web_server.py;.",
         "--add-data=web_integration.py;.",
         "--add-data=requirements.txt;.",
@@ -267,9 +265,24 @@ try:
         "--add-data=objects;objects",
         "--add-data=models;models",
         "--add-data=yolov8n.pt;.",
-        "--add-data=yolov8s.pt;.",
         "--add-data=config.yaml;.",
         "--add-data=frontend/out;frontend/out",
+    ]
+    if (ROOT / "yolov8s.pt").exists():
+        installer_datas.append("--add-data=yolov8s.pt;.")
+    if (ROOT / ".env.example").exists():
+        installer_datas.append("--add-data=.env.example;.")
+    if (ROOT / "start_oms_ai.bat").exists():
+        installer_datas.append("--add-data=start_oms_ai.bat;.")
+
+    run([
+        sys.executable, "-m", "PyInstaller",
+        "--noconfirm",
+        "--clean",
+        "--onefile",
+        "--noconsole",
+        "--name=OMS_Sentinel_Installer",
+        *installer_datas,
         "create_installer.py"
     ])
     print("  [OK] Standalone Installer compiled.")

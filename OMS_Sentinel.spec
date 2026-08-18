@@ -43,14 +43,30 @@ if models_dir.exists():
     datas.append((str(models_dir), "models"))
 
 # YOLO model weights
-yolo_pt = ROOT / "yolov8n.pt"
-if yolo_pt.exists():
-    datas.append((str(yolo_pt), "."))
+for y_name in ["yolov8n.pt", "yolov8s.pt"]:
+    y_path = ROOT / y_name
+    if y_path.exists():
+        datas.append((str(y_path), "."))
+
+# .env.example
+env_ex = ROOT / ".env.example"
+if env_ex.exists():
+    datas.append((str(env_ex), "."))
 
 # ── Hidden imports needed by FastAPI / uvicorn / OpenCV / InsightFace / pynvml ─────────────
 hidden_imports = [
-    # OMS Face Engine & InsightFace
+    # OMS Engines
     "face_engine",
+    "identity_engine",
+    "haae_engine",
+    "db_engine",
+    "auth_engine",
+    "analytics_engine",
+    "cloud_sync",
+    "cloud_api",
+    "web_integration",
+    "web_server",
+    # InsightFace & Onnxruntime
     "insightface",
     "insightface.app",
     "insightface.app.face_analysis",
@@ -111,6 +127,8 @@ hidden_imports = [
     "email.mime.text",
     "email.mime.multipart",
     "dotenv",
+    "requests",
+    "pydantic",
 ]
 
 # ── Analysis ──────────────────────────────────────────────────────────────────
@@ -133,21 +151,22 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
     [],
+    exclude_binaries=True,
     name="OMS_Sentinel",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
-    upx_exclude=["vcruntime140.dll", "python3*.dll"],
-    runtime_tmpdir=None,
-    console=True,        # keep console so logs are visible; set False for silent background mode
-    icon=None,
-    disable_windowed_traceback=False,
-    argv_emulation=False,
-    target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
+    upx=False,
+    console=True,
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    strip=False,
+    upx=False,
+    name="OMS_Sentinel",
 )
