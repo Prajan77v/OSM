@@ -88,9 +88,11 @@ try:
 except ImportError:
     YAML_AVAILABLE = False
 
-def _load_yaml(path: str = str(WORKING_DIR / "config.yaml")) -> dict:
+def _load_yaml(path: str = None) -> dict:
     if not YAML_AVAILABLE:
         return {}
+    if path is None:
+        path = get_resource_path("config.yaml")
     try:
         with open(path, encoding="utf-8") as f:
             return yaml.safe_load(f) or {}
@@ -5671,6 +5673,12 @@ def main():
         )
         ws.start_server(port=8000, open_browser=True)
         app_log.info("OMS Web Dashboard started on http://localhost:8000")
+        print("\n" + "=" * 75, flush=True)
+        print("  [✔] OMS NEURAL SURVEILLANCE ENGINE & DASHBOARD ONLINE", flush=True)
+        print("  [✔] Web Dashboard : http://localhost:8000", flush=True)
+        print("  [✔] Swagger API   : http://localhost:8000/docs", flush=True)
+        print(f"  [✔] Active Nodes  : {len(cameras)} Camera Channels Monitored", flush=True)
+        print("=" * 75 + "\n", flush=True)
 
         # ── Start Cloud Sync Daemon (if OMS_CLOUD_API_URL configured) ──────────
         try:
@@ -5703,6 +5711,7 @@ def main():
     last_gc_time = time.time()
     last_threat_tick = time.time()
     last_sys_graph_time = time.time()
+    last_console_log = time.time()
     global selected_cam_idx, is_fs_state
     selected_cam_idx = 0
     is_fs_state = False
@@ -5723,6 +5732,11 @@ def main():
             threat_engine.tick(); last_threat_tick = now
 
         if Config.HEADLESS:
+            if now - last_console_log > 5.0:
+                last_console_log = now
+                online_cams = sum(1 for c in _active_cameras if getattr(c, 'online', False))
+                total_dets = sum(len(getattr(c, 'latest_dets', [])) for c in _active_cameras)
+                print(f"[OMS LIVE] {datetime.now().strftime('%H:%M:%S')} | Cameras Online: {online_cams}/{len(_active_cameras)} | Active Tracks: {total_dets} | Matrix: http://localhost:8000", flush=True)
             if now-last_gc_time > Config.GC_GEN1_SECS:
                 last_gc_time = now; gc.collect(1)
                 if CUDA_AVAILABLE:
@@ -5798,13 +5812,16 @@ def main():
                 except:
                     pass
 
-        # Break if window is closed by user (clicked [X])
-        try:
-            if cv2.getWindowProperty(win_name, cv2.WND_PROP_VISIBLE) < 1:
-                app_log.info("OMS window closed by user.")
-                break
-        except Exception:
-            pass
+        # Handle window close gracefully without killing the backend server
+        if not Config.HEADLESS:
+            try:
+                if cv2.getWindowProperty(win_name, cv2.WND_PROP_VISIBLE) < 1:
+                    app_log.info("OMS native OpenCV window closed — switching to Web Headless 24/7 Mode.")
+                    Config.HEADLESS = True
+                    cv2.destroyAllWindows()
+                    continue
+            except Exception:
+                pass
 
         key = cv2.waitKey(1) & 0xFF
 
