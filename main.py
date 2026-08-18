@@ -5609,19 +5609,26 @@ def _camera_watchdog_thread():
     while True:
         time.sleep(5.0)
         now = time.time()
-        for cs in _active_cameras:
-            if getattr(cs, "removed", False) or cs.disconnected or not cs.enabled:
-                continue
-            last_hb = _camera_heartbeats.get(cs.cam_id, 0.0)
-            last_restart = getattr(cs, "_last_restart_time", 0.0)
-            # Restart if heartbeat timed out (15s) and last restart was more than 15s ago (prevents spin loops)
-            if last_hb > 0.0 and (now - last_hb) > 15.0 and (now - last_restart) > 15.0:
-                cs._last_restart_time = now
-                app_log.warning(f"[WATCHDOG] Camera '{cs.name}' (ID: {cs.cam_id}) heartbeat timeout! Thread hung or died. Restarting thread...")
-                cs.online = False
-                _camera_heartbeats[cs.cam_id] = now
-                threading.Thread(target=camera_thread, args=(cs,),
-                                 daemon=True, name=f"Cam-{cs.cam_id}-Recover").start()
+        try:
+            cams_copy = list(_active_cameras)
+            for cs in cams_copy:
+                try:
+                    if getattr(cs, "removed", False) or cs.disconnected or not cs.enabled:
+                        continue
+                    last_hb = _camera_heartbeats.get(cs.cam_id, 0.0)
+                    last_restart = getattr(cs, "_last_restart_time", 0.0)
+                    # Restart if heartbeat timed out (25s) and last restart was more than 25s ago
+                    if last_hb > 0.0 and (now - last_hb) > 25.0 and (now - last_restart) > 25.0:
+                        cs._last_restart_time = now
+                        app_log.warning(f"[WATCHDOG] Camera '{cs.name}' (ID: {cs.cam_id}) heartbeat timeout! Thread hung or died. Restarting thread...")
+                        cs.online = False
+                        _camera_heartbeats[cs.cam_id] = now
+                        threading.Thread(target=camera_thread, args=(cs,),
+                                         daemon=True, name=f"Cam-{cs.cam_id}-Recover").start()
+                except Exception as ce:
+                    app_log.warning(f"[WATCHDOG] Camera check error: {ce}")
+        except Exception as we:
+            app_log.warning(f"[WATCHDOG] Main watchdog supervisor error: {we}")
 
 def main():
     global UI_LEFT_W, UI_RIGHT_W, UI_HDR_H, UI_NAV_H, UI_FOOT_H, hud_overlay_active, cam_area_pct, ui_static_dirty

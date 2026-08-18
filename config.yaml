@@ -3,24 +3,84 @@ operator:
 cameras:
 - id: 0
   source: 0
-  name: LOCAL CAM
+  name: LOCAL WEBCAM
   enabled: true
-  location: Main Entrance Sector
+  location: Control Desk
 - id: 1
   source: rtsp://admin:eltec%40123@192.168.1.200:554/Streaming/Channels/101
-  name: IP CAM (192.168.1.200)
+  name: CAM 01 - MAIN ENTRANCE
   enabled: true
-  location: Main Security Zone
+  location: Sector 1 (Main Entrance)
 - id: 2
-  source: rtsp://admin:eltec%40123@192.168.1.200:554/cam/realmonitor?channel=1&subtype=0
-  name: DAHUA / CP PLUS
-  enabled: false
-  location: Alternate Feed
+  source: rtsp://admin:eltec%40123@192.168.1.200:554/Streaming/Channels/201
+  name: CAM 02 - PERIMETER NORTH
+  enabled: true
+  location: Sector 2 (North Perimeter)
 - id: 3
-  source: rtsp://admin:eltec%40123@192.168.1.200:554/live/ch0
-  name: GENERIC ONVIF RTSP
-  enabled: false
-  location: Mobile Sector D
+  source: rtsp://admin:eltec%40123@192.168.1.200:554/Streaming/Channels/301
+  name: CAM 03 - PERIMETER SOUTH
+  enabled: true
+  location: Sector 3 (South Perimeter)
+- id: 4
+  source: rtsp://admin:eltec%40123@192.168.1.200:554/Streaming/Channels/401
+  name: CAM 04 - CORRIDOR EAST
+  enabled: true
+  location: Sector 4 (East Hallway)
+- id: 5
+  source: rtsp://admin:eltec%40123@192.168.1.200:554/Streaming/Channels/501
+  name: CAM 05 - CORRIDOR WEST
+  enabled: true
+  location: Sector 5 (West Hallway)
+- id: 6
+  source: rtsp://admin:eltec%40123@192.168.1.200:554/Streaming/Channels/601
+  name: CAM 06 - LOBBY RECEPTION
+  enabled: true
+  location: Sector 6 (Lobby)
+- id: 7
+  source: rtsp://admin:eltec%40123@192.168.1.200:554/Streaming/Channels/701
+  name: CAM 07 - SERVER ROOM
+  enabled: true
+  location: Sector 7 (Restricted Server Vault)
+- id: 8
+  source: rtsp://admin:eltec%40123@192.168.1.200:554/Streaming/Channels/801
+  name: CAM 08 - PARKING GATE A
+  enabled: true
+  location: Sector 8 (Vehicle Gate A)
+- id: 9
+  source: rtsp://admin:eltec%40123@192.168.1.200:554/Streaming/Channels/901
+  name: CAM 09 - PARKING GATE B
+  enabled: true
+  location: Sector 9 (Vehicle Gate B)
+- id: 10
+  source: rtsp://admin:eltec%40123@192.168.1.200:554/Streaming/Channels/1001
+  name: CAM 10 - WAREHOUSE STORAGE
+  enabled: true
+  location: Sector 10 (Warehouse Bay)
+- id: 11
+  source: rtsp://admin:eltec%40123@192.168.1.200:554/Streaming/Channels/1101
+  name: CAM 11 - LOADING DOCK
+  enabled: true
+  location: Sector 11 (Loading Dock)
+- id: 12
+  source: rtsp://admin:eltec%40123@192.168.1.200:554/Streaming/Channels/1201
+  name: CAM 12 - EMERGENCY EXIT
+  enabled: true
+  location: Sector 12 (Emergency Stairwell)
+- id: 13
+  source: rtsp://admin:eltec%40123@192.168.1.200:554/Streaming/Channels/1301
+  name: CAM 13 - ROOFTOP SECTOR
+  enabled: true
+  location: Sector 13 (Rooftop Access)
+- id: 14
+  source: rtsp://admin:eltec%40123@192.168.1.200:554/Streaming/Channels/1401
+  name: CAM 14 - BACK ALLEYWAY
+  enabled: true
+  location: Sector 14 (Service Alley)
+- id: 15
+  source: rtsp://admin:eltec%40123@192.168.1.200:554/Streaming/Channels/1501
+  name: CAM 15 - AUXILIARY BACKUP
+  enabled: true
+  location: Sector 15 (Auxiliary Zone)
 performance:
   lightweight_mode: false
 detection:

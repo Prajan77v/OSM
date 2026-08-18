@@ -1258,6 +1258,164 @@ def create_app() -> "FastAPI":
         </svg>"""
         return Response(content=avatar_svg, media_type="image/svg+xml")
 
+    # ─── Live Video Stream (MJPEG) ─────────────────────────────────────────────
+    @app.get("/api/stream/{cam_id}")
+    async def video_stream(cam_id: int):
+        """Serve live high-performance MJPEG video stream for camera channel."""
+        from fastapi.responses import StreamingResponse
+        import asyncio
+        import numpy as np
+
+        async def mjpeg_generator():
+            while True:
+                with _cameras_lock:
+                    if cam_id < 0 or cam_id >= len(_cameras):
+                        break
+                    cs = _cameras[cam_id]
+
+                frame_bytes = None
+                with cs.frame_lock:
+                    if cs.latest_frame is not None and getattr(cs, "online", False):
+                        try:
+                            ok, buf = cv2.imencode(".jpg", cs.latest_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 75])
+                            if ok:
+                                frame_bytes = buf.tobytes()
+                        except Exception:
+                            pass
+
+                if frame_bytes is None:
+                    # Generate placeholder dark frame if offline or buffering
+                    ph = np.zeros((360, 640, 3), dtype=np.uint8)
+                    cv2.putText(ph, f"CAM-{cam_id + 1} BUFFERING / OFFLINE", (120, 180),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (55, 175, 212), 2)
+                    ok, buf = cv2.imencode(".jpg", ph)
+                    if ok:
+                        frame_bytes = buf.tobytes()
+
+                if frame_bytes:
+                    yield (b"--frame\r\n"
+                           b"Content-Type: image/jpeg\r\n\r\n" + frame_bytes + b"\r\n")
+
+                await asyncio.sleep(0.04)  # ~25 FPS
+
+        return StreamingResponse(mjpeg_generator(), media_type="multipart/x-mixed-replace; boundary=frame")
+
+    # ─── Dynamic Camera Management Endpoints (Up to 32 Cameras) ────────────────
+    @app.post("/api/camera/add")
+    async def add_camera_channel(request: Request):
+        """Add a new camera node dynamically (up to 32 cameras)."""
+        try:
+            body = await request.json()
+            name = str(body.get("name", "")).strip()
+            source = str(body.get("source", "NONE")).strip()
+            location = str(body.get("location", "Monitored Sector")).strip()
+            if not name:
+                return JSONResponse({"status": "error", "message": "Camera name is required"}, status_code=400)
+
+            sv = _get_sv()
+            if not sv:
+                return JSONResponse({"status": "error", "message": "Engine not running"}, status_code=503)
+
+            with _cameras_lock:
+                if len(_cameras) >= 32:
+                    return JSONResponse({"status": "error", "message": "Maximum 32 cameras supported"}, status_code=400)
+                new_id = len(_cameras)
+                src_val = int(source) if source.isdigit() else source
+                cfg = {"source": src_val, "name": name, "enabled": True, "location": location}
+                new_cs = sv.CameraState(cam_id=new_id, cfg=cfg)
+                _cameras.append(new_cs)
+                if hasattr(sv, "_active_cameras"):
+                    sv._active_cameras = _cameras
+
+            # Start camera worker thread
+            threading.Thread(target=sv.camera_thread, args=(new_cs,), daemon=True, name=f"Cam-{new_id}").start()
+
+            # Save to config.yaml if available
+            try:
+                import yaml
+                cfg_path = WORKING_DIR / "config.yaml"
+                if cfg_path.exists():
+                    with open(cfg_path, "r", encoding="utf-8") as f:
+                        data = yaml.safe_load(f) or {}
+                    if "cameras" not in data:
+                        data["cameras"] = []
+                    data["cameras"].append({"id": new_id, "source": str(source), "name": name, "enabled": True, "location": location})
+                    with open(cfg_path, "w", encoding="utf-8") as f:
+                        yaml.dump(data, f, default_flow_style=False)
+            except Exception as ye:
+                app_log.warning(f"[API] Could not persist new camera to config.yaml: {ye}")
+
+            return JSONResponse({"status": "ok", "message": f"Camera '{name}' added successfully", "id": new_id})
+        except Exception as e:
+            app_log.error(f"[API] add_camera error: {e}", exc_info=True)
+            return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+    @app.post("/api/camera/{cam_id}/remove")
+    async def remove_camera_channel(cam_id: int):
+        """Safely disconnect and remove a camera node."""
+        try:
+            sv = _get_sv()
+            with _cameras_lock:
+                if cam_id < 0 or cam_id >= len(_cameras):
+                    return JSONResponse({"status": "error", "message": "Camera not found"}, status_code=404)
+                cs = _cameras[cam_id]
+                cs.removed = True
+                cs.enabled = False
+                cs.online = False
+                cs.disconnected = True
+                try:
+                    if hasattr(cs, "cap") and cs.cap is not None:
+                        cs.cap.release()
+                except Exception:
+                    pass
+                _cameras.pop(cam_id)
+                # Re-index remaining cameras
+                for i, c in enumerate(_cameras):
+                    c.cam_id = i
+                if hasattr(sv, "_active_cameras"):
+                    sv._active_cameras = _cameras
+
+            return JSONResponse({"status": "ok", "message": f"Camera {cam_id + 1} removed successfully"})
+        except Exception as e:
+            return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+    @app.post("/api/camera/{cam_id}/rename")
+    async def rename_camera_channel(cam_id: int, request: Request):
+        """Rename camera channel."""
+        try:
+            body = await request.json()
+            new_name = str(body.get("name", "")).strip()
+            if not new_name:
+                return JSONResponse({"status": "error", "message": "Name cannot be empty"}, status_code=400)
+            with _cameras_lock:
+                if cam_id < 0 or cam_id >= len(_cameras):
+                    return JSONResponse({"status": "error", "message": "Camera not found"}, status_code=404)
+                _cameras[cam_id].name = new_name
+            return JSONResponse({"status": "ok", "message": f"Camera renamed to {new_name}"})
+        except Exception as e:
+            return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+    @app.post("/api/camera/{cam_id}/connect")
+    async def connect_camera_channel(cam_id: int, request: Request):
+        """Update source and reconnect camera channel."""
+        try:
+            body = await request.json()
+            new_source = str(body.get("source", "")).strip()
+            sv = _get_sv()
+            with _cameras_lock:
+                if cam_id < 0 or cam_id >= len(_cameras):
+                    return JSONResponse({"status": "error", "message": "Camera not found"}, status_code=404)
+                cs = _cameras[cam_id]
+                if new_source:
+                    cs.source = int(new_source) if new_source.isdigit() else new_source
+                cs.disconnected = False
+                cs.online = False
+                if sv:
+                    threading.Thread(target=sv.camera_thread, args=(cs,), daemon=True, name=f"Cam-{cam_id}-Reconnect").start()
+            return JSONResponse({"status": "ok", "message": f"Reconnecting camera {cam_id + 1} to {new_source}"})
+        except Exception as e:
+            return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
     # ─── Control Endpoints ────────────────────────────────────────────────────
     @app.post("/api/control/{action}")
     async def control(action: str, request: Request):
