@@ -69,14 +69,39 @@ class CloudStore:
         self.cameras: List[Dict[str, Any]] = [
             {
                 "id": 0,
-                "name": "LOCAL CAM",
+                "name": "LOCAL WEBCAM",
+                "online": True,
+                "fps": 30.0,
+                "persons": 0,
+                "objects": 0,
+                "threat": "GREEN",
+                "active_subjects": [],
+                "source": "0",
+                "location": "Control Desk"
+            },
+            {
+                "id": 1,
+                "name": "Diamond Silicate",
                 "online": False,
                 "fps": 0.0,
                 "persons": 0,
                 "objects": 0,
                 "threat": "GREEN",
                 "active_subjects": [],
-                "source": "0"
+                "source": "rtsp://admin:a1b2c3d4%405@117.247.103.113:554/Streaming/Channels/101",
+                "location": "Diamond Silicate Facility"
+            },
+            {
+                "id": 2,
+                "name": "Narimanam Silicate",
+                "online": True,
+                "fps": 25.0,
+                "persons": 0,
+                "objects": 0,
+                "threat": "GREEN",
+                "active_subjects": [],
+                "source": "rtsp://admin:a1b2c3d4%405@117.247.103.114:554/Streaming/Channels/101",
+                "location": "Narimanam Silicate Facility"
             }
         ]
         self.events: List[Dict[str, Any]] = []
