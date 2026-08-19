@@ -76,12 +76,15 @@ class CloudSyncHub:
 
     def start(self):
         """Starts the background synchronization loop."""
+        if not self.cloud_url:
+            self.cloud_url = os.getenv("OMS_CLOUD_API_URL", "https://oms-sentinel-cloud.onrender.com").rstrip("/")
+            self.enabled = bool(self.cloud_url and self.cloud_url.startswith("http"))
         if not self.enabled or self._running:
             return
         self._running = True
         self._thread = threading.Thread(target=self._sync_loop, name="OMS-CloudSyncDaemon", daemon=True)
         self._thread.start()
-        log.info("[CLOUD SYNC] Background sync daemon started.")
+        log.info(f"[CLOUD SYNC] Background sync daemon started for target: {self.cloud_url}")
 
     def stop(self):
         """Stops the sync daemon."""
