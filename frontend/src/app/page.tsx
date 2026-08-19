@@ -14,9 +14,9 @@ import {
 } from "lucide-react";
 
 // ─── API base URL (Configurable for Render Cloud / Local AI Server) ───────────
-const API = typeof process !== "undefined"
-  ? (process.env.NEXT_PUBLIC_OMS_API_URL || process.env.NEXT_PUBLIC_API_BASE || "")
-  : "";
+const API = (typeof process !== "undefined" && (process.env.NEXT_PUBLIC_OMS_API_URL || process.env.NEXT_PUBLIC_API_BASE))
+  ? (process.env.NEXT_PUBLIC_OMS_API_URL || process.env.NEXT_PUBLIC_API_BASE)
+  : "https://oms-sentinel-cloud.onrender.com";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 interface CameraInfo {
