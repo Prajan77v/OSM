@@ -1,0 +1,70 @@
+================================================================================
+          OMS SENTINEL — HIKVISION & MULTI-CAMERA CONNECTION MATRIX
+================================================================================
+
+1. SYSTEM DASHBOARD ACCESS
+--------------------------------------------------------------------------------
+Web Interface  : http://localhost:8000
+API / Swagger  : http://localhost:8000/docs
+Default Login  : (No login required on local machine)
+
+
+2. HIKVISION CAMERA CREDENTIALS & RTSP URLS
+--------------------------------------------------------------------------------
+IP Address     : 192.168.1.200
+Port           : 554
+Username       : admin
+Password       : eltec@123
+URL-Encoded    : eltec%40123 (Special character '@' encoded as '%40')
+
+[MAIN STREAM - 1080P/4K HIGH QUALITY]
+Channel 01 : rtsp://admin:eltec%40123@192.168.1.200:554/Streaming/Channels/101
+Channel 02 : rtsp://admin:eltec%40123@192.168.1.200:554/Streaming/Channels/201
+Channel 03 : rtsp://admin:eltec%40123@192.168.1.200:554/Streaming/Channels/301
+Channel 04 : rtsp://admin:eltec%40123@192.168.1.200:554/Streaming/Channels/401
+Channel 05 : rtsp://admin:eltec%40123@192.168.1.200:554/Streaming/Channels/501
+Channel 06 : rtsp://admin:eltec%40123@192.168.1.200:554/Streaming/Channels/601
+Channel 07 : rtsp://admin:eltec%40123@192.168.1.200:554/Streaming/Channels/701
+Channel 08 : rtsp://admin:eltec%40123@192.168.1.200:554/Streaming/Channels/801
+Channel 09 : rtsp://admin:eltec%40123@192.168.1.200:554/Streaming/Channels/901
+Channel 10 : rtsp://admin:eltec%40123@192.168.1.200:554/Streaming/Channels/1001
+Channel 11 : rtsp://admin:eltec%40123@192.168.1.200:554/Streaming/Channels/1101
+Channel 12 : rtsp://admin:eltec%40123@192.168.1.200:554/Streaming/Channels/1201
+Channel 13 : rtsp://admin:eltec%40123@192.168.1.200:554/Streaming/Channels/1301
+Channel 14 : rtsp://admin:eltec%40123@192.168.1.200:554/Streaming/Channels/1401
+Channel 15 : rtsp://admin:eltec%40123@192.168.1.200:554/Streaming/Channels/1501
+
+[SUB STREAM - LOW BANDWIDTH / SMOOTH MULTI-CAM 30+ FPS]
+Channel 01 : rtsp://admin:eltec%40123@192.168.1.200:554/Streaming/Channels/102
+Channel 02 : rtsp://admin:eltec%40123@192.168.1.200:554/Streaming/Channels/202
+Channel 03 : rtsp://admin:eltec%40123@192.168.1.200:554/Streaming/Channels/302
+Channel 04 : rtsp://admin:eltec%40123@192.168.1.200:554/Streaming/Channels/402
+Channel 05 : rtsp://admin:eltec%40123@192.168.1.200:554/Streaming/Channels/502
+Channel 06 : rtsp://admin:eltec%40123@192.168.1.200:554/Streaming/Channels/602
+Channel 07 : rtsp://admin:eltec%40123@192.168.1.200:554/Streaming/Channels/702
+Channel 08 : rtsp://admin:eltec%40123@192.168.1.200:554/Streaming/Channels/802
+Channel 09 : rtsp://admin:eltec%40123@192.168.1.200:554/Streaming/Channels/902
+Channel 10 : rtsp://admin:eltec%40123@192.168.1.200:554/Streaming/Channels/1002
+Channel 11 : rtsp://admin:eltec%40123@192.168.1.200:554/Streaming/Channels/1102
+Channel 12 : rtsp://admin:eltec%40123@192.168.1.200:554/Streaming/Channels/1202
+Channel 13 : rtsp://admin:eltec%40123@192.168.1.200:554/Streaming/Channels/1302
+Channel 14 : rtsp://admin:eltec%40123@192.168.1.200:554/Streaming/Channels/1402
+Channel 15 : rtsp://admin:eltec%40123@192.168.1.200:554/Streaming/Channels/1502
+
+
+3. DAHUA / CP PLUS NVR ALTERNATE FORMAT
+--------------------------------------------------------------------------------
+Channel 01 : rtsp://admin:eltec%40123@192.168.1.200:554/cam/realmonitor?channel=1&subtype=0
+Channel 02 : rtsp://admin:eltec%40123@192.168.1.200:554/cam/realmonitor?channel=2&subtype=0
+Channel 03 : rtsp://admin:eltec%40123@192.168.1.200:554/cam/realmonitor?channel=3&subtype=0
+Channel 04 : rtsp://admin:eltec%40123@192.168.1.200:554/cam/realmonitor?channel=4&subtype=0
+Channel 05 : rtsp://admin:eltec%40123@192.168.1.200:554/cam/realmonitor?channel=5&subtype=0
+
+
+4. HOW TO RUN ON YOUR NEW PC (i7 6th Gen / 32GB RAM)
+--------------------------------------------------------------------------------
+Step 1: Copy 'dist/OMS_Sentinel_Portable' (or 'OMS_Sentinel_Portable.zip') to the new PC.
+Step 2: Ensure your PC is connected to the same network/switch as the camera (192.168.1.X).
+Step 3: Double click 'start_oms_ai.bat' (or 'OMS_Sentinel.exe').
+Step 4: Open your web browser to: http://localhost:8000
+================================================================================

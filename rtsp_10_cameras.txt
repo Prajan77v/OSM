@@ -1,0 +1,40 @@
+# ==============================================================================
+# OMS Sentinel — 10 Camera RTSP Stream Links
+# IP: 192.168.1.200 | Username: admin | Password: eltec@123 (Encoded: eltec%40123)
+# ==============================================================================
+
+# ── 1. HIKVISION / HILOOK / NVR MULTI-CHANNEL (CHANNELS 1 TO 10) ──────────────
+rtsp://admin:eltec%40123@192.168.1.200:554/Streaming/Channels/101
+rtsp://admin:eltec%40123@192.168.1.200:554/Streaming/Channels/201
+rtsp://admin:eltec%40123@192.168.1.200:554/Streaming/Channels/301
+rtsp://admin:eltec%40123@192.168.1.200:554/Streaming/Channels/401
+rtsp://admin:eltec%40123@192.168.1.200:554/Streaming/Channels/501
+rtsp://admin:eltec%40123@192.168.1.200:554/Streaming/Channels/601
+rtsp://admin:eltec%40123@192.168.1.200:554/Streaming/Channels/701
+rtsp://admin:eltec%40123@192.168.1.200:554/Streaming/Channels/801
+rtsp://admin:eltec%40123@192.168.1.200:554/Streaming/Channels/901
+rtsp://admin:eltec%40123@192.168.1.200:554/Streaming/Channels/1001
+
+# ── 2. DAHUA / CP PLUS NVR MULTI-CHANNEL (CHANNELS 1 TO 10) ───────────────────
+rtsp://admin:eltec%40123@192.168.1.200:554/cam/realmonitor?channel=1&subtype=0
+rtsp://admin:eltec%40123@192.168.1.200:554/cam/realmonitor?channel=2&subtype=0
+rtsp://admin:eltec%40123@192.168.1.200:554/cam/realmonitor?channel=3&subtype=0
+rtsp://admin:eltec%40123@192.168.1.200:554/cam/realmonitor?channel=4&subtype=0
+rtsp://admin:eltec%40123@192.168.1.200:554/cam/realmonitor?channel=5&subtype=0
+rtsp://admin:eltec%40123@192.168.1.200:554/cam/realmonitor?channel=6&subtype=0
+rtsp://admin:eltec%40123@192.168.1.200:554/cam/realmonitor?channel=7&subtype=0
+rtsp://admin:eltec%40123@192.168.1.200:554/cam/realmonitor?channel=8&subtype=0
+rtsp://admin:eltec%40123@192.168.1.200:554/cam/realmonitor?channel=9&subtype=0
+rtsp://admin:eltec%40123@192.168.1.200:554/cam/realmonitor?channel=10&subtype=0
+
+# ── 3. INDIVIDUAL STANDALONE IP CAMERAS (192.168.1.200 TO 192.168.1.209) ──────
+rtsp://admin:eltec%40123@192.168.1.200:554/live/ch0
+rtsp://admin:eltec%40123@192.168.1.201:554/live/ch0
+rtsp://admin:eltec%40123@192.168.1.202:554/live/ch0
+rtsp://admin:eltec%40123@192.168.1.203:554/live/ch0
+rtsp://admin:eltec%40123@192.168.1.204:554/live/ch0
+rtsp://admin:eltec%40123@192.168.1.205:554/live/ch0
+rtsp://admin:eltec%40123@192.168.1.206:554/live/ch0
+rtsp://admin:eltec%40123@192.168.1.207:554/live/ch0
+rtsp://admin:eltec%40123@192.168.1.208:554/live/ch0
+rtsp://admin:eltec%40123@192.168.1.209:554/live/ch0
