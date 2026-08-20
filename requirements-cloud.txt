@@ -1,7 +1,7 @@
-# OMS Cloud API Dependencies (Render Free - 512MB RAM / 0.1 CPU)
+# OMS Cloud API Dependencies (Render Free Tier / Railway / CPU VPS)
 fastapi>=0.100.0
 uvicorn[standard]>=0.22.0
+sqlalchemy>=2.0.0
 pydantic>=2.0.0
 python-dotenv>=1.0.0
-websockets>=11.0
 requests>=2.31.0

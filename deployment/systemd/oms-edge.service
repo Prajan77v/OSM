@@ -1,0 +1,22 @@
+[Unit]
+Description=OMS Edge Surveillance Agent
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/oms-edge
+ExecStart=/opt/oms-edge/venv/bin/python edge/agent.py
+Restart=always
+RestartSec=5s
+KillMode=process
+TimeoutSec=30
+Environment=PYTHONUNBUFFERED=1
+
+# Hardware sandboxing and stability
+LimitNOFILE=65536
+Nice=-5
+
+[Install]
+WantedBy=multi-user.target

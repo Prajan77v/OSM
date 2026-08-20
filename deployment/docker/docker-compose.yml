@@ -1,0 +1,37 @@
+version: '3.8'
+
+services:
+  oms-cloud-api:
+    build:
+      context: ../..
+      dockerfile: cloud/Dockerfile
+    container_name: oms-cloud-api
+    restart: always
+    ports:
+      - "8000:8000"
+    environment:
+      - PORT=8000
+      - DATABASE_URL=sqlite:///logs/oms_cloud.db
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - OMS_EDGE_TOKEN=${OMS_EDGE_TOKEN}
+    volumes:
+      - oms-cloud-data:/app/logs
+
+  oms-edge-agent:
+    build:
+      context: ../..
+      dockerfile: edge/Dockerfile
+    container_name: oms-edge-agent
+    restart: always
+    network_mode: host
+    environment:
+      - OMS_CLOUD_API_URL=http://localhost:8000
+      - OMS_EDGE_TOKEN=${OMS_EDGE_TOKEN}
+    volumes:
+      - oms-edge-data:/app/logs
+      - ../../config.yaml:/app/config.yaml:ro
+
+volumes:
+  oms-cloud-data:
+  oms-edge-data:
